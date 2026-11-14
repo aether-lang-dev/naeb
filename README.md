@@ -5,55 +5,81 @@
   </picture>
 </p>
 
-<h1 align="center">nib</h1>
+<h1 align="center">naeb</h1>
 
-<p align="center">English | <a href="README.zh-CN.md">中文</a></p>
+<p align="center">nib, ported to <a href="https://github.com/aether-lang-dev/aether">Aether</a></p>
 
-A small, focused, quiet coding agent.
+A small, focused, quiet coding agent. naeb is the Aether port of
+[nib](https://github.com/yyydddkkk/nib-code) (Zig, MIT, © jackyyy): the same
+agent, feature for feature, built from Aether instead of Zig. The command is
+still `nib` for now.
 
-nib works in Runs: the model writes one JavaScript script that reads, edits and checks your project in a single step.
+nib works in Runs: the model writes one JavaScript script that reads, edits
+and checks your project in a single step. In naeb that script runs on
+QuickJS embedded through Aether's `contrib.quickjs`.
 
-## Numbers
+This branch, `aether-port`, is the port. `main` mirrors upstream nib and is
+never committed to; the port tracks it. Which upstream file each Aether module
+ports, and through which upstream commit, is in
+[PORT_STATUS.md](PORT_STATUS.md).
 
-Against Codex CLI on the same model:
+## Differences from upstream nib
 
-**12% faster · 44% cheaper · 32% fewer requests · 20/20 passed**
+- **API keys only.** OpenAI, Anthropic, DeepSeek, Grok (xAI) and your own
+  Responses or Chat Completions endpoint. The Codex subscription sign-in, its
+  WebSocket protocol and the Codex backend are not ported, by choice.
+- **No self-updater.** `nib update` is not ported (it downloads upstream's
+  releases). Update with `git pull` and a rebuild.
+- **No prebuilt binary yet.** Build from source, below. Release binaries may
+  come later.
+- **Benchmarks.** Upstream's speed, cost and memory numbers were measured on
+  its Zig build and are not claimed for naeb. See
+  [upstream's README](https://github.com/yyydddkkk/nib-code#readme).
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/bench-versus-dark.svg">
-  <img src="docs/assets/bench-versus-light.svg" alt="nib vs Codex CLI on the same model: wall time 128 s vs 144 s; cost per task $0.044 vs $0.079; requests 13 vs 19; input tokens 192k vs 623k." width="880">
-</picture>
+## Set up
 
-**Ten agents open:**
+macOS (Apple silicon) and Linux x86_64, where it is tested. Linux arm64
+should work but is not tested yet.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/bench-memory-dark.svg">
-  <img src="docs/assets/bench-memory-light.svg" alt="Total idle RSS for ten instances: nib 47 MB; pi clean 1,134 MB; Codex CLI 1,164 MB; prime-agent 1,460 MB; Claude Code 1,750 MB; pi with extensions 1,984 MB; dsh 5,459 MB." width="880">
-</picture>
+### 1. The Aether toolchain
 
-6 MB static binary · no runtime dependencies.
-
-*Nov 2026 · gpt-6.1-terra, medium · 20 runs vs Codex CLI 0.166.0 at API prices · memory of idle TUIs.*
-
-[More numbers →](docs/benchmarks.md)
-
-## Install
-
-Linux (x86_64, arm64) and macOS (Apple silicon):
+One command installs `ae` (the compiler) and `aeb` (the build tool), pinned
+to the versions naeb is verified against. Those versions are in [pins](pins):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/yyydddkkk/nib-code/main/install.sh | sh
+. ./pins   # sets AE_PIN and AEB_REF
+curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aeb/main/get.sh \
+  | AE_PIN=$AE_PIN AEB_REF=$AEB_REF sh
 ```
 
-Installs to `~/.local/bin`. `nib update` upgrades in place. `NIB_VERSION` pins a release, `NIB_INSTALL_DIR` changes the directory.
+Both land in `~/.local/bin` (`PREFIX=` changes that); put it on your `PATH`. `ae version doctor` checks the install. A newer Aether release usually
+works too: `ae version install <v>` and `ae version use <v>` switch between
+versions.
 
-From source (Zig 0.17): `zig build -Doptimize=ReleaseFast --prefix ~/.local`
+You also need a C compiler (Xcode's command line tools on macOS, gcc or clang
+on Linux) and OpenSSL 3 or later:
+- **macOS:** `brew install openssl`.
+- **Debian or Ubuntu:** `apt install libssl-dev`.
+
+### 2. Build
+
+```sh
+git clone -b aether-port https://github.com/paul-hammant/nib-code.git naeb
+cd naeb
+aeb .build.ae          # builds target/build/bin/nib
+```
+
+### 3. Install
+
+```sh
+install -m 755 target/build/bin/nib ~/.local/bin/nib
+nib --version          # nib 0.13.0-ae
+```
+
+To update, run `git pull`, then `aeb .build.ae`, then the `install` line
+again.
 
 ## Use
-
-`/simple` or Ctrl+S hides everything but the conversation.
-
-Optional sandboxed `after_edit` and `turn_end` commands: [hooks](docs/config.md#hooks).
 
 ```sh
 cd your-project
@@ -62,31 +88,62 @@ nib ask 'explain the entry points'
 nib -c                       # continue the last session here
 ```
 
-Run `nib`, then `/provider` to sign in; `/model` picks a model. Codex, Claude, OpenAI, DeepSeek, Grok or [your own endpoint](docs/providers.md).
+On first run, start `nib` and use `/provider` to choose a service and paste
+its API key. The key is entered masked and stored in `~/.nib/auth.json` with
+mode 0600. `nib login <service>` does the same from the shell. `/model` picks
+a model. Your own endpoint: [providers](docs/providers.md).
 
-Enter sends, Shift+Enter adds a line, Esc cancels. Type `/` for commands: `/provider`, `/model`, `/effort`, `/undo`, `/tasks`, `/skills`, `/status`. `@` completes file paths.
-
-`/mcp` turns on MCP servers from config.toml.
-
-Project conventions go in `AGENTS.md`; personal ones in `~/.nib/AGENTS.md`.
+- **Keys:** Enter sends, Shift+Enter adds a line, Esc cancels. `@` completes
+  file paths.
+- **Commands:** type `/` for the list: `/provider`, `/model`, `/effort`,
+  `/undo`, `/tasks`, `/skills`, `/status`.
+- **Simple mode:** `/simple` or Ctrl+S hides everything but the conversation.
+- **MCP:** `/mcp` turns on MCP servers from config.toml.
+- **Hooks:** optional sandboxed `after_edit` and `turn_end` commands, see
+  [hooks](docs/config.md#hooks).
+- **Conventions:** project ones go in `AGENTS.md`, personal ones in
+  `~/.nib/AGENTS.md`.
 
 ## A Run
 
 ```text
   Run · edit 2 files · bash
-    src/grep.zig +38 −9 · src/tools.zig +2 −1
-    read src/grep.zig · read src/tools.zig · grep src
-    └─ b1 bash zig build test · 1s · completed ✓ exit 0
+    ae/nib/grep/module.ae +38 −9 · ae/nib/tools/module.ae +2 −1
+    read ae/nib/grep/module.ae · read ae/nib/tools/module.ae · grep ae
+    └─ b1 bash aeb .tests.ae · 4s · completed ✓ exit 0
 
   1 Run · 2 steps · 41s · 6.6k tokens
 ```
 
-One block per script: what changed, what was read, what ran. Click a Run to see its diff, result and script; Ctrl+O opens the latest.
+Each script shows as one block: what changed, what was read and what ran.
+Click a Run to see its diff, result and script; Ctrl+O opens the latest one.
 
 ## Safety
 
-nib runs model-written code with your permissions, like you would. bash refuses obviously destructive commands; `[sandbox] mode = "workspace"` limits writes to the project, temp dirs and build caches (Landlock on Linux, sandbox-exec on macOS). Commit before you start. Sessions and tool results are logged locally in `~/.nib/sessions` (mode 0600); `NIB_RECORD=off` stops tool recording.
+nib runs model-written code with your permissions, as you would yourself.
+- **bash** refuses obviously destructive commands.
+- **Workspace mode:** `[sandbox] mode = "workspace"` limits writes to the
+  project, temp dirs and build caches. It uses Landlock on Linux (kernel 5.19
+  or later, Landlock ABI 2; on older kernels bash runs unsandboxed, as
+  upstream's does) and `sandbox-exec` on macOS.
+- **Commit before you start.**
+- **Logs:** sessions and tool results are logged locally in `~/.nib/sessions`
+  (mode 0600). `NIB_RECORD=off` stops tool recording.
+
+## Develop
+
+```sh
+aeb .tests.ae               # the port's unit suites
+tools/tui_tests.sh          # the TUI suites
+tools/check_layers.sh       # which module may import which
+ae/tests/upstream-e2e.sh    # upstream's own Python end-to-end tests, unchanged
+```
+
+Upstream's tests and mock providers in `tests/` are the parity oracle and are
+never edited; they need `python3` and talk only to local mocks. Gaps found in
+Aether are written up in [asks/](asks/) and fixed in Aether itself.
+[PORT_STATUS.md](PORT_STATUS.md) has the per-host results and what is left.
 
 ## More
 
-[Principles](docs/principles.md) · [Docs](docs/README.md) · [Providers](docs/providers.md) · [Config](docs/config.md) · [Releases](docs/releases/) · [MIT](LICENSE)
+[Principles](docs/principles.md) · [Docs](docs/README.md) · [Providers](docs/providers.md) · [Config](docs/config.md) · [Port status](PORT_STATUS.md) · [Upstream nib](https://github.com/yyydddkkk/nib-code) · [MIT](LICENSE)
