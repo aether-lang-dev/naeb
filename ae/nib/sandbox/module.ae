@@ -17,6 +17,14 @@
 // instead carry a Virtual (offline replay, nib.sandbox.replay): no tool is
 // dispatched; each created call is reported to it, it picks which pending
 // call settles next and with what, and Date and Math.random are fixed.
+//
+// A host may also have a `start` hook, called on the Run's thread as each
+// call is handed its thread, so in creation order. Upstream does a call's
+// order-sensitive work (claiming a resumed agent, allocating an agent id)
+// on the call's own thread and gets creation order from thread start order,
+// since its work before that point takes microseconds; the port's takes
+// longer, so two calls created together would take their turns in either
+// order. What start leaves on the ToolResult (`started`) reaches `call`.
 
 import contrib.quickjs
 import std.string
@@ -37,9 +45,10 @@ import nib.sandbox.record
 import std.intarr
 
 exports(TOOL_CONCURRENCY, MAX_STOPPED_BYTES, Limits, ToolResult, Host, Outcome, Virtual,
-        limits, new_host, host_set_admit, host_set_cancel, host_set_timing, host_set_waiting,
+        limits, new_host, host_set_admit, host_set_start, host_set_cancel, host_set_timing, host_set_waiting,
         host_set_record, host_set_virtual, new_virtual,
         result_ok, result_err, result_set_ok, result_set_err, result_set_identity,
+        result_set_started, result_started,
         eval, syntax_context)
 
 const TOOL_CONCURRENCY = 8
@@ -53,13 +62,15 @@ struct Limits {
 }
 
 // What a tool hands back: ok with JSON text, or an error message. id and
-// background are the call's Session task identity, if it has one.
+// background are the call's Session task identity, if it has one. started
+// is what the host's start hook left for its call (null: none).
 struct ToolResult {
     ok: int
     text: string
     id: string
     background: int
     rejected: int
+    started: ptr
 }
 
 struct Host {
@@ -70,6 +81,10 @@ struct Host {
     // |ctx: ptr, name: string, out: ptr| sets out.rejected = 1 to refuse
     admit: fn
     has_admit: int
+    // |ctx: ptr, name: string, args: string, out: ptr|, on the Run's thread
+    // as the call is dispatched; may set out.started for `call`
+    start: fn
+    has_start: int
     cancel: ptr        // std.sync cell set when the Run stops its tools; may be null
     timing: ptr        // *timing.Run, or null
     waiting: ptr       // std.sync cell, 1 while the Run waits only on tools or timers; may be null
@@ -119,7 +134,8 @@ struct Call {
     dispatched: int
     done: ptr          // std.sync cell: 1 once result is set
     seq: long          // completion order
-    result: ptr        // *ToolResult
+    result: ptr        // *ToolResult, once settled
+    out: ptr           // *ToolResult the worker fills, made at dispatch
     timing_index: int
     start_ms: long     // monotonic, set by the worker
     end_ms: long
@@ -159,6 +175,7 @@ new_host(ctx: @keep ptr, names_json: string, call_fn: @keep fn) -> ptr {
     h.names_json = names_json
     h.call = call_fn
     h.has_admit = 0
+    h.has_start = 0
     h.cancel = null
     h.timing = null
     h.waiting = null
@@ -186,6 +203,12 @@ host_set_admit(hp: ptr, admit_fn: @keep fn) {
     h.has_admit = 1
 }
 
+host_set_start(hp: ptr, start_fn: @keep fn) {
+    h = hp as *Host
+    h.start = start_fn
+    h.has_start = 1
+}
+
 host_set_cancel(hp: ptr, cell: @keep ptr) { (hp as *Host).cancel = cell }
 host_set_timing(hp: ptr, t: @keep ptr) { (hp as *Host).timing = t }
 host_set_waiting(hp: ptr, cell: @keep ptr) { (hp as *Host).waiting = cell }
@@ -199,6 +222,7 @@ new_result_() -> ptr {
     r.id = ""
     r.background = 0
     r.rejected = 0
+    r.started = null
     return r as ptr
 }
 
@@ -232,6 +256,10 @@ result_set_identity(out: ptr, id: string, background: int) {
     r.id = id
     r.background = background
 }
+
+result_set_started(out: ptr, started: @keep ptr) { (out as *ToolResult).started = started }
+
+result_started(out: ptr) -> ptr { return (out as *ToolResult).started }
 
 const PRELUDE = <<JS
 (() => {
@@ -383,6 +411,7 @@ enqueue_(st: *State, name: string, args: string) -> int {
     c.done = sync.atomic_new(0)
     c.seq = 0
     c.result = null
+    c.out = null
     c.timing_index = -1
     c.start_ms = 0
     c.end_ms = 0
@@ -433,7 +462,7 @@ work_(hp: ptr, cp: ptr, completions: ptr) {
     h = hp as *Host
     c = cp as *Call
     c.start_ms = os.now_monotonic_ms()
-    r = new_result_()
+    r = c.out
     call(h.call, h.ctx, c.name, c.args, r)
     c.end_ms = os.now_monotonic_ms()
     c.result = r
@@ -455,6 +484,9 @@ dispatch_(st: *State, c: *Call) {
         timing.describe(t, c.timing_index, c.name, c.args)
     }
     hp = st.host
+    h = hp as *Host
+    c.out = new_result_()
+    if h.has_start == 1 { call(h.start, h.ctx, c.name, c.args, c.out) }
     cp = c as ptr
     comp = st.completions
     worker.run_detached(|| {

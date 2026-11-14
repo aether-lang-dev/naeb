@@ -627,15 +627,24 @@ agent_ctx_(s: *RunScope) -> ptr {
     return cp
 }
 
+// The call's start (sandbox Host.start, creation order): an agent call
+// claims its task id here (agent.begin), before its thread runs.
+start_tool_(s: *RunScope, name: string, args: string, out: ptr) {
+    t = s.tools as *Tools
+    if name != "agent" || t.forked == 1 || enabled_(t, name) == 0 { return }
+    sandbox.result_set_started(out, agent.begin(agent_ctx_(s), args))
+}
+
 agent_(s: *RunScope, args: string, out: ptr) {
     ids = list.list_new()
-    cp = agent_ctx_(s)
-    ok, text = agent.agent(cp, args, ids)
+    bp = sandbox.result_started(out)
+    if bp == null { bp = agent.begin(agent_ctx_(s), args) }
+    cp = (bp as *agent.Begun).ctx
+    ok, text = agent.agent(bp, ids)
     if ok == 2 {
         t = s.tools as *Tools
         id, _g0 = list.get_string(ids, 0)
         fork_input, _g1 = list.get_string(ids, 1)
-        c = cp as *agent.Ctx
         run_id = s.id
         invocation = progress.current_invocation(t.progress, id)
         sessions = t.agent_sessions
@@ -800,6 +809,9 @@ host(sp: @keep ptr) -> ptr {
     sandbox.host_set_cancel(h, s.cancel)
     sandbox.host_set_admit(h, |ctx: ptr, name: string, out: ptr| {
         admit_(ctx, name, out)
+    })
+    sandbox.host_set_start(h, |ctx: ptr, name: string, args: string, out: ptr| {
+        start_tool_(ctx as *RunScope, name, args, out)
     })
     return h
 }

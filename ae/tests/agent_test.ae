@@ -117,7 +117,7 @@ main() {
             cp = ctx_for_(t)
             sync.atomic_store((cp as *agent.Ctx).cancel, 1)
             ids = list.list_new()
-            ok, text = agent.agent(cp, "{\"prompt\":\"cancelled\"}", ids)
+            ok, text = agent.agent(agent.begin(cp, "{\"prompt\":\"cancelled\"}"), ids)
             spec.assert_eq(ok, 0, "rejects")
             spec.assert_str_eq(text, "Canceled", "Canceled")
             spec.assert_eq((tt.agent_gate as *agent.Gate).active, 4, "gate untouched")
@@ -144,6 +144,41 @@ main() {
             spec.assert_str_eq(e1.id, "a2", "second id")
             spec.assert_eq(e0.background, 0, "foreground")
             spec.assert_eq_long((tt.progress as *progress.Queue).next_bash_id, 1, "no bash id spent")
+        }
+        // Ours, not upstream's: upstream gets creation order from its threads'
+        // start order (test_agent_reuse.py's cross-process lock test relies on
+        // it); the port claims ids at dispatch (sandbox Host.start).
+        spec.it("agents created together claim their task ids in creation order") callback {
+            t = tools_()
+            s = tools.new_scope(t, 0)
+            h = tools.host(s)
+            run = timing.new()
+            sandbox.host_set_timing(h, run)
+            k = 0
+            while k < 20 {
+                sync.atomic_store((s as *tools.RunScope).cancel, 0)
+                sandbox.eval("await Promise.allSettled([tools.agent({prompt: 'p0'}), tools.agent({prompt: 'p1', background: true}), tools.agent({prompt: 'p2'})])", sandbox.limits(), h, null)
+                k = k + 1
+            }
+            i = 0
+            while i < 60 {
+                spec.assert_str_eq((timing.entry(run, i) as *timing.Call).id, "a${i + 1}", "call ${i}")
+                i = i + 1
+            }
+        }
+        spec.it("of two calls resuming one agent together, the first created holds it") callback {
+            t = tools_()
+            tt = t as *tools.Tools
+            agent_sessions.add(tt.agent_sessions, "a1", "child-session", 0)
+            s = tools.new_scope(t, 0)
+            h = tools.host(s)
+            k = 0
+            while k < 20 {
+                sync.atomic_store((s as *tools.RunScope).cancel, 0)
+                o = sandbox.eval("(await Promise.allSettled([tools.agent({prompt: 'first', resume: 'a1'}), tools.agent({prompt: 'second', resume: 'a1', background: true})])).map(r => JSON.stringify(r).includes('AgentBusy'))", sandbox.limits(), h, null) as *sandbox.Outcome
+                spec.assert_str_eq(o.text, "[false,true]", "run ${k}")
+                k = k + 1
+            }
         }
         spec.it("execute publishes the reserved invocation on foreground and background cancellation") callback {
             t = tools_()

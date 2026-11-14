@@ -30,7 +30,7 @@ import nib.tools.agent_input
 import nib.tools.process
 import nib.tools.secrets
 
-exports(Ctx, Gate, Args, Output, Tracker, Change, new_ctx, new_gate, parse_args, agent, execute, new_output,
+exports(Ctx, Gate, Args, Begun, Output, Tracker, Change, new_ctx, new_gate, parse_args, begin, agent, execute, new_output,
         observe, result, new_tracker, tracker_observe, tracker_line, USAGE_TEXT, DEFAULT_TIMEOUT_MS)
 
 const USAGE_TEXT = "expected { prompt: string, resume?: string, fork?: boolean, timeout_ms?: number, model?: string, effort?: string, background?: boolean }"
@@ -73,6 +73,23 @@ struct Args {
     model: string
     effort: string
     background: int
+}
+
+// A call after begin: rejected (BEGUN_REJECTED, text the message), settled
+// with a result (BEGUN_RESULT, text its JSON), or holding task id `id`
+// (BEGUN_HOLDS), which agent() then runs.
+const BEGUN_REJECTED = 0
+const BEGUN_RESULT = 1
+const BEGUN_HOLDS = 2
+
+struct Begun {
+    ctx: ptr                 // *Ctx
+    args: string
+    parsed: ptr              // *Args, or null when rejected
+    cfg: ptr                 // *types.Config for the child
+    state: int
+    text: string
+    id: string
 }
 
 struct Change {
@@ -503,28 +520,40 @@ tracker_line(tp: ptr, line: string) {
 
 fail_(text: string) -> (int, string) { return 0, text }
 
-// tools.agent. (1, result JSON), (0, rejection message), or (2, "") for a
-// background call the caller starts with execute(…, background 1, …). identity: the
-// call's task id is written to id_out (a *string cell list: [id]).
-agent(cp: ptr, args: string, id_out: ptr) -> (int, string) {
+begun_(cp: @keep ptr, args: string, state: int, text: string) -> ptr {
+    b = heap.new(Begun)
+    b.ctx = cp
+    b.args = args
+    b.parsed = null
+    b.cfg = null
+    b.state = state
+    b.text = text
+    b.id = ""
+    return b as ptr
+}
+
+// tools.agent's first part (upstream agent() up to its reservation): checks
+// the arguments, then claims the resumed task id or allocates a new one. It
+// runs as the call is dispatched, so calls claim ids in creation order.
+begin(cp: @keep ptr, args: string) -> ptr {
     c = cp as *Ctx
     ap = parse_args(args)
-    if ap == null { return fail_(USAGE_TEXT) }
+    if ap == null { return begun_(cp, args, BEGUN_REJECTED, USAGE_TEXT) }
     a = ap as *Args
     if c.depth != 0 || c.forked != 0 {
-        if c.forked != 0 { return fail_("agent is unavailable inside a forked sub-agent") }
-        return fail_("agent is unavailable inside a sub-agent")
+        if c.forked != 0 { return begun_(cp, args, BEGUN_REJECTED, "agent is unavailable inside a forked sub-agent") }
+        return begun_(cp, args, BEGUN_REJECTED, "agent is unavailable inside a sub-agent")
     }
-    if a.has_fork == 1 && a.has_resume == 1 { return fail_("fork and resume cannot be passed together") }
-    if a.fork == 1 && c.fork == null { return fail_("fork requires a current conversation history") }
+    if a.has_fork == 1 && a.has_resume == 1 { return begun_(cp, args, BEGUN_REJECTED, "fork and resume cannot be passed together") }
+    if a.fork == 1 && c.fork == null { return begun_(cp, args, BEGUN_REJECTED, "fork requires a current conversation history") }
     if a.has_resume == 1 {
         v = jsonx.parse(args)
         k = jsonx.kind(v, "resume")
         jsonx.free(v)
-        if k != json.JSON_STRING { return fail_("resume must be a string") }
+        if k != json.JSON_STRING { return begun_(cp, args, BEGUN_REJECTED, "resume must be a string") }
     }
-    if a.timeout_ms <= 0 { return fail_("timeout_ms must be positive") }
-    if c.cfg == null { return fail_("AgentConfigUnavailable") }
+    if a.timeout_ms <= 0 { return begun_(cp, args, BEGUN_REJECTED, "timeout_ms must be positive") }
+    if c.cfg == null { return begun_(cp, args, BEGUN_REJECTED, "AgentConfigUnavailable") }
     cfg = types.copy(c.cfg)
     cc = cfg as *types.Config
     if a.fork == 1 {
@@ -535,12 +564,12 @@ agent(cp: ptr, args: string, id_out: ptr) -> (int, string) {
     if a.model != "" { cc.model = a.model }
     if a.effort != "" {
         ee = types.set_effort(cfg, a.effort)
-        if ee != "" { return fail_(ee) }
+        if ee != "" { return begun_(cp, args, BEGUN_REJECTED, ee) }
     }
     id = ""
     if a.has_resume == 1 {
         rerr = agent_sessions.reserve(c.sessions, a.resume)
-        if rerr != "" { return 1, result(new_output(a.resume, ""), 0 as long, rerr, -1 as long) }
+        if rerr != "" { return begun_(cp, args, BEGUN_RESULT, result(new_output(a.resume, ""), 0 as long, rerr, -1 as long)) }
         id = a.resume
         rv = progress.new_value(id, progress.KIND_AGENT, a.prompt, c.run_id) as *progress.Progress
         rv.background = a.background
@@ -552,6 +581,28 @@ agent(cp: ptr, args: string, id_out: ptr) -> (int, string) {
         agent_sessions.add(c.sessions, id, "", 1)
         agent_sessions.set_fork(c.sessions, id, a.fork)
     }
+    bp = begun_(cp, args, BEGUN_HOLDS, "")
+    b = bp as *Begun
+    b.parsed = ap
+    b.cfg = cfg
+    b.id = id
+    return bp
+}
+
+// tools.agent, after begin. (1, result JSON), (0, rejection message), or
+// (2, "") for a background call the caller starts with execute(…, background
+// 1, …). identity: the call's task id is written to id_out (a *string cell
+// list: [id]).
+agent(bp: ptr, id_out: ptr) -> (int, string) {
+    b = bp as *Begun
+    if b.state == BEGUN_REJECTED { return fail_(b.text) }
+    if b.state == BEGUN_RESULT { return 1, b.text }
+    cp = b.ctx
+    c = cp as *Ctx
+    a = b.parsed as *Args
+    cfg = b.cfg
+    cc = cfg as *types.Config
+    id = b.id
     list.list_add(id_out, id)
     if cc.api_key_env != "" || cc.key_source == "store" { cc.api_key = "" }
     fork_input = ""
@@ -579,7 +630,7 @@ agent(cp: ptr, args: string, id_out: ptr) -> (int, string) {
         list.list_add(id_out, fork_input)
         return 2, ""
     }
-    return execute(cp, args, c.cancel, id, c.run_id, 0, fork_input)
+    return execute(cp, b.args, c.cancel, id, c.run_id, 0, fork_input)
 }
 
 gate_enter_(c: *Ctx, limit: int, cancel: ptr) -> int {

@@ -157,6 +157,24 @@ main() {
             line_at = string.index_of(bounded, "source line 1: …")
             spec.assert_true(line_at >= 0, "ellipsis prefix")
         }
+        // Ours: Host.start, which the port adds so calls claim ordered state at dispatch.
+        spec.it("start runs per call in creation order and what it leaves reaches that call") callback {
+            starts = list.list_new()
+            h = sandbox.new_host(starts, "[\"a\"]", |ctx: ptr, name: string, args: string, out: ptr| {
+                l = sandbox.result_started(out)
+                n, _e = list.get_string(l, 0)
+                sandbox.result_set_ok(out, "[${n},${args}]")
+            })
+            sandbox.host_set_start(h, |ctx: ptr, name: string, args: string, out: ptr| {
+                l = list.list_new()
+                list.list_add(l, "${list.list_size(ctx)}")
+                list.list_add(ctx, args)
+                sandbox.result_set_started(out, l)
+            })
+            r = run_("await Promise.all([tools.a(10), tools.a(11), tools.a(12)])", h)
+            spec.assert_str_eq(r.text, "[[0,10],[1,11],[2,12]]", "each call sees its own start")
+            spec.assert_eq(list.list_size(starts), 3, "three starts")
+        }
         spec.it("completion value is returned as json") callback {
             r = run_("const x = [1, 2].map(v => v * 2); ({ a: x })", null)
             spec.assert_eq(r.ok, 1, "ok")
