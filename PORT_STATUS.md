@@ -584,3 +584,47 @@ is the handle, no globals; a failure's text is `msg\nstack`) and
 interrupt reason is read from the cells and the budget as before; the
 runtime's own `interrupted` is not consulted. quickjs-ng is 0.18.0, matching
 upstream nib: InternalErrors are uncatchable by scripts. Pins: AE_PIN 0.916.0.
+
+## Flaky upstream tests (2026-11-14)
+
+The three timing-sensitive cases listed under "parity gaps closed", looked at
+one by one (each upstream test alone in a loop; upstream's tests and mocks
+unchanged):
+
+- **`test_cross_process_child_log_lock_fails_then_releases`**
+  (test_agent_reuse.py): 17/30 failing on macOS, 2/20 on ae-x64. A port race.
+  The Run resumes one agent twice in a `Promise.all`, foreground first;
+  upstream expects the first call to claim the id and the second to get
+  AgentBusy. Both upstream and the port claim it on the call's own thread,
+  and upstream gets creation order from thread start order because its work
+  before the claim takes microseconds; the port's took 30-70 us, about the
+  gap between two thread starts. The sandbox Host now has a `start` hook,
+  run on the Run's thread as each call is dispatched (creation order), and
+  tools.agent is split into `agent.begin` (checks, claim or allocate the id,
+  progress) and `agent.agent` (the rest, on the thread). New agent ids are
+  allocated in creation order too. After: 0/30 on ae-x64 and cachyos, 0/30 twice on macOS; ae/tests/agent_test.ae has two
+  specs that fail when dispatch skips `start`.
+- **`test_step_limit_does_not_wait_for_detached_jobs`** (test_background_bash.py),
+  seen failing once on ae-x64; not reproduced in about 200 runs there (alone,
+  four at once, under eight CPU burners, six whole-file runs), and the log of
+  the failure was not kept. Its last check is that the detached job's
+  processes are gone when `nib ask` has exited. Upstream's process.run
+  returns only after the group has closed its stdout pipe (500 ms cap), which
+  a SIGKILLed process does late in its exit; the port writes output to a file
+  and returned right after the kill. tools.process now waits, up to the same
+  500 ms, until no process is left in the group; ae/tests/process_test.ae
+  "process returns after the killed group's processes are gone" failed 5/5 on
+  ae-x64 before and passes after. The divergence is real; that it was this
+  flake's cause is inferred. After: 0/30 on ae-x64 and cachyos.
+- **`test_two_steps_and_next_boundary`** (test_background_bash.py): 28/30 and
+  29/30 failing on macOS, 0/20 on ae-x64. Not a port bug: the test waits for
+  the worker to exit with test_agent.py's `alive()`, which reads `/proc` and
+  so returns False at once on macOS, and the model gate opens while the
+  worker may still be running. With `alive()` given a macOS meaning (`ps`),
+  the unchanged test passes 30/30 on the old binary. It stays in the macOS
+  failures with the rest of the file (`/proc`). After (Linux): 0/30 on ae-x64 and cachyos.
+
+Gates after both fixes: `aeb .tests.ae`, `tools/check_layers.sh` and
+`tools/tui_tests.sh` green on macOS arm64, ae-x64 and cachyos; upstream e2e
+macOS 23/30, ae-x64 29/30, cachyos 29/30 (unchanged; the Codex half of
+`test_effort` by policy, and on macOS the `/proc` files).
