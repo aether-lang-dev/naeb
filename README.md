@@ -64,7 +64,7 @@ on Linux) and OpenSSL 3 or later:
 ### 2. Build
 
 ```sh
-git clone -b aether-port https://github.com/paul-hammant/nib-code.git naeb
+git clone -b aether-port https://github.com/paul-hammant/naeb-code.git naeb
 cd naeb
 aeb .build.ae          # builds target/build/bin/nib
 ```
