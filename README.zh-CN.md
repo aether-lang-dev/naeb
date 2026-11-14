@@ -1,3 +1,5 @@
+> **注意：本文已过时。** 这是上游 nib（Zig 版）的中文 README，尚未随 naeb（nib 的 Aether 移植版）更新，其中的安装方法和基准数据不适用于 naeb。请以英文版 [README.md](README.md) 为准。
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
