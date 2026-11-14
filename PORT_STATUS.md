@@ -32,7 +32,6 @@ ae/nib/<concept>/        one module per upstream file or concept, imported as ni
 ae/nib/sandbox/          src/sandbox.zig, scheduler, native, timer -> module.ae;
                          console.zig, timing.zig -> sandbox/console, sandbox/timing
 ae/nib/tools/            src/tools.zig and src/tools/*: one service module per tool family
-ae/nib/qjsgap/           marked stand-in for contrib.quickjs gaps (asks/)
 ae/term/                 the TUI's terminal layer (another slice)
 ae/tests/<name>_test.ae  std.spec suites; upstream's inline Zig tests ported by name
 tools/                   port maintenance scripts (upstream-diff.sh, check_layers.sh)
@@ -66,7 +65,7 @@ pins                     AE_PIN / AEB_REF the port is verified against
 |---|---|---|---|---|
 | `src/sandbox.zig` | 799 | `ae/nib/sandbox/module.ae` | a2dd439 | eval, Limits, prelude, syntax context; Host.record (settle at delivery, eval_end), Host.virtual |
 | `src/sandbox/scheduler.zig` | 296 | `ae/nib/sandbox/module.ae` | a2dd439 | virtual selection in jobs_; concurrency 8, completion order, timers, drain, stopped calls; Host.poll's role is a 20 ms Session ticker (session) |
-| `src/sandbox/native.zig` | 163 | `ae/nib/sandbox/module.ae` | a2dd439 | __log/__host as contrib.quickjs host functions with a `hide` veto line; installVirtual (__replayEpoch/Time/Random, "replay diverged"); the virtual stop interrupts JS through a stop cell in nib.qjsgap |
+| `src/sandbox/native.zig` | 163 | `ae/nib/sandbox/module.ae` | a2dd439 | __log/__host as contrib.quickjs host functions with a `hide` veto line; installVirtual (__replayEpoch/Time/Random, "replay diverged"); the virtual stop interrupts JS through contrib.quickjs's stop cell |
 | `src/sandbox/timer.zig` | 18 | `ae/nib/sandbox/module.ae` | a2dd439 |  |
 | `src/sandbox/console.zig` | 181 | `ae/nib/sandbox/console/module.ae` | a2dd439 |  |
 | `src/sandbox/timing.zig` | 168 | `ae/nib/sandbox/timing/module.ae` | a2dd439 | Execution epoch times live on process.Result |
@@ -173,8 +172,7 @@ elsewhere: every other std.os import hides the program starters), only the sandb
 matcher embed QuickJS, nothing in this slice imports a network module. The
 sandbox's two host functions open with a `hide os, worker, ...` veto line.
 
-**Stand-ins (marked, each with an ask):** `ae/nib/qjsgap` (async eval,
-interrupt, promise state: asks/aether-quickjs-async-eval-and-interrupt.md),
+**Stand-ins (marked, each with an ask):**
 `ae/nib/tools/jail/landlock.c` (asks/aether-landlock-write-roots.md).
 
 **Differences kept on purpose or by gap:** grep scans on one thread and
@@ -371,9 +369,8 @@ steps elsewhere pass on macOS: test_background_run
 `test_configured_run_output_budget`, test_web_search `test_deepseek`,
 test_mcp `test_stdio_modern_and_legacy` and `test_subagent`.
 
-**Stand-in.** nib.qjsgap gains a stop cell its interrupt honours (replay's
-divergence stops a running script without it reading as canceled); written
-into asks/aether-quickjs-async-eval-and-interrupt.md.
+**Stop cell.** The sandbox's interrupt honours a stop cell (replay's
+divergence stops a running script without it reading as canceled).
 
 ## Headless features slice (2026-11-13)
 
@@ -572,3 +569,18 @@ on a pseudo-terminal and checks echo is off while the key is read, back on
 afterwards, and the key never reaches the screen. SIGINT/SIGTERM during
 `nib ask` are covered by upstream's `test_session.py` (the interrupted Turn
 test) and `test_agent.py` (`check_cancel`). Pins: AE_PIN 0.915.0.
+
+## Aether 0.916.0: nib.qjsgap deleted (2026-11-14)
+
+contrib.quickjs answers the last QuickJS ask and `ae/nib/qjsgap/` is gone.
+The sandbox now uses `quickjs.set_cancel_cell` and `set_stop_cell` (the Run's
+cancel cell and replay's divergence cell, both owned by the caller and freed
+after `dispose`, so nothing is unset), `set_deadline_ns(q, now_ns() + remaining)`
+on entering JS and `clear_deadline` on leaving it (the budget stays cumulative
+JS time, paused while tools run on their threads), `eval_async` (the promise
+is the handle, no globals; a failure's text is `msg\nstack`) and
+`promise_state`/`promise_result`. `to_string` returns `(string, error)`, so
+`<unprintable>` is told from an empty string by the error. The Run's
+interrupt reason is read from the cells and the budget as before; the
+runtime's own `interrupted` is not consulted. quickjs-ng is 0.18.0, matching
+upstream nib: InternalErrors are uncatchable by scripts. Pins: AE_PIN 0.916.0.

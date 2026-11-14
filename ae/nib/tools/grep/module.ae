@@ -182,8 +182,12 @@ matcher_new(pattern: string, ignore_case: int, literal: int, cancel: @keep ptr) 
         quickjs.dispose(q)
         return null, rerr
     }
-    reason = quickjs.to_string(q, r)
+    reason, rserr = quickjs.to_string(q, r)
     quickjs.release(q, r)
+    if rserr != "" {
+        quickjs.dispose(q)
+        return null, rserr
+    }
     if reason != "" {
         quickjs.dispose(q)
         return null, reason
@@ -227,9 +231,9 @@ matcher_scan(mp: ptr, data: string, limit: int) -> (ptr, string) {
     lim = quickjs.new_int(q, limit)
     quickjs.set_global(q, "L", lim)
     quickjs.release(q, lim)
-    quickjs.set_time_limit(q, m.limit_ms)
+    if m.limit_ms > 0 { quickjs.set_deadline_ns(q, quickjs.now_ns() + (m.limit_ms as long) * 1000000) }
     r, err = quickjs.eval(q, "scan(D, L)", "<grep>")
-    quickjs.set_time_limit(q, 0)
+    quickjs.clear_deadline(q)
     undef = quickjs.new_undefined(q)
     quickjs.set_global(q, "D", undef)
     quickjs.release(q, undef)
@@ -238,8 +242,9 @@ matcher_scan(mp: ptr, data: string, limit: int) -> (ptr, string) {
         if string.contains(err, "out of memory") != 0 { return null, "OutOfMemory" }
         return null, err
     }
-    text = quickjs.to_string(q, r)
+    text, terr = quickjs.to_string(q, r)
     quickjs.release(q, r)
+    if terr != "" { return null, terr }
     return parse_hits_(text), ""
 }
 

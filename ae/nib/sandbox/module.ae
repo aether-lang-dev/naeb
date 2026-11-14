@@ -32,7 +32,6 @@ import std.os hiding (exec, run_capture, run_pipe, run_pipe_drain_and_wait, run_
     os_spawn_to_raw)
 import nib.sandbox.console
 import nib.sandbox.timing
-import nib.qjsgap
 import nib.jsonx
 import nib.sandbox.record
 import std.intarr
@@ -129,7 +128,6 @@ struct Call {
 
 struct State {
     q: ptr
-    w: ptr
     host: ptr
     logs: ptr
     js_remaining_ns: long
@@ -284,14 +282,14 @@ JS
 // ---- the JS budget ----
 
 begin_js_(st: *State) {
-    st.js_started_ns = qjsgap.now_ns()
+    st.js_started_ns = quickjs.now_ns()
     st.js_running = 1
-    qjsgap.begin(st.w, st.js_remaining_ns)
+    quickjs.set_deadline_ns(st.q, st.js_started_ns + st.js_remaining_ns)
 }
 
 end_js_(st: *State) {
-    qjsgap.end(st.w)
-    st.js_remaining_ns = st.js_remaining_ns - (qjsgap.now_ns() - st.js_started_ns)
+    quickjs.clear_deadline(st.q)
+    st.js_remaining_ns = st.js_remaining_ns - (quickjs.now_ns() - st.js_started_ns)
     st.js_running = 0
 }
 
@@ -304,7 +302,7 @@ canceled_(st: *State) -> int {
 interrupted_(st: *State) -> int {
     if canceled_(st) == 1 { return 1 }
     elapsed = 0 as long
-    if st.js_running == 1 { elapsed = qjsgap.now_ns() - st.js_started_ns }
+    if st.js_running == 1 { elapsed = quickjs.now_ns() - st.js_started_ns }
     if elapsed >= st.js_remaining_ns { return 1 }
     return 0
 }
@@ -335,11 +333,8 @@ virtual_stopped_(st: *State) -> int {
 // ---- values to text ----
 
 to_str_(st: *State, h: int) -> string {
-    if quickjs.type_of(st.q, h) == "string" { return quickjs.to_string(st.q, h) }
-    s = quickjs.to_string(st.q, h)
-    if s == "" {
-        if quickjs.last_error(st.q) != "" { return "<unprintable>" }
-    }
+    s, err = quickjs.to_string(st.q, h)
+    if err != "" && quickjs.type_of(st.q, h) != "string" { return "<unprintable>" }
     return s
 }
 
@@ -419,7 +414,7 @@ enqueue_(st: *State, name: string, args: string) -> int {
     if h.virtual == null && c.result == null && name == "sleep" {
         ms = jsonx.long_of(args)
         c.timer = 1
-        c.deadline_ns = qjsgap.now_ns() + ms * 1000000
+        c.deadline_ns = quickjs.now_ns() + ms * 1000000
     }
     st.creation_index = st.creation_index + 1
     list.list_add(st.calls, c as ptr)
@@ -665,12 +660,12 @@ jobs_(st: *State) -> int {
         }
         failed = 0
         if st.promise != 0 {
-            if qjsgap.promise_state(st.w, st.promise) == 2 { failed = 1 }
+            if quickjs.promise_state(st.q, st.promise) == quickjs.PROMISE_REJECTED { failed = 1 }
         }
         wait_ms = 20 as long
         expired = null
         if failed == 0 {
-            now = qjsgap.now_ns()
+            now = quickjs.now_ns()
             total = list.list_size(st.calls)
             i = 0
             while i < total {
@@ -887,13 +882,6 @@ install_virtual_(st: *State) {
     }
 }
 
-take_global_(st: *State, name: string) -> int {
-    h, _e = quickjs.get_global(st.q, name)
-    r, _e2 = quickjs.eval(st.q, "delete globalThis.${name}", "<nib>")
-    if r != 0 { quickjs.release(st.q, r) }
-    return h
-}
-
 // Run `code` once in a fresh runtime. host may be null (no tools); cancel
 // is a std.sync cell the caller sets to cancel the Run, or null.
 eval(code: string, lp: ptr, host: @keep ptr, cancel: @keep ptr) -> ptr {
@@ -912,7 +900,7 @@ eval(code: string, lp: ptr, host: @keep ptr, cancel: @keep ptr) -> ptr {
     st.completions = sync.atomic_new(0)
     st.active = 0
     st.q = quickjs.runtime((l.memory_bytes / 1024) as int, (l.stack_bytes / 1024) as int)
-    st.w = qjsgap.watch(st.q, cancel)
+    quickjs.set_cancel_cell(st.q, cancel)
     q = st.q
     ec, _ee = quickjs.get_global(q, "Error")
     st.error_ctor = ec
@@ -925,7 +913,7 @@ eval(code: string, lp: ptr, host: @keep ptr, cancel: @keep ptr) -> ptr {
         quickjs.release(q, pv)
     }
     if virtual_(st) != null {
-        qjsgap.set_stop(st.w, (virtual_(st) as *Virtual).stopped)
+        quickjs.set_stop_cell(st.q, (virtual_(st) as *Virtual).stopped)
         install_virtual_(st)
     }
 
@@ -933,31 +921,25 @@ eval(code: string, lp: ptr, host: @keep ptr, cancel: @keep ptr) -> ptr {
     jobs_drained = 1
     text = ""
     begin_js_(st)
-    rc = qjsgap.eval_async(st.w, code, "<run>", "__nib_run", "__nib_exc")
+    p, eval_err = quickjs.eval_async(q, code, "<run>")
     end_js_(st)
-    if rc < 0 {
-        exc = take_global_(st, "__nib_exc")
-        begin_js_(st)
-        text = describe_error_(st, exc)
-        end_js_(st)
-        quickjs.release(q, exc)
+    if eval_err != "" {
+        text = trim_newlines_end_(eval_err)
     } else {
-        st.promise = take_global_(st, "__nib_run")
+        st.promise = p
         jobs_drained = jobs_(st)
         begin_js_(st)
-        state = qjsgap.promise_state(st.w, st.promise)
-        if state == 1 {
-            qjsgap.promise_result_to_global(st.w, st.promise, "__nib_settled")
-            res = take_global_(st, "__nib_settled")
+        state = quickjs.promise_state(q, st.promise)
+        if state == quickjs.PROMISE_FULFILLED {
+            res, _re = quickjs.promise_result(q, st.promise)
             // Async global eval resolves to { value: <completion value> }.
             value, _ve = quickjs.get(q, res, "value")
             text = to_json_(st, value)
             quickjs.release(q, value)
             quickjs.release(q, res)
             ok = 1
-        } else if state == 2 {
-            qjsgap.promise_result_to_global(st.w, st.promise, "__nib_settled")
-            err = take_global_(st, "__nib_settled")
+        } else if state == quickjs.PROMISE_REJECTED {
+            err, _pe = quickjs.promise_result(q, st.promise)
             text = describe_error_(st, err)
             quickjs.release(q, err)
         } else {
@@ -983,7 +965,6 @@ eval(code: string, lp: ptr, host: @keep ptr, cancel: @keep ptr) -> ptr {
     teardown_(st)
     if st.promise != 0 { quickjs.release(q, st.promise) }
     quickjs.release(q, st.error_ctor)
-    qjsgap.unwatch(st.w)
     quickjs.dispose(q)
     sync.atomic_free(st.completions)
 

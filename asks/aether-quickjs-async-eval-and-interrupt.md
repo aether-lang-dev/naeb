@@ -73,3 +73,5 @@ then dropped while tool calls still drain) and reads the settled value.
   tests see differs, but a bump would keep the two engines the same.
 - `qjs_to_string` returns "" both for an empty string and for a failed
   conversion; a `(string, err)` form would let a host tell them apart.
+
+**RESOLVED** in Aether 0.916.0 (aether #3698, 2026-11-14); the stand-in is removed from the port.

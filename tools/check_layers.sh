@@ -34,7 +34,7 @@ expect_imports ae/nib/jsonx/module.ae "std.json|std.strbuilder|std.string"
 expect_imports ae/nib/lock/module.ae "std.sync"
 expect_imports ae/nib/fserr/module.ae "std.fs"
 expect_imports ae/nib/sysenv/module.ae "std.list|std.os|std.string"
-expect_imports ae/nib/sandbox/module.ae "contrib.quickjs|nib.jsonx|nib.qjsgap|nib.sandbox.console|nib.sandbox.record|nib.sandbox.timing|std.intarr|std.list|std.os|std.strbuilder|std.string|std.sync|std.worker"
+expect_imports ae/nib/sandbox/module.ae "contrib.quickjs|nib.jsonx|nib.sandbox.console|nib.sandbox.record|nib.sandbox.timing|std.intarr|std.list|std.os|std.strbuilder|std.string|std.sync|std.worker"
 # The calls sidecar (record) writes one file under its own flock; replay runs the sandbox with no tools.
 expect_imports ae/nib/sandbox/record/module.ae "nib.jsonx|nib.lock|std.cryptography|std.fs|std.io|std.list|std.map|std.os|std.strbuilder|std.string"
 expect_imports ae/nib/sandbox/replay/module.ae "nib.jsonx|nib.sandbox|std.intarr|std.json|std.list|std.string|std.sync"
@@ -114,7 +114,6 @@ expect_imports $T/mcp_tool/module.ae "nib.image|nib.jsonx|nib.mcp|std.encoding|s
 # exceptions named in the rules below).
 U=ae/nib/tui
 expect_imports ae/main.ae "nib.auth|nib.config|nib.config.env|nib.jsonx|nib.provider.types|nib.run_replay|nib.sandbox|nib.session|nib.tools|nib.tools.agent_input|nib.tools.background|nib.tools.jail|nib.tui|nib.tui.clock|nib.tui.live|std.fs|std.io|std.list|std.os|std.signal|std.string|std.sync|std.worker|term|term.input"
-expect_imports ae/nib/qjsgap/module.ae ""
 # `/model`'s listing (src/auth/models.zig): one GET of the provider's /models.
 expect_imports ae/nib/auth/models/module.ae "nib.jsonx|std.http.client|std.json|std.list|std.string|std.time"
 expect_imports $U/module.ae "nib.auth|nib.auth.models|nib.config|nib.config.env|nib.image|nib.jsonx|nib.provider.types|nib.session.skills|nib.session.tool_summary|nib.tools.changes|nib.tools.diff|nib.tui.agent_tree|nib.tui.app_queue|nib.tui.bill|nib.tui.clipboard|nib.tui.clock|nib.tui.commands|nib.tui.editor|nib.tui.entry|nib.tui.format|nib.tui.frames|nib.tui.long_text|nib.tui.menu|nib.tui.mode|nib.tui.open|nib.tui.paths|nib.tui.port|nib.tui.prediction|nib.tui.provider_flow|nib.tui.reflect|nib.tui.sel_history|nib.tui.selection|nib.tui.status|nib.tui.tasks|nib.tui.title|nib.tui.transcript|nib.tui.tui_view|nib.tui.turn|nib.tui.turn_changes|nib.tui.turn_summary|nib.tui.viewport|std.fs|std.json|std.list|std.os|std.strbuilder|std.string|std.sync|term|term.input|term.screen"
@@ -227,8 +226,6 @@ only_calls() {   # only_calls FILE MODULE "allowed members|..." "why"
 }
 rule "QuickJS is embedded only by the sandbox and grep's private matcher" \
     '^import contrib\.quickjs' "ae/nib/sandbox/module.ae|$T/grep/"
-rule "the QuickJS stand-in is used only by the sandbox" \
-    '^import nib\.qjsgap' "ae/nib/sandbox/module.ae"
 # - auth/models lists the provider's models for `/model` (upstream
 #   auth/models.zig): one GET, with the key the Session would send.
 rule "only provider/http (the model request), auth/models (the /model listing), mcp_transport (Streamable HTTP MCP servers) tools/web_search (the search request) and tools/web (tools.fetch) reach the network" \
