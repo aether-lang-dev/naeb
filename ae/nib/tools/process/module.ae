@@ -2,7 +2,7 @@
 // stderr, merged by the caller's command) captured whole, stopped by cancel,
 // deadline or output size (upstream src/tools/process.zig). The call returns
 // when the child exits; anything left in its group is killed then (nohup and
-// & descendants included); daemons that left the group keep running and
+// & descendants included) and waited for, up to 500 ms; daemons that left the group keep running and
 // cannot hold the call open, since output goes to a file, not a pipe.
 
 import std.os
@@ -21,6 +21,7 @@ exports(Result, run, run_ticking, run_lines, open_stdio, kill_child, close_fd, e
 const STOP_NONE = ""
 const STOP_CANCELED = "Canceled"
 const STOP_TIMED_OUT = "TimedOut"
+const GROUP_EXIT_CAP_MS = 500
 
 struct Result {
     exit_code: int      // the shell's status (128+n after a signal)
@@ -120,8 +121,13 @@ run_ticking(argv: ptr, env: ptr, cancel_a: ptr, cancel_b: ptr, timeout_ms: long,
         sleep(5)
     }
     r.end_ms_epoch = os.now_unix_ms()
-    // The shell is gone: end whatever it left in its group.
+    // The shell is gone: end whatever it left in its group. Upstream returns
+    // once the group has closed its stdout pipe, at most 500 ms after the
+    // shell's exit; output here goes to a file, so wait as long for the
+    // group's killed processes (a SIGKILLed process runs until its exit ends).
     os.kill(0 - token, 9)
+    gone_by = os.now_monotonic_ms() + GROUP_EXIT_CAP_MS
+    while os.kill(0 - token, 0) == 0 && os.now_monotonic_ms() < gone_by { sleep(1) }
     r.exit_code = w.code
     sync.atomic_free(w.done)
     if r.error == "" && output_size_(out_path) > max_output { r.error = "OutputLimit" }

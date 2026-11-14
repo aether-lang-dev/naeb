@@ -110,6 +110,18 @@ main() {
             spec.assert_eq(fs.exists("${d}/survived"), 0, "the background job was killed with the group")
             fs.remove_tree(d)
         }
+        // Ours: upstream returns once the group has closed its stdout pipe,
+        // which a killed process does only after tearing down its memory.
+        spec.it("process returns after the killed group's processes are gone") callback {
+            d = tmp_()
+            big = "python3 -c 'import os,sys,time; b=b\"x\"*(1<<30); open(sys.argv[1],\"w\").write(str(os.getpid())); time.sleep(300)' '${d}/big.pid'"
+            r = run_(sh_("cd '${d}'; echo $$ > group; ${big} & while [ ! -s big.pid ]; do sleep 0.01; done; exit 0"), null, null, 10000)
+            spec.assert_eq(r.exit_code, 0, "exit 0")
+            group, _e = fs.read("${d}/group")
+            pgid, _pe = string.to_int(group)
+            spec.assert_eq(os.kill(0 - pgid, 0), -1, "no process left in the group")
+            fs.remove_tree(d)
+        }
         spec.it("process returns on shell exit when a setsid daemon holds the pipe") callback {
             // macOS has no setsid(1): python's os.setsid + exec does the same
             sd = "sd() { python3 -c 'import os,sys;os.setsid();os.execvp(sys.argv[1],sys.argv[1:])' \"$@\"; }; "
