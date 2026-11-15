@@ -25,7 +25,7 @@ import nib.tools.jail
 import nib.tools.rules
 
 exports(Fence, new, open_home, allow_read, deny_read, allow_write, deny_write, allow_host, pass_env,
-        allow_loopback, host_allowed, resolve, child_env, proxy_env, read_rules, write_denied, SECRETS)
+        allow_loopback, launcher_source, source_of, host_allowed, resolve, child_env, proxy_env, read_rules, write_denied, SECRETS)
 
 // Relative to $HOME: denied to every fenced reader unless allowed exactly.
 const SECRETS[] = [".ssh", ".aws", ".gnupg", ".config/gh", ".config/gcloud", ".azure", ".kube", ".docker",
@@ -60,6 +60,7 @@ struct Fence {
     hosts: ptr         // "host:port"; a host "*.example.com" matches below it
     env_pass: ptr
     loopback: int      // macOS: localhost reachable by children
+    source: string     // the launcher's own source, relative to the project, or ""
 }
 
 new(home: string) -> ptr {
@@ -73,6 +74,7 @@ new(home: string) -> ptr {
     f.hosts = list.list_new()
     f.env_pass = list.list_new()
     f.loopback = 0
+    f.source = ""
     return f as ptr
 }
 
@@ -87,6 +89,12 @@ deny_write(fp: ptr, path: string) { list.list_add((fp as *Fence).write_deny, exp
 allow_host(fp: ptr, host: string, port: int) { list.list_add((fp as *Fence).hosts, string.copy("${string.to_lower(host)}:${port}")) }
 pass_env(fp: ptr, name: string) { list.list_add((fp as *Fence).env_pass, string.copy(name)) }
 allow_loopback(fp: ptr) { (fp as *Fence).loopback = 1 }
+
+// The launcher's source inside the project (e.g. "naeb-launcher/naeb.ae"):
+// naeb refuses to start when it differs from the source the launcher was
+// built from, as recorded beside the binary (nib.app, "<exe>.built").
+launcher_source(fp: ptr, path: string) { (fp as *Fence).source = string.copy(path) }
+source_of(fp: ptr) -> string { return (fp as *Fence).source }
 
 host_allowed(fp: ptr, host: string, port: int) -> int {
     f = fp as *Fence

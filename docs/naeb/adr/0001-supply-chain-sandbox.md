@@ -182,7 +182,14 @@ The launcher and its compiled binary live outside every writable root
 (`~/.naeb/launchers/<project>/`); naeb's in-process tools and children are
 refused writes there by the same Fence (`~/.naeb` is on the secrets list),
 and `$NIB_HOME` is read-denied to children. A fenced naeb refuses to start
-when its own binary lies inside a writable root (exit 2, the path named). A re-exec after approval runs the binary the launcher rebuilt;
+when its own binary lies inside a writable root (exit 2, the path named).
+A launcher may name its own source inside the project
+(`fence.launcher_source(f, "naeb-launcher/naeb.ae")`): its build records the
+source's SHA-256 beside the binary (`<exe>.built`, with the naeb-code checkout
+and commit it was built from), and naeb exits 2 at start when the source no
+longer matches, so an edit or a pull that widens the fence cannot take effect
+before the build script has shown the diff and rebuilt. A naeb-code checkout
+that moved on since the build is a warning only. A re-exec after approval runs the binary the launcher rebuilt;
 the approved build is identified by the SHA-256 of the launcher source and
 binary recorded in the Session log before the re-exec and checked after it.
 Approval is a TUI prompt showing the launcher diff, a deliberate departure

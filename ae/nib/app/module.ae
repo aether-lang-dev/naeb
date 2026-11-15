@@ -16,6 +16,7 @@ import std.string
 import std.list
 import std.fs
 import std.io
+import std.cryptography
 import std.sync
 import std.worker
 import std.signal
@@ -100,16 +101,18 @@ own_path_(envp: ptr) -> string {
     exe = self_exe_()
     if string.index_of(exe, "/") >= 0 { return exe }
     dirs = string.split(env.get(envp, "PATH"), ":")
+    found = ""
     i = 0
-    while i < list.list_size(dirs) {
-        d, _e = list.get_string(dirs, i)
+    while i < string.array_size(dirs) && found == "" {
+        d = string.copy(string.array_get(dirs, i))
         if d != "" && fs.exists("${d}/${exe}") == 1 {
             real, _k, err = fs.realpath("${d}/${exe}")
-            if err == "" { return real }
+            if err == "" { found = real }
         }
         i = i + 1
     }
-    return ""
+    string.array_free(dirs)
+    return found
 }
 
 // A fenced naeb will not run from inside a root its children may write:
@@ -121,6 +124,94 @@ launcher_outside_roots_(f: ptr, envp: ptr) {
     if jail.allows(sp.writes, exe) == 0 { return }
     eprint_("naeb: the launcher ${exe} lies inside a root the project fence lets commands write; build it outside the project (docs/naeb/adr/0001)\n")
     exit(2)
+}
+
+// The build record beside a launcher binary, "<exe>.built": lines
+// "source_sha256=<hex>", "naeb_src=<checkout>", "naeb_commit=<hex>", written
+// by the build outside the project, where no fenced command can rewrite it.
+built_field_(record: string, name: string) -> string {
+    lines = string.split(record, "\n")
+    out = ""
+    i = 0
+    while i < string.array_size(lines) {
+        l = string.array_get(lines, i)
+        if string.starts_with(l, "${name}=") == 1 { out = string.trim(string.substring(l, string.length(name) + 1, string.length(l))) }
+        i = i + 1
+    }
+    string.array_free(lines)
+    return out
+}
+
+// A checkout's HEAD commit, read from .git without running git; "" if unknown.
+// A worktree's .git is a file naming its git dir, whose refs live in the
+// common dir.
+git_head_(dir: string) -> string {
+    git = "${dir}/.git"
+    common = git
+    link, lkerr = fs.read(git)
+    if lkerr == "" && string.starts_with(link, "gitdir: ") == 1 {
+        git = string.trim(string.substring(link, 8, string.length(link)))
+        common = git
+        cd, cderr = fs.read("${git}/commondir")
+        if cderr == "" {
+            c = string.trim(cd)
+            common = c
+            if string.starts_with(c, "/") == 0 { common = "${git}/${c}" }
+        }
+    }
+    head, err = fs.read("${git}/HEAD")
+    if err != "" { return "" }
+    head = string.trim(head)
+    if string.starts_with(head, "ref: ") == 0 { return head }
+    ref = string.substring(head, 5, string.length(head))
+    loose, lerr = fs.read("${common}/${ref}")
+    if lerr == "" { return string.trim(loose) }
+    packed, perr = fs.read("${common}/packed-refs")
+    if perr != "" { return "" }
+    lines = string.split(packed, "\n")
+    out = ""
+    i = 0
+    while i < string.array_size(lines) {
+        l = string.array_get(lines, i)
+        if string.ends_with(l, " ${ref}") == 1 { out = string.substring(l, 0, string.index_of(l, " ")) }
+        i = i + 1
+    }
+    string.array_free(lines)
+    return out
+}
+
+// A fenced naeb whose launcher names its source refuses to start when that
+// source changed since the build (a pending edit, or a pull that brought one):
+// the change is reviewed and rebuilt before it can take effect. A naeb-code
+// checkout that moved on since the build is only a warning.
+launcher_source_current_(f: ptr, envp: ptr) {
+    src = fence.source_of(f)
+    if src == "" { return }
+    exe = own_path_(envp)
+    path = "${jail.project_root(os.getcwd())}/${src}"
+    record, rerr = fs.read("${exe}.built")
+    if exe == "" || rerr != "" {
+        eprint_("naeb: no build record beside the launcher (${exe}.built); build it with its build script\n")
+        exit(2)
+    }
+    text, terr = fs.read(path)
+    if terr != "" {
+        eprint_("naeb: cannot read the launcher source ${path}: ${terr}\n")
+        exit(2)
+    }
+    h, _he = cryptography.sha256_hex(string.bytes(text))
+    if h != built_field_(record, "source_sha256") {
+        eprint_("naeb: ${src} changed since this launcher was built; review the change and rebuild the launcher\n")
+        exit(2)
+    }
+    naeb_src = built_field_(record, "naeb_src")
+    built_commit = built_field_(record, "naeb_commit")
+    if naeb_src != "" && built_commit != "" {
+        now = git_head_(naeb_src)
+        if now != "" && now != built_commit {
+            eprint_("naeb: ${naeb_src} has moved on since this launcher was built; rebuild it when convenient\n")
+        }
+    }
 }
 
 read_stdin_() -> string {
@@ -328,7 +419,10 @@ run(fence: @keep ptr) {
         exit(126)
     }
     envp = env.from_process()
-    if fence != null { launcher_outside_roots_(fence, envp) }
+    if fence != null {
+        launcher_outside_roots_(fence, envp)
+        launcher_source_current_(fence, envp)
+    }
     i = 1
     while i < n {
         h = os.args_get(i)
