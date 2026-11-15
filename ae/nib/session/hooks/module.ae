@@ -40,6 +40,7 @@ struct Failure {
     command: string
     exit_code: int
     output: string
+    fence_denied: string  // a JSON array of what a project fence refused the hooks, or ""
 }
 
 new_ctx() -> ptr {
@@ -155,6 +156,7 @@ run(cp: ptr, event: string, commands: ptr, paths: ptr, status: string, timeout_m
             fr.command = command
             fr.exit_code = 126
             fr.output = c.refuse
+            fr.fence_denied = ""
             return fr as ptr
         }
         // The project root is the commands' working directory.
@@ -173,6 +175,7 @@ run(cp: ptr, event: string, commands: ptr, paths: ptr, status: string, timeout_m
             f0.command = command
             f0.exit_code = 124
             f0.output = "timed out"
+            f0.fence_denied = ""
             return f0 as ptr
         }
         command_start = os.now_monotonic_ms()
@@ -192,6 +195,7 @@ run(cp: ptr, event: string, commands: ptr, paths: ptr, status: string, timeout_m
             f.command = command
             f.exit_code = code
             f.output = out
+            f.fence_denied = ""
             return f as ptr
         }
         k = k + 1
@@ -199,10 +203,13 @@ run(cp: ptr, event: string, commands: ptr, paths: ptr, status: string, timeout_m
     return null
 }
 
-// The failure as the Run output's payload: {"hook":{command, exit_code, output}}.
+// The failure as the Run output's payload: {"hook":{command, exit_code,
+// output}}, plus fence_denied under a project fence that refused the hooks.
 payload(fp: ptr) -> string {
     f = fp as *Failure
-    return "{\"hook\":{\"command\":${jsonx.quote(f.command)},\"exit_code\":${f.exit_code},\"output\":${jsonx.quote(f.output)}}}"
+    denied = ""
+    if f.fence_denied != "" { denied = ",\"fence_denied\":${f.fence_denied}" }
+    return "{\"hook\":{\"command\":${jsonx.quote(f.command)},\"exit_code\":${f.exit_code},\"output\":${jsonx.quote(f.output)}${denied}}}"
 }
 
 // The notice an after-edit failure shows: "hook <command> · exit <n>".

@@ -1,0 +1,409 @@
+// tools.denials: the paths a fenced child was refused, named
+// (docs/naeb/adr/0001, "Denials reaching the model"). The OS refuses a child
+// with a bare EACCES/EPERM; this names what it refused, per child, as
+// "op\tresource" entries (op: read, write, network, socket, or the
+// sandbox's own operation name).
+//
+// macOS: the SBPL profile of each child carries a tag of its own as the
+// message of every denial (jail.Spec.deny_tag); one `log stream` per naeb
+// process, started on first use, collects the sandbox's reports with naeb's
+// tag prefix. Taking a child's entries runs a sentinel (a one-rule
+// sandbox-exec whose denial carries the child's tag) and waits for its
+// report, so every report the child caused before it has arrived.
+// Linux: the jail helper's relay names refusals in a report file of the
+// child's own (jail.Spec.deny_report, tools/jail/landlock.c); taking reads
+// what it appended since.
+//
+// A Monitor belongs to one Tools; nothing here is module state.
+
+import std.fs
+import std.ipc
+import std.list
+import std.string
+import std.sync
+import std.worker
+import std.os hiding (exec, run_capture, run_pipe, run_pipe_drain_and_wait, run_socket,
+    run_stdio, run_full, run_supervised, spawn_proc, spawn_proc_to, os_system,
+    os_exec_raw, os_execv, os_run, os_run_capture_raw, os_run_capture_status_raw,
+    os_run_pipe_raw, os_run_pipe_drain_and_wait_raw, os_run_socket_raw,
+    os_run_stdio_raw, os_run_full_raw, os_run_supervised_raw, os_spawn_raw,
+    os_spawn_to_raw)
+import nib.jsonx
+import nib.lock
+import nib.tools.process
+import nib.tools.egress
+
+exports(Monitor, Watch, new_monitor, watch, watch_tag, watch_report, take, close, take_child, close_child, parse_event, sbpl_op, LOG, SENTINEL_FILE)
+
+const LOG = "/usr/bin/log"
+const SANDBOX_EXEC = "/usr/bin/sandbox-exec"
+// Any file every Mac has: the sentinel's one denied read.
+const SENTINEL_FILE = "/private/etc/hosts"
+const SENTINEL_WAIT_MS = 2000
+const READY_WAIT_MS = 3000
+const MAX_ENTRIES = 200
+
+struct Monitor {
+    guard: ptr
+    prefix: string      // "naeb-<pid>-": every tag of this process starts with it
+    seq: ptr            // std.sync cell: numbers the watches
+    run_dir: string     // Linux: where the report files go
+    state: int          // macOS stream: 0 not started, 1 running, 2 failed
+    ready: ptr          // std.sync cell: 1 once the stream printed its first line
+    buckets: ptr        // list of *Bucket, one per open watch (macOS)
+    pid: int            // the stream's process, -1 none
+    keep_fd: int        // naeb's end of the stream's stdin: never written, closed at exit
+}
+
+struct Bucket {
+    tag: string
+    entries: ptr        // "op\tresource", in arrival order
+    sentinel: int       // reports of the tag's sentinel seen
+}
+
+struct Watch {
+    monitor: ptr
+    tag: string         // macOS: the child's message tag, or ""
+    report: string      // Linux: the child's report file, or ""
+    offset: int         // Linux: bytes of the report already taken
+    sentinels: int      // macOS: sentinels run for this watch
+}
+
+is_mac_() -> int {
+    p = os.platform()
+    if p == "darwin" || p == "macos" { return 1 }
+    return 0
+}
+
+// A monitor for one Tools. run_dir: a directory naeb owns, outside every
+// writable root (Linux report files).
+new_monitor(run_dir: string) -> ptr {
+    m = heap.new(Monitor)
+    m.guard = lock.new()
+    m.prefix = "naeb-${os.getpid()}-"
+    m.seq = sync.atomic_new(0)
+    m.run_dir = string.copy(run_dir)
+    m.state = 0
+    m.ready = sync.atomic_new(0)
+    m.buckets = list.list_new()
+    m.pid = -1
+    m.keep_fd = -1
+    return m as ptr
+}
+
+// A watch for one new child, before it is spawned: put watch_tag (macOS) or
+// watch_report (Linux) into its jail.Spec.
+watch(mp: @keep ptr) -> ptr {
+    m = mp as *Monitor
+    n = sync.atomic_add(m.seq, 1 as long)
+    w = heap.new(Watch)
+    w.monitor = mp
+    w.tag = ""
+    w.report = ""
+    w.offset = 0
+    w.sentinels = 0
+    if is_mac_() == 1 {
+        w.tag = "${m.prefix}${n}"
+        start_(m)
+        lock.acquire(m.guard)
+        b = heap.new(Bucket)
+        b.tag = w.tag
+        b.entries = list.list_new()
+        b.sentinel = 0
+        list.list_add_raw(m.buckets, b as ptr)
+        lock.release(m.guard)
+    } else if os.platform() == "linux" && m.run_dir != "" {
+        fs.mkdir_p(m.run_dir)
+        w.report = "${m.run_dir}/denied-${os.getpid()}-${n}"
+        if fs.exists(w.report) == 1 { fs.delete(w.report) }
+    }
+    return w as ptr
+}
+
+watch_tag(wp: ptr) -> string { return (wp as *Watch).tag }
+watch_report(wp: ptr) -> string { return (wp as *Watch).report }
+
+// What the child (and its descendants) was refused since the last take, as
+// "op\tresource", each once. null watch: an empty list.
+take(wp: ptr) -> ptr {
+    out = list.list_new()
+    if wp == null { return out }
+    w = wp as *Watch
+    if w.tag != "" { take_mac_(w, out) }
+    if w.report != "" { take_linux_(w, out) }
+    return out
+}
+
+// take, then forget the watch (a Linux report file is deleted).
+close(wp: ptr) -> ptr {
+    out = take(wp)
+    if wp == null { return out }
+    w = wp as *Watch
+    if w.report != "" { fs.delete(w.report) }
+    if w.tag != "" {
+        m = w.monitor as *Monitor
+        lock.acquire(m.guard)
+        i = 0
+        while i < list.list_size(m.buckets) {
+            b = list.list_get_raw(m.buckets, i) as *Bucket
+            if b.tag == w.tag {
+                list.list_remove(m.buckets, i)
+                break
+            }
+            i = i + 1
+        }
+        lock.release(m.guard)
+    }
+    return out
+}
+
+// A child's refusals as "op resource", oldest first: the OS's (read,
+// write, network, socket) from its watch, then its proxy channel's
+// (egress). Either may be null.
+take_child(ch: ptr, wp: ptr) -> ptr { return joined_(ch, take(wp), 0) }
+
+// take_child, closing both (the channel must not be used after).
+close_child(ch: ptr, wp: ptr) -> ptr { return joined_(ch, close(wp), 1) }
+
+joined_(ch: ptr, files: ptr, closing: int) -> ptr {
+    out = list.list_new()
+    i = 0
+    while i < list.list_size(files) {
+        e, _e = list.get_string(files, i)
+        tab = string.index_of(e, "\t")
+        list.list_add(out, "${string.substring(e, 0, tab)} ${string.substring(e, tab + 1, string.length(e))}")
+        i = i + 1
+    }
+    if ch == null { return out }
+    d = null
+    if closing == 1 { d = egress.channel_close(ch) } else { d = egress.channel_take(ch) }
+    i = 0
+    while i < list.list_size(d) {
+        v, _e2 = list.get_string(d, i)
+        list.list_add(out, "egress ${v}")
+        i = i + 1
+    }
+    list.list_free(d)
+    return out
+}
+
+add_unique_(out: ptr, entry: string) {
+    if list.list_size(out) >= MAX_ENTRIES { return }
+    i = 0
+    while i < list.list_size(out) {
+        v, _e = list.get_string(out, i)
+        if v == entry { return }
+        i = i + 1
+    }
+    list.list_add(out, entry)
+}
+
+// ---- Linux: the helper's report file ----
+
+take_linux_(w: *Watch, out: ptr) {
+    text, err = fs.read(w.report)
+    if err != "" { return }
+    n = string.length(text)
+    if n <= w.offset { return }
+    rest = string.substring(text, w.offset, n)
+    last = last_newline_(rest)
+    if last < 0 { return }
+    w.offset = w.offset + last + 1
+    start = 0
+    while start < last {
+        nl = string.index_of_from(rest, "\n", start)
+        if nl < 0 { break }
+        l = string.substring(rest, start, nl)
+        if string.index_of(l, "\t") > 0 { add_unique_(out, l) }
+        start = nl + 1
+    }
+}
+
+last_newline_(s: string) -> int {
+    i = string.length(s) - 1
+    while i >= 0 {
+        if string.char_at(s, i) == 10 { return i }
+        i = i - 1
+    }
+    return -1
+}
+
+// ---- macOS: the unified log ----
+
+// The sandbox operation of a report as the op of an entry.
+sbpl_op(op: string, resource: string) -> string {
+    if string.starts_with(op, "file-read") == 1 { return "read" }
+    if string.starts_with(op, "file-write") == 1 { return "write" }
+    if string.starts_with(op, "network") == 1 {
+        if string.starts_with(resource, "/") == 1 { return "socket" }
+        return "network"
+    }
+    return op
+}
+
+// (tag, "op\tresource") of one sandbox report's message
+// ("Sandbox: cat(12) deny(1) file-read-data /p\n<tag>"), or ("", "").
+parse_event(msg_text: string) -> (string, string) {
+    nl = last_newline_(msg_text)
+    if nl < 0 { return "", "" }
+    tag = string.trim(string.substring(msg_text, nl + 1, string.length(msg_text)))
+    body = string.substring(msg_text, 0, nl)
+    d = string.index_of(body, " deny(")
+    if d < 0 { return "", "" }
+    close_p = string.index_of_from(body, ") ", d)
+    if close_p < 0 { return "", "" }
+    rest = string.substring(body, close_p + 2, string.length(body))
+    sp = string.index_of(rest, " ")
+    op = rest
+    resource = ""
+    if sp > 0 {
+        op = string.substring(rest, 0, sp)
+        resource = string.substring(rest, sp + 1, string.length(rest))
+    }
+    if string.starts_with(resource, "remote:") == 1 { resource = string.substring(resource, 7, string.length(resource)) }
+    return tag, "${sbpl_op(op, resource)}\t${resource}"
+}
+
+// Starts the stream once; on failure the watches stay empty (names are a
+// help, never a condition for running a command).
+start_(m: *Monitor) {
+    lock.acquire(m.guard)
+    if m.state != 0 {
+        lock.release(m.guard)
+        return
+    }
+    // The stream ends with naeb: sh holds naeb's end of a pipe on fd 3 and
+    // stops the stream when it reads EOF there (naeb exited or crashed).
+    argv = list.list_new()
+    list.list_add(argv, "/bin/sh")
+    list.list_add(argv, "-c")
+    list.list_add(argv, "exec 3<&0; ${LOG} stream --style ndjson --predicate \"$1\" </dev/null & p=$!; (read _ <&3; kill $p) >/dev/null 2>&1 & wait $p")
+    list.list_add(argv, "sh")
+    list.list_add(argv, "sender == \"Sandbox\" AND eventMessage CONTAINS \"${m.prefix}\"")
+    to_fd, from_fd, pid, err = process.open_stdio(argv, null, "/")
+    if err != "" {
+        m.state = 2
+        lock.release(m.guard)
+        return
+    }
+    m.keep_fd = to_fd
+    m.pid = pid
+    m.state = 1
+    lock.release(m.guard)
+    mp = m as ptr
+    worker.run_detached(|| {
+        read_loop_(mp, from_fd)
+        return null
+    })
+    waited = 0
+    while sync.atomic_load(m.ready) == 0 && waited < READY_WAIT_MS {
+        sleep(5)
+        waited = waited + 5
+    }
+}
+
+read_loop_(mp: ptr, fd: int) {
+    m = mp as *Monitor
+    buffer = ""
+    while true {
+        ready, rerr = ipc.wait_readable(fd, 1000)
+        if rerr != "" { break }
+        if ready != 1 { continue }
+        data, derr = ipc.read(fd, 65536)
+        if derr != "" || string.length(data) == 0 { break }
+        buffer = "${buffer}${data}"
+        nl = string.index_of(buffer, "\n")
+        while nl >= 0 {
+            line = string.substring(buffer, 0, nl)
+            buffer = string.substring(buffer, nl + 1, string.length(buffer))
+            sync.atomic_store(m.ready, 1)
+            event_(m, line)
+            nl = string.index_of(buffer, "\n")
+        }
+    }
+    process.close_fd(fd)
+    lock.acquire(m.guard)
+    m.state = 2
+    lock.release(m.guard)
+    sync.atomic_store(m.ready, 1)
+}
+
+event_(m: *Monitor, line: string) {
+    v = jsonx.parse(line)
+    if v == null { return }
+    msg_text = string.copy(jsonx.str_or(v, "eventMessage", ""))
+    jsonx.free(v)
+    tag, entry = parse_event(msg_text)
+    if tag == "" { return }
+    sentinel = 0
+    if string.ends_with(tag, ".end") == 1 {
+        sentinel = 1
+        tag = string.substring(tag, 0, string.length(tag) - 4)
+    }
+    lock.acquire(m.guard)
+    i = 0
+    while i < list.list_size(m.buckets) {
+        b = list.list_get_raw(m.buckets, i) as *Bucket
+        if b.tag == tag {
+            if sentinel == 1 {
+                b.sentinel = b.sentinel + 1
+            } else if list.list_size(b.entries) < 4 * MAX_ENTRIES {
+                list.list_add(b.entries, entry)
+            }
+            break
+        }
+        i = i + 1
+    }
+    lock.release(m.guard)
+}
+
+take_mac_(w: *Watch, out: ptr) {
+    m = w.monitor as *Monitor
+    if m.state != 1 { return }
+    // The sentinel: a report with the child's tag, after every report it caused.
+    argv = list.list_new()
+    list.list_add(argv, SANDBOX_EXEC)
+    list.list_add(argv, "-p")
+    list.list_add(argv, "(version 1)(allow default)(deny file-read-data (literal \"${SENTINEL_FILE}\") (with message \"${w.tag}.end\"))")
+    list.list_add(argv, "/bin/cat")
+    list.list_add(argv, SENTINEL_FILE)
+    process.run(argv, list.list_new(), null, null, 5000 as long, 65536 as long)
+    w.sentinels = w.sentinels + 1
+    waited = 0
+    while waited < SENTINEL_WAIT_MS {
+        lock.acquire(m.guard)
+        seen = sentinel_of_(m, w.tag)
+        state = m.state
+        lock.release(m.guard)
+        if seen >= w.sentinels || state != 1 { break }
+        sleep(2)
+        waited = waited + 2
+    }
+    lock.acquire(m.guard)
+    i = 0
+    while i < list.list_size(m.buckets) {
+        b = list.list_get_raw(m.buckets, i) as *Bucket
+        if b.tag == w.tag {
+            k = 0
+            while k < list.list_size(b.entries) {
+                e, _e = list.get_string(b.entries, k)
+                add_unique_(out, e)
+                k = k + 1
+            }
+            b.entries = list.list_new()
+            break
+        }
+        i = i + 1
+    }
+    lock.release(m.guard)
+}
+
+sentinel_of_(m: *Monitor, tag: string) -> int {
+    i = 0
+    while i < list.list_size(m.buckets) {
+        b = list.list_get_raw(m.buckets, i) as *Bucket
+        if b.tag == tag { return b.sentinel }
+        i = i + 1
+    }
+    return 0
+}

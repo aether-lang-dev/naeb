@@ -34,7 +34,7 @@ extern nibjail_probe() -> int
 extern nibjail_abi() -> int
 extern nibjail_probe_userns() -> int
 extern nibjail_restrict(roots: string) -> int
-extern nibjail_fence(writes: string, wdeny: string, reads: string, reads_on: int, sock: string) -> int
+extern nibjail_fence(writes: string, wdeny: string, reads: string, reads_on: int, sock: string, report: string) -> int
 extern nibjail_scrub_environ() -> int
 extern nibjail_account_home() -> string
 
@@ -46,6 +46,8 @@ struct Spec {
     proxy_port: int    // macOS: the proxy's port on 127.0.0.1
     proxy_sock: string // Linux: the proxy's Unix socket
     loopback: int      // macOS: localhost stays reachable
+    deny_tag: string   // macOS: the message the profile's denials are logged with, or ""
+    deny_report: string // Linux: the file the helper names refusals in, or ""
 }
 
 new_spec(writes: @keep ptr) -> ptr {
@@ -57,6 +59,8 @@ new_spec(writes: @keep ptr) -> ptr {
     s.proxy_port = 0
     s.proxy_sock = ""
     s.loopback = 0
+    s.deny_tag = ""
+    s.deny_report = ""
     return s as ptr
 }
 
@@ -264,14 +268,25 @@ profile(writable: ptr) -> string {
 // The SBPL profile of a fence: workspace writes, read-only paths, read rules
 // shallow to deep (the last matching rule wins), the network only to the
 // proxy, and no handing work to launchd (open) or other apps (Apple events).
+// Every denial carries the Spec's deny_tag, when set, as its log message:
+// the sandbox's reports in the unified log name the command they belong to.
 spec_profile(sp: ptr) -> string {
     s = sp as *Spec
-    text = profile(s.writes)
+    w = ""
+    if s.deny_tag != "" { w = " (with message ${sbpl_str_(s.deny_tag)})" }
+    text = "(version 1)(allow default)(deny file-write*${w})(allow file-write*(regex #\"^/dev/ttys[0-9]+$\")"
+    i = 0
+    while i < list.list_size(s.writes) {
+        path, _e0 = list.get_string(s.writes, i)
+        text = "${text}(subpath ${sbpl_str_(path)})"
+        i = i + 1
+    }
+    text = "${text})"
     n = list.list_size(s.write_deny)
     i = 0
     while i < n {
         p, _e = list.get_string(s.write_deny, i)
-        text = "${text}(deny file-write* (subpath ${sbpl_str_(p)}))"
+        text = "${text}(deny file-write* (subpath ${sbpl_str_(p)})${w})"
         i = i + 1
     }
     if s.reads != null {
@@ -279,19 +294,21 @@ spec_profile(sp: ptr) -> string {
         i = 0
         while i < list.list_size(ordered) {
             r, _e2 = list.get_string(ordered, i)
-            verb = "allow"
-            if rules.kind_of(r) == rules.DENY { verb = "deny" }
-            text = "${text}(${verb} file-read-data (subpath ${sbpl_str_(rules.path_of(r))}))"
+            if rules.kind_of(r) == rules.DENY {
+                text = "${text}(deny file-read-data (subpath ${sbpl_str_(rules.path_of(r))})${w})"
+            } else {
+                text = "${text}(allow file-read-data (subpath ${sbpl_str_(rules.path_of(r))}))"
+            }
             i = i + 1
         }
     }
     if s.net == 1 {
-        text = "${text}(deny network*)(allow network-outbound (remote ip \"localhost:${s.proxy_port}\"))"
+        text = "${text}(deny network*${w})(allow network-outbound (remote ip \"localhost:${s.proxy_port}\"))"
         if s.loopback == 1 {
             text = "${text}(allow network-bind (local ip \"localhost:*\"))(allow network-inbound (local ip \"localhost:*\"))(allow network-outbound (remote ip \"localhost:*\"))"
         }
     }
-    return "${text}(deny lsopen)(deny appleevent-send)"
+    return "${text}(deny lsopen${w})(deny appleevent-send${w})"
 }
 
 // Landlock read grants for `rules`: Landlock can only add, so a directory
@@ -490,6 +507,10 @@ wrap_spec(sp: ptr, inner: ptr, self_exe: string) -> ptr {
         if s.net == 1 {
             list.list_add(argv, "--net")
             list.list_add(argv, s.proxy_sock)
+            if s.deny_report != "" {
+                list.list_add(argv, "-D")
+                list.list_add(argv, s.deny_report)
+            }
         }
         list.list_add(argv, "--")
     }
@@ -509,7 +530,7 @@ fence_error_(code: int) -> string {
     }
 }
 
-// `nib __jail [-w root]... [-W path]... [-R [-r path]...] [--net sock] --
+// `nib __jail [-w root]... [-W path]... [-R [-r path]...] [--net sock [-D report]] --
 // <command>...` (args after __jail): restrict this process, then become the
 // command. Returns only on failure, with the reason.
 helper(args: ptr) -> string {
@@ -520,6 +541,7 @@ helper(args: ptr) -> string {
     reads = ""
     reads_on = 0
     sock = ""
+    report = ""
     fenced = 0
     split = -1
     i = 0
@@ -547,6 +569,8 @@ helper(args: ptr) -> string {
         } else if a == "--net" {
             sock = v
             fenced = 1
+        } else if a == "-D" {
+            report = v
         } else {
             return "InvalidArguments"
         }
@@ -556,7 +580,7 @@ helper(args: ptr) -> string {
     if fenced == 0 {
         if nibjail_restrict(writes) != 0 { return "LandlockUnavailable" }
     } else {
-        rc = nibjail_fence(writes, wdeny, reads, reads_on, sock)
+        rc = nibjail_fence(writes, wdeny, reads, reads_on, sock, report)
         if rc != 0 { return fence_error_(rc) }
     }
     command = list.list_new()

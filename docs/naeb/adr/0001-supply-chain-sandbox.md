@@ -179,12 +179,63 @@ started through a pre-forked unconfined helper.
   upstream's result shape is unchanged otherwise.
 - `tools.fetch` fails with the pair named, like the file tools:
   `denied by the project fence: egress example.com:443`.
-- A child's file denial is a plain `EACCES`/`EPERM`: Landlock reports no
-  path to the caller. Options for later: Landlock audit records (ABI 7; need
-  root to read), seccomp user notification on `openat` (heavy), or `strace`
-  on demand. macOS logs violations to the unified log (`log stream
-  --predicate 'sender == "Sandbox"'`), which naeb could read after a failed
-  command. Neither is in this round.
+- A child's own refusals by the OS are named too, in the same
+  `fence_denied`, per command (bash foreground and background, a hook run
+  in its failure payload and the session log, an MCP stdio server in the
+  result of each `tools.mcp` call). The OS only answers `EACCES`/`EPERM`,
+  so naeb names the path itself:
+  - **macOS:** every denial of a child's SBPL profile carries a tag of that
+    child's own as its message (`(deny file-read-data (subpath ...) (with
+    message "naeb-<pid>-<n>"))`), and the sandbox's report of it in the
+    unified log ends with that tag. One `log stream --predicate 'sender ==
+    "Sandbox" AND eventMessage CONTAINS "naeb-<pid>-"'` per naeb process,
+    started on the first fenced child, sorts the reports by tag (the tag is
+    inherited by every descendant, so a process tree is attributed whole).
+    When the command ends, naeb runs a sentinel, a one-rule `sandbox-exec`
+    whose denial carries the command's tag, and takes the command's entries
+    once the sentinel's report has arrived: the reports reach the stream in
+    about a millisecond, and the sentinel orders them. Measured on macOS
+    27.3 (M-series): about 7 ms per fenced command (15 ms to 22 ms for a
+    `true`), denied or not; the stream itself costs one process for the
+    session. A plain user's `log stream` sees the sandbox's reports; where it
+    cannot start, commands still run, without names. The stream stops when
+    naeb exits (a shell holding naeb's end of a pipe kills it on EOF).
+    Network denials are named as `network *:<port>` (the sandbox does not log
+    the address) and Unix sockets as `socket <path>`.
+  - **Linux:** Landlock's audit records (ABI 7) go to the kernel audit log,
+    which an unprivileged process cannot read (`dmesg_restrict=1` and no
+    `CAP_AUDIT_READ` on both lab hosts, ABI 4 and 11), and ABI 4 has none.
+    So the helper's relay supervises the command with seccomp user
+    notification (kernel 5.5+, unprivileged): the open, create, remove,
+    rename and truncate families are sent to the relay, which reads the path
+    from the caller (`process_vm_readv`; the relay is its ancestor), resolves
+    it as the caller sees it, checks it against the grants the command's
+    Landlock domain holds (and the read-only binds), writes a refused one to
+    a report file of the command's own under `$NIB_HOME/run`, and lets the
+    call continue (`SECCOMP_USER_NOTIF_FLAG_CONTINUE`). Landlock still
+    decides; the relay only names what it will refuse, so an ordinary
+    permission failure (a `chmod 000` file inside the grants) is never named.
+    Cost: each trapped call is a round trip to the relay, about 11 µs on
+    cachyos (bare metal, N100; the relay asks for the kernel's synchronous
+    wake-up, 6.6+): `python3 -c "import asyncio, json, http.client"` 89 → 95
+    ms, `cc -c` of a small file 22 → 24 ms, `/bin/true` unchanged, and a
+    `find | xargs cat` over 20 000 files 0.11 → 0.33 s; on ae-x64 (a VM,
+    kernel 6.8) the same import 0.25 → 0.29 s, `cc -c` 0.08 → 0.08 s and the
+    `find | xargs cat` 0.11 → 0.31 s. (The relay used to
+    notice its command's exit only at a 100 ms poll timeout; it now wakes on
+    `SIGCHLD`, which took about 50 ms off every fenced command on average.)
+    Other calls than those path
+    families cost nothing. A process the command leaves running after it
+    returns (a daemon) loses the proxy, as before; its trapped calls go on
+    through a copy of the relay, in a session of its own, that names nothing
+    more and exits once no process uses the filter (`POLLHUP`; without it the
+    calls would fail with `ENOSYS`). Not named: refusals of `exec` (no Landlock right is used),
+    of Unix sockets below ABI 9 (the seccomp `EACCES`), and of the network
+    (the namespace has only a loopback).
+  - Rejected: guessing from `EACCES` text in the output (an ordinary
+    permission failure looks the same), `strace` (ptrace on every call),
+    and an `LD_PRELOAD` shim (misses static binaries, and naeb would ship a
+    second file).
 
 ### Policy integrity
 
@@ -350,7 +401,9 @@ mode) the same fixtures find 15 holes on macOS.
    interface version and the build record (replacing per-project launcher
    executables). *Done.* The in-TUI approve, rebuild, re-exec `--resume`
    loop: *not yet*.
-6. Later: per-command scopes, denial paths for children, Windows.
+6. Denial paths for children. *Done* (macOS unified log, Linux seccomp
+   user notification).
+7. Later: per-command scopes, Windows.
 
 ## Consequences
 

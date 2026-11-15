@@ -73,9 +73,17 @@ console.log(JSON.stringify(await tools.bash({command: 'echo after-mcp'})));"""
 
 
 def denied_of(r):
+    """The proxy's refusals a result lists ("egress host:port"); the OS's own
+    refusals of files (a tool reading the account's real home, say) are
+    named_denials.py's subject."""
     if r.startswith("ERR: "):
         return None
-    return json.loads(r).get("fence_denied", [])
+    out = []
+    for e in json.loads(r).get("fence_denied", []):
+        e = e if isinstance(e, str) else "%s %s" % (e.get("op"), e.get("resource"))
+        if e.startswith("egress "):
+            out.append(e)
+    return out
 
 
 def main():
@@ -141,7 +149,7 @@ def main():
     mres = json.loads(lines[0]) if len(lines) > 1 else {}
     after = json.loads(lines[1]) if len(lines) > 1 else {}
     check("mcp-ran", mres.get("ok") is True and after.get("output") == "after-mcp\n", "the run said %r (exit %d, %s)" % (tool[:1], m.returncode, m.stderr[-300:]))
-    check("mcp-not-in-bash", after.get("output") == "after-mcp\n" and "fence_denied" not in after, "the bash after the MCP call got %r" % after)
+    check("mcp-not-in-bash", after.get("output") == "after-mcp\n" and denied_of(json.dumps(after)) == [], "the bash after the MCP call got %r" % after)
     shutil.rmtree(work, ignore_errors=True)
     print("%d failure(s)" % fails)
     return fails

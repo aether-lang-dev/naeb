@@ -455,7 +455,7 @@ attach_mcp_(s: *Session, servers: ptr) {
     t.mcp_client = mcp.new(servers, t.env, o.home, o.user_home, c.sandbox_writable, c.sandbox_workspace, o.self_exe)
     if t.fence != null && mcp.enabled_any(servers) == 1 {
         fspec, fproxy, ferr = tools.fence_base(s.tools)
-        mcp.set_fence(t.mcp_client, fspec, fproxy, ferr)
+        mcp.set_fence(t.mcp_client, fspec, fproxy, tools.fence_monitor(s.tools), ferr)
     }
     t.mcp_enabled = mcp.enabled_any(servers)
 }
@@ -728,10 +728,26 @@ start_run_job_(s: *Session, code: string, run_index: int) -> *RunJob {
     return j
 }
 
+// Runs `commands` for `event` (hooks.run) in this Session's hook context.
+// Under a fence they run confined, through a channel and a watch of their
+// own: what the fence refused them goes to the session log and, with a
+// failure, into its payload. The first failure, or null.
+run_hooks_(s: *Session, event: string, commands: ptr, paths: ptr, status: string) -> ptr {
+    hctx, hch, hw = hooks_ctx_(s)
+    f = hooks.run(hctx, event, commands, paths, status, hooks.TIMEOUT_MS as long)
+    if hch == null && hw == null { return f }
+    d = tools.child_refusals(hch, hw)
+    if list.list_size(d) == 0 { return f }
+    dj = json_list_(d)
+    log.event(s.log, ",\"hook_fence_denied\":{\"event\":${jsonx.quote(event)},\"fence_denied\":${dj}}", 0)
+    if f != null { (f as *hooks.Failure).fence_denied = dj }
+    return f
+}
+
 // The hook context of this Session's commands and, under a fence, the
-// hooks' own channel to the proxy (null without one), which the caller
-// closes (tools.close_channel) once the hooks have run.
-hooks_ctx_(s: *Session) -> (ptr, ptr) {
+// hooks' own channel to the proxy and watch (null without one), which the
+// caller hands to tools.child_refusals once the hooks have run.
+hooks_ctx_(s: *Session) -> (ptr, ptr, ptr) {
     t = s.tools as *tools.Tools
     hp = hooks.new_ctx()
     h = hp as *hooks.Ctx
@@ -739,10 +755,12 @@ hooks_ctx_(s: *Session) -> (ptr, ptr) {
     h.strip_env = (s.cfg as *types.Config).api_key_env
     h.roots = tools.sandbox_roots(s.tools)
     ch = null
+    w = null
     if t.fence != null {
         // Fenced: the hook runs confined, or fails closed with the reason.
-        fspec, fenv, fch, ferr = tools.fence_child(s.tools)
+        fspec, fenv, fch, fw, ferr = tools.fence_child(s.tools)
         ch = fch
+        w = fw
         h.roots = null
         h.spec = fspec
         h.env = fenv
@@ -755,7 +773,7 @@ hooks_ctx_(s: *Session) -> (ptr, ptr) {
         ss = ctx as *Session
         log.event(ss.log, members, 0)
     }
-    return hp, ch
+    return hp, ch, w
 }
 
 // after_edit hooks once a Run that changed files ends (upstream afterEdit).
@@ -764,9 +782,7 @@ after_edit_(s: *Session, j: *RunJob) {
     if list.list_size(c.hooks_after_edit) == 0 { return }
     paths = tools.change_paths(j.scope)
     if list.list_size(paths) == 0 { return }
-    hctx, hch = hooks_ctx_(s)
-    f = hooks.run(hctx, "after_edit", c.hooks_after_edit, paths, "", hooks.TIMEOUT_MS as long)
-    tools.close_channel(hch)
+    f = run_hooks_(s, "after_edit", c.hooks_after_edit, paths, "")
     if f != null {
         j.hook = hooks.payload(f)
         j.hook_notice = hooks.notice(f)
@@ -798,13 +814,11 @@ start_turn_end_hooks(sp: @keep ptr, status: string, ctx: @keep ptr, notify: @kee
     job = heap.new(HookJob)
     job.done = sync.atomic_new(0)
     list.list_add_raw(s.hook_jobs, job as ptr)
-    hctx, hch = hooks_ctx_(s)
     commands = c.hooks_turn_end
     done = job.done
     st = string.copy(status)
     worker.run_detached(|| {
-        f = hooks.run(hctx, "turn_end", commands, list.list_new(), st, hooks.TIMEOUT_MS as long)
-        tools.close_channel(hch)
+        f = run_hooks_(sp as *Session, "turn_end", commands, list.list_new(), st)
         if f != null && has_notify == 1 {
             call(notify, ctx, "hook turn_end · exit ${(f as *hooks.Failure).exit_code}")
         }
@@ -846,9 +860,7 @@ run(sp: @keep ptr, code: string, cancel: @keep ptr) -> *Ran {
     if list.list_size(((s.cfg as *types.Config).hooks_after_edit)) > 0 {
         paths = tools.change_paths(scope)
         if list.list_size(paths) > 0 {
-            hctx, hch = hooks_ctx_(s)
-            hooks.run(hctx, "after_edit", (s.cfg as *types.Config).hooks_after_edit, paths, "", hooks.TIMEOUT_MS as long)
-            tools.close_channel(hch)
+            run_hooks_(s, "after_edit", (s.cfg as *types.Config).hooks_after_edit, paths, "")
         }
     }
     types.usage_add(s.usage, tools.take_usage(s.tools))

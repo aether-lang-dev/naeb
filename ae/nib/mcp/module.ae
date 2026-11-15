@@ -17,7 +17,7 @@ import nib.mcp.mcp_index
 import nib.mcp.mcp_transport
 import nib.provider.types
 
-exports(Client, new, set_fence, close, prompt, schema, call, server_state, enabled_any, split, checked,
+exports(Client, new, set_fence, take_refusals, close, prompt, schema, call, server_state, enabled_any, split, checked,
         PROTOCOL_VERSION, LEGACY_VERSION, TIMEOUT_MS, MAX_MESSAGE)
 
 const PROTOCOL_VERSION = "2026-07-28"
@@ -63,14 +63,26 @@ new(servers: ptr, env: @keep ptr, home: string, user_home: string, writable: @ke
 }
 
 // Holds every stdio server to a project fence (mcp_transport.set_fence).
-set_fence(cp: ptr, spec: @keep ptr, proxy: @keep ptr, refuse: string) {
+set_fence(cp: ptr, spec: @keep ptr, proxy: @keep ptr, monitor: @keep ptr, refuse: string) {
     c = cp as *Client
     i = 0
     while i < list.list_size(c.servers) {
         st = list.list_get_raw(c.servers, i) as *State
-        mcp_transport.set_fence(st.transport, spec, proxy, refuse)
+        mcp_transport.set_fence(st.transport, spec, proxy, monitor, refuse)
         i = i + 1
     }
+}
+
+// What a project fence refused server `id`'s processes since the last
+// take, as "op resource" (an empty list: no such server, no fence).
+take_refusals(cp: ptr, id: string) -> ptr {
+    c = cp as *Client
+    lock.acquire(c.guard)
+    out = list.list_new()
+    sp = state_(c, id)
+    if sp != null { out = mcp_transport.take_refusals((sp as *State).transport) }
+    lock.release(c.guard)
+    return out
 }
 
 // Stops every connection (stdio children are killed).

@@ -38,11 +38,12 @@ import nib.provider.sse
 import nib.provider.types
 import nib.tools.jail
 import nib.tools.egress
+import nib.tools.denials
 import nib.fence
 import nib.tools.process
 import nib.tools.secrets
 
-exports(Transport, Source, new, set_fence, close, ensure, rpc, incoming, checked, watch, source_fixed, read_line,
+exports(Transport, Source, new, set_fence, take_refusals, close, ensure, rpc, incoming, checked, watch, source_fixed, read_line,
         PROTOCOL_VERSION, LEGACY_VERSION, TIMEOUT_MS, MAX_MESSAGE)
 
 const PROTOCOL_VERSION = "2026-07-28"
@@ -62,6 +63,9 @@ struct Transport {
     fence_proxy: ptr     // the fence's *egress.Proxy
     fence_channel: ptr   // the running server's own *egress.Channel, or null
     fence_refuse: string // why a fenced server cannot be confined here, or ""
+    fence_monitor: ptr   // the fence's *denials.Monitor
+    fence_watch: ptr     // the running server's own *denials.Watch, or null
+    fence_pending: ptr   // "op resource" refused a server that has since been closed, not yet taken
     to_fd: int
     pid: int             // 0: no child
     src: ptr             // *Source over the child's stdout
@@ -114,6 +118,9 @@ new(config: @keep ptr, env: @keep ptr, home: string, user_home: string, writable
     t.fence_proxy = null
     t.fence_channel = null
     t.fence_refuse = ""
+    t.fence_monitor = null
+    t.fence_watch = null
+    t.fence_pending = list.list_new()
     t.to_fd = -1
     t.pid = 0
     t.src = source_fixed("")
@@ -241,11 +248,29 @@ child_env_(t: *Transport) -> ptr {
 // A project fence (docs/naeb/adr/0001): a stdio server runs in `spec`
 // (plus its own state directory), reaching `proxy` through a channel of its
 // own for as long as it runs, or not at all (`refuse`).
-set_fence(tp: ptr, spec: @keep ptr, proxy: @keep ptr, refuse: string) {
+set_fence(tp: ptr, spec: @keep ptr, proxy: @keep ptr, monitor: @keep ptr, refuse: string) {
     t = tp as *Transport
     t.fence_spec = spec
     t.fence_proxy = proxy
+    t.fence_monitor = monitor
     t.fence_refuse = refuse
+}
+
+// What the fence refused this server's processes since the last take, as
+// "op resource" (denials.take_child), oldest first.
+take_refusals(tp: ptr) -> ptr {
+    t = tp as *Transport
+    out = t.fence_pending
+    t.fence_pending = list.list_new()
+    if t.fence_channel == null && t.fence_watch == null { return out }
+    now = denials.take_child(t.fence_channel, t.fence_watch)
+    i = 0
+    while i < list.list_size(now) {
+        v, _e = list.get_string(now, i)
+        list.list_add(out, v)
+        i = i + 1
+    }
+    return out
 }
 
 // The fence's spec with `directory` writable and readable.
@@ -303,6 +328,12 @@ spawn_(t: *Transport) -> string {
         net = fsp as *jail.Spec
         net.proxy_port = egress.channel_port(ch)
         net.proxy_sock = egress.channel_sock(ch)
+        if t.fence_monitor != null {
+            fw = denials.watch(t.fence_monitor)
+            net.deny_tag = denials.watch_tag(fw)
+            net.deny_report = denials.watch_report(fw)
+            t.fence_watch = fw
+        }
         wrapped = jail.wrap_spec(fsp, argv, t.self_exe)
         pe = fence.proxy_env(jail.proxy_url(fsp))
         i = 0
@@ -339,9 +370,16 @@ spawn_(t: *Transport) -> string {
 }
 
 close_channel_(t: *Transport) {
-    if t.fence_channel == null { return }
-    list.list_free(egress.channel_close(t.fence_channel))
+    if t.fence_channel == null && t.fence_watch == null { return }
+    left = denials.close_child(t.fence_channel, t.fence_watch)
+    i = 0
+    while i < list.list_size(left) {
+        v, _e = list.get_string(left, i)
+        list.list_add(t.fence_pending, v)
+        i = i + 1
+    }
     t.fence_channel = null
+    t.fence_watch = null
 }
 
 // Ends the connection: the child is killed, the session forgotten, its

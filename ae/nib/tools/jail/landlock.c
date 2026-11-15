@@ -77,6 +77,7 @@ int nibjail_scrub_environ(void) {
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <net/if.h>
 #include <netinet/in.h>
@@ -253,16 +254,340 @@ static void nib_splice(int a, int b) {
     }
 }
 
+/* ---- naming a child's file refusals (docs/naeb/adr/0001) ----
+ * Landlock tells the caller nothing but EACCES, and its audit records
+ * (ABI 7) need root to read. So the relay also supervises: a seccomp
+ * filter in the command sends each path syscall of the open, create,
+ * remove and rename families here (SECCOMP_RET_USER_NOTIF); the relay
+ * reads the path from the caller's memory, checks it against the same
+ * grants the Landlock domain holds, appends "read\t<path>" or
+ * "write\t<path>" to the report file when they refuse it, and lets the
+ * call continue (SECCOMP_USER_NOTIF_FLAG_CONTINUE): Landlock still makes
+ * the decision, this only names it. When the command exits while a process
+ * it left running (a daemon) still holds the filter, a copy of the relay
+ * stays to let its calls continue, unreported, until the kernel says the
+ * filter is unused (POLLHUP); without it they would fail with ENOSYS. */
+struct nib_watch {
+    int fd;                 /* the seccomp listener, -1 none */
+    const char *report;     /* the report file's path */
+    int out;                /* its descriptor once opened, -1 before */
+    const char *writes, *wdeny, *reads;
+    int reads_on;
+    int lines;
+    char last[8][512];      /* recent lines, not repeated */
+    int last_n;
+};
+
+#ifdef SECCOMP_IOCTL_NOTIF_SET_FLAGS
+#define NIB_NOTIF_SET_FLAGS SECCOMP_IOCTL_NOTIF_SET_FLAGS
+#else
+#define NIB_NOTIF_SET_FLAGS _IOW('!', 4, uint64_t)
+#endif
+#define NIB_NOTIF_SYNC_WAKE_UP 1ULL
+
+enum { NIB_W_OPEN = 1, NIB_W_OPEN2, NIB_W_CREATE, NIB_W_REMOVE, NIB_W_RENAME, NIB_W_TRUNC };
+struct nib_wsys { long nr; int kind; int dirfd; int path; int flags; int dirfd2; int path2; };
+static const struct nib_wsys nib_wsys[] = {
+    { __NR_openat, NIB_W_OPEN, 0, 1, 2, -1, -1 },
+#ifdef __NR_openat2
+    { __NR_openat2, NIB_W_OPEN2, 0, 1, 2, -1, -1 },
+#endif
+    { __NR_mkdirat, NIB_W_CREATE, 0, 1, -1, -1, -1 },
+    { __NR_mknodat, NIB_W_CREATE, 0, 1, -1, -1, -1 },
+    { __NR_symlinkat, NIB_W_CREATE, 1, 2, -1, -1, -1 },
+    { __NR_linkat, NIB_W_CREATE, 2, 3, -1, -1, -1 },
+    { __NR_unlinkat, NIB_W_REMOVE, 0, 1, -1, -1, -1 },
+    { __NR_renameat2, NIB_W_RENAME, 0, 1, -1, 2, 3 },
+    { __NR_truncate, NIB_W_TRUNC, -1, 0, -1, -1, -1 },
+#ifdef __NR_renameat
+    { __NR_renameat, NIB_W_RENAME, 0, 1, -1, 2, 3 },
+#endif
+#ifdef __NR_open
+    { __NR_open, NIB_W_OPEN, -1, 0, 1, -1, -1 },
+    { __NR_creat, NIB_W_OPEN, -1, 0, -2, -1, -1 },
+    { __NR_mkdir, NIB_W_CREATE, -1, 0, -1, -1, -1 },
+    { __NR_mknod, NIB_W_CREATE, -1, 0, -1, -1, -1 },
+    { __NR_symlink, NIB_W_CREATE, -1, 1, -1, -1, -1 },
+    { __NR_link, NIB_W_CREATE, -1, 1, -1, -1, -1 },
+    { __NR_unlink, NIB_W_REMOVE, -1, 0, -1, -1, -1 },
+    { __NR_rmdir, NIB_W_REMOVE, -1, 0, -1, -1, -1 },
+    { __NR_rename, NIB_W_RENAME, -1, 0, -1, -1, 1 },
+#endif
+};
+#define NIB_WSYS_N ((int)(sizeof nib_wsys / sizeof nib_wsys[0]))
+
+static int nib_send_fd(int s, int fd) {
+    char b = 0;
+    struct iovec io = { &b, 1 };
+    char c[CMSG_SPACE(sizeof(int))];
+    memset(c, 0, sizeof c);
+    struct msghdr m;
+    memset(&m, 0, sizeof m);
+    m.msg_iov = &io;
+    m.msg_iovlen = 1;
+    m.msg_control = c;
+    m.msg_controllen = sizeof c;
+    struct cmsghdr *h = CMSG_FIRSTHDR(&m);
+    h->cmsg_level = SOL_SOCKET;
+    h->cmsg_type = SCM_RIGHTS;
+    h->cmsg_len = CMSG_LEN(sizeof(int));
+    memcpy(CMSG_DATA(h), &fd, sizeof(int));
+    return sendmsg(s, &m, MSG_NOSIGNAL) < 0 ? -1 : 0;
+}
+
+/* The listener the command sent, or -1 when it sent none within 5 s. */
+static int nib_recv_fd(int s) {
+    struct pollfd p = { s, POLLIN, 0 };
+    if (poll(&p, 1, 5000) <= 0) return -1;
+    char b;
+    struct iovec io = { &b, 1 };
+    char c[CMSG_SPACE(sizeof(int))];
+    struct msghdr m;
+    memset(&m, 0, sizeof m);
+    m.msg_iov = &io;
+    m.msg_iovlen = 1;
+    m.msg_control = c;
+    m.msg_controllen = sizeof c;
+    if (recvmsg(s, &m, MSG_CMSG_CLOEXEC) <= 0) return -1;
+    struct cmsghdr *h = CMSG_FIRSTHDR(&m);
+    if (!h || h->cmsg_type != SCM_RIGHTS) return -1;
+    int fd;
+    memcpy(&fd, CMSG_DATA(h), sizeof(int));
+    return fd;
+}
+
+/* The filter that sends the path syscalls above to the relay; the
+ * listener, or -1 (no user notification on this kernel). */
+static int nib_seccomp_watch(void) {
+#if defined(__x86_64__)
+    const uint32_t arch = AUDIT_ARCH_X86_64;
+#elif defined(__aarch64__)
+    const uint32_t arch = AUDIT_ARCH_AARCH64;
+#else
+    return -1;
+#endif
+    struct sock_filter f[4 + NIB_WSYS_N + 2];
+    int n = 0;
+    f[n++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch));
+    f[n++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, arch, 1, 0);
+    f[n++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
+    f[n++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr));
+    for (int i = 0; i < NIB_WSYS_N; i++)
+        f[n++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (uint32_t)nib_wsys[i].nr, (uint8_t)(NIB_WSYS_N - i), 0);
+    f[n++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
+    f[n++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_USER_NOTIF);
+    struct sock_fprog prog = { (unsigned short)n, f };
+    return (int)syscall(__NR_seccomp, SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_NEW_LISTENER, &prog);
+}
+
+/* 1 when `path` is one of the '\n'-separated `list` or lies beneath one. */
+static int nib_beneath(const char *list, const char *path) {
+    size_t pl = strlen(path);
+    const char *p = list;
+    while (p && *p) {
+        const char *e = strchr(p, '\n');
+        size_t n = e ? (size_t)(e - p) : strlen(p);
+        if (n > 0 && n <= pl && memcmp(p, path, n) == 0 && (n == pl || path[n] == '/' || (n == 1 && p[0] == '/'))) return 1;
+        if (!e) break;
+        p = e + 1;
+    }
+    return 0;
+}
+
+/* A NUL-terminated string of the target's memory, or -1. */
+static int nib_peek(pid_t pid, uint64_t addr, char *out, size_t n) {
+    if (!addr) return -1;
+    size_t got = 0;
+    while (got < n - 1) {
+        size_t want = n - 1 - got;
+        size_t to_page = 4096 - (size_t)((addr + got) & 4095);
+        if (want > to_page) want = to_page;
+        struct iovec l = { out + got, want }, r = { (void *)(uintptr_t)(addr + got), want };
+        ssize_t k = process_vm_readv(pid, &l, 1, &r, 1, 0);
+        if (k <= 0) return -1;
+        if (memchr(out + got, 0, (size_t)k)) return 0;
+        got += (size_t)k;
+    }
+    out[n - 1] = 0;
+    return -1;
+}
+
+/* The absolute form of `path` as the target sees it (dirfd, its cwd). */
+static int nib_absolute(pid_t pid, long dirfd, const char *path, char *out, size_t n) {
+    if (path[0] == '/') {
+        if (strlen(path) >= n) return -1;
+        strcpy(out, path);
+        return 0;
+    }
+    char link[64], base[4096];
+    if (dirfd == AT_FDCWD) snprintf(link, sizeof link, "/proc/%d/cwd", (int)pid);
+    else snprintf(link, sizeof link, "/proc/%d/fd/%d", (int)pid, (int)dirfd);
+    ssize_t k = readlink(link, base, sizeof base - 1);
+    if (k <= 0 || base[0] != '/') return -1;
+    base[k] = 0;
+    if ((size_t)snprintf(out, n, "%s/%s", base, path) >= n) return -1;
+    return 0;
+}
+
+/* The canonical path of an existing `abs` (whole: 1), or of its parent
+ * joined with its last component (whole: 0, for a name being made,
+ * removed or renamed). -1 when it cannot be resolved. */
+static int nib_resolve(const char *abs, int whole, char *out) {
+    char tmp[4096];
+    if (whole) return realpath(abs, out) ? 0 : -1;
+    size_t l = strlen(abs);
+    if (l >= sizeof tmp) return -1;
+    strcpy(tmp, abs);
+    while (l > 1 && tmp[l - 1] == '/') tmp[--l] = 0;
+    char *slash = strrchr(tmp, '/');
+    if (!slash) return -1;
+    const char *name = slash + 1;
+    char dir[4096];
+    if (slash == tmp) strcpy(dir, "/");
+    else {
+        *slash = 0;
+        if (!realpath(tmp, dir)) return -1;
+    }
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0 || !*name) return realpath(abs, out) ? 0 : -1;
+    if (snprintf(out, 4096, "%s%s%s", dir, strcmp(dir, "/") == 0 ? "" : "/", name) >= 4096) return -1;
+    return 0;
+}
+
+static void nib_note(struct nib_watch *w, const char *op, const char *path) {
+    if (!w->report) return;
+    if (strncmp(path, "/proc/", 6) == 0 || strncmp(path, "/dev/", 5) == 0 || strncmp(path, "/sys/", 5) == 0) return;
+    char line[512];
+    int n = snprintf(line, sizeof line, "%s\t%s\n", op, path);
+    if (n <= 0 || (size_t)n >= sizeof line) return;
+    for (int i = 0; i < n - 1; i++) if (line[i] == '\n') line[i] = '?';
+    for (int i = 0; i < w->last_n && i < 8; i++) if (strcmp(w->last[i], line) == 0) return;
+    if (w->lines >= 4096) return;
+    strcpy(w->last[w->last_n % 8], line);
+    w->last_n++;
+    if (w->out < 0) w->out = open(w->report, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+    if (w->out < 0) return;
+    if (write(w->out, line, (size_t)n) == n) w->lines++;
+}
+
+static int nib_readable(struct nib_watch *w, const char *path) {
+    return !w->reads_on || nib_beneath(w->reads, path) || nib_beneath(w->writes, path);
+}
+
+static int nib_writable(struct nib_watch *w, const char *path) {
+    return nib_beneath(w->writes, path) && !nib_beneath(w->wdeny, path);
+}
+
+/* One trapped call: check it, note a refusal, let it continue. */
+static void nib_watch_one(struct nib_watch *w, struct seccomp_notif *req) {
+    const struct nib_wsys *sy = NULL;
+    for (int i = 0; i < NIB_WSYS_N; i++) if ((long)req->data.nr == nib_wsys[i].nr) sy = &nib_wsys[i];
+    if (!sy) return;
+    pid_t pid = (pid_t)req->pid;
+    char raw[4096], abs[4096], real[4096];
+    for (int which = 0; which < 2; which++) {
+        int pa = which ? sy->path2 : sy->path;
+        int da = which ? sy->dirfd2 : sy->dirfd;
+        if (pa < 0) continue;
+        if (which && sy->kind != NIB_W_RENAME) continue;
+        long dirfd = da < 0 ? AT_FDCWD : (long)(int)req->data.args[da];
+        if (nib_peek(pid, req->data.args[pa], raw, sizeof raw) != 0) continue;
+        if (nib_absolute(pid, dirfd, raw, abs, sizeof abs) != 0) continue;
+        if (sy->kind == NIB_W_OPEN || sy->kind == NIB_W_OPEN2) {
+            uint64_t flags = 0;
+            if (sy->flags == -2) flags = O_CREAT | O_WRONLY | O_TRUNC;
+            else if (sy->kind == NIB_W_OPEN2) {
+                uint64_t how[1];
+                struct iovec l = { how, sizeof how }, r = { (void *)(uintptr_t)req->data.args[2], sizeof how };
+                if (process_vm_readv(pid, &l, 1, &r, 1, 0) != (ssize_t)sizeof how) continue;
+                flags = how[0];
+            } else flags = req->data.args[sy->flags];
+            if (flags & O_PATH) continue;
+            int acc = (int)(flags & O_ACCMODE);
+            int exists = nib_resolve(abs, 1, real) == 0;
+            if (exists) {
+                if ((acc == O_RDONLY || acc == O_RDWR) && !nib_readable(w, real)) nib_note(w, "read", real);
+                else if ((acc == O_WRONLY || acc == O_RDWR || (flags & O_TRUNC)) && !nib_writable(w, real)) nib_note(w, "write", real);
+            } else if ((flags & O_CREAT) && nib_resolve(abs, 0, real) == 0 && !nib_writable(w, real)) {
+                nib_note(w, "write", real);
+            }
+        } else if (sy->kind == NIB_W_TRUNC) {
+            if (nib_resolve(abs, 1, real) == 0 && !nib_writable(w, real)) nib_note(w, "write", real);
+        } else {
+            if (nib_resolve(abs, 0, real) == 0 && !nib_writable(w, real)) nib_note(w, "write", real);
+        }
+    }
+}
+
+static void nib_watch_serve(struct nib_watch *w) {
+    static struct seccomp_notif_sizes sz;
+    static struct seccomp_notif *req;
+    static struct seccomp_notif_resp *resp;
+    if (!req) {
+        if (syscall(__NR_seccomp, SECCOMP_GET_NOTIF_SIZES, 0, &sz) != 0) return;
+        req = calloc(1, sz.seccomp_notif < sizeof *req ? sizeof *req : sz.seccomp_notif);
+        resp = calloc(1, sz.seccomp_notif_resp < sizeof *resp ? sizeof *resp : sz.seccomp_notif_resp);
+        if (!req || !resp) return;
+    }
+    memset(req, 0, sz.seccomp_notif);
+    if (ioctl(w->fd, SECCOMP_IOCTL_NOTIF_RECV, req) != 0) return;
+    nib_watch_one(w, req);
+    memset(resp, 0, sz.seccomp_notif_resp);
+    resp->id = req->id;
+    resp->flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
+    ioctl(w->fd, SECCOMP_IOCTL_NOTIF_SEND, resp);
+}
+
+/* After the command exited: serves the watch for the processes it left,
+ * in a session of its own (naeb stops the command's group), until none
+ * uses the filter. Never returns. */
+static void nib_watch_linger(struct nib_watch *wt) {
+    pid_t k = fork();
+    if (k != 0) return;
+    setsid();
+    int nul = open("/dev/null", O_RDWR | O_CLOEXEC);
+    if (nul >= 0) {
+        dup2(nul, 0);
+        dup2(nul, 1);
+        dup2(nul, 2);
+    }
+    wt->report = NULL;
+    if (wt->out >= 0) close(wt->out);
+    wt->out = -1;
+    for (;;) {
+        struct pollfd p = { wt->fd, POLLIN, 0 };
+        int r = poll(&p, 1, -1);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0 || (p.revents & (POLLHUP | POLLERR | POLLNVAL))) _exit(0);
+        if (p.revents & POLLIN) nib_watch_serve(wt);
+    }
+}
+
 /* The parent of a fenced command: relays 127.0.0.1:3128 inside the
  * namespace to the proxy's Unix socket until the command exits, then exits
- * as it did. Never returns. */
-static void nib_relay(pid_t child, int listener, const char *sock) {
+ * as it did, and serves the command's file watch (wt->fd >= 0) meanwhile.
+ * Never returns. */
+static int nib_chld_pipe[2] = { -1, -1 };
+
+static void nib_on_chld(int sig) {
+    (void)sig;
+    int e = errno;
+    if (nib_chld_pipe[1] >= 0) (void)!write(nib_chld_pipe[1], "c", 1);
+    errno = e;
+}
+
+static void nib_relay(pid_t child, int listener, const char *sock, struct nib_watch *wt) {
     signal(SIGPIPE, SIG_IGN);
+    /* A child's exit wakes the poll below at once (not at its timeout). */
+    if (pipe2(nib_chld_pipe, O_CLOEXEC | O_NONBLOCK) == 0) signal(SIGCHLD, nib_on_chld);
     for (;;) {
         int st = 0;
         pid_t w;
         while ((w = waitpid(-1, &st, WNOHANG)) > 0) {
             if (w == child) {
+                if (wt->fd >= 0) {
+                    close(listener);
+                    nib_watch_linger(wt);
+                }
                 if (WIFSIGNALED(st)) {
                     signal(WTERMSIG(st), SIG_DFL);
                     kill(getpid(), WTERMSIG(st));
@@ -271,13 +596,22 @@ static void nib_relay(pid_t child, int listener, const char *sock) {
                 _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 1);
             }
         }
-        struct pollfd p = { listener, POLLIN, 0 };
-        if (poll(&p, 1, 100) <= 0) continue;
+        struct pollfd p[3] = { { listener, POLLIN, 0 }, { nib_chld_pipe[0], POLLIN, 0 }, { wt->fd, POLLIN, 0 } };
+        if (poll(p, wt->fd >= 0 ? 3 : 2, 100) <= 0) continue;
+        if (p[1].revents & POLLIN) {
+            char drain[64];
+            while (read(nib_chld_pipe[0], drain, sizeof drain) > 0) {}
+        }
+        if (wt->fd >= 0 && (p[2].revents & POLLIN)) nib_watch_serve(wt);
+        if (wt->fd >= 0 && (p[2].revents & (POLLHUP | POLLERR | POLLNVAL))) wt->fd = -1;
+        if (!(p[0].revents & POLLIN)) continue;
         int c = accept4(listener, NULL, NULL, SOCK_CLOEXEC);
         if (c < 0) continue;
         pid_t k = fork();
         if (k == 0) {
             close(listener);
+            if (wt->fd >= 0) close(wt->fd);
+            signal(SIGCHLD, SIG_DFL);
             int u = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
             struct sockaddr_un a;
             memset(&a, 0, sizeof a);
@@ -339,15 +673,18 @@ static int nib_seccomp_unix(void) {
 /* The project fence for this process (`nib __jail` with fence options):
  * writes: writable roots; wdeny: paths in them bound read-only; reads:
  * read grants ("" with reads_on: nothing readable); sock: the egress
- * proxy's Unix socket ("" when the network stays open). In the namespace
+ * proxy's Unix socket ("" when the network stays open); report: the file
+ * the relay names the command's file refusals in ("" none; needs sock).
+ * In the namespace
  * case the caller's process stays behind as the relay and only the forked
  * child returns. 0, or a negative step that failed:
  * -1 Landlock, -2 namespace, -3 mounts, -4 loopback, -5 relay, -6 seccomp. */
-int nibjail_fence(const char *writes, const char *wdeny, const char *reads, int reads_on, const char *sock) {
+int nibjail_fence(const char *writes, const char *wdeny, const char *reads, int reads_on, const char *sock, const char *report) {
     long abi = nib_ll_abi();
     if (abi < 1) return -1;
     int net = sock && *sock;
     int binds = wdeny && *wdeny;
+    int watch_sv[2] = { -1, -1 };
     if (net || binds) {
         uid_t uid = getuid();
         gid_t gid = getgid();
@@ -365,10 +702,30 @@ int nibjail_fence(const char *writes, const char *wdeny, const char *reads, int 
             if (nib_loopback_up() != 0) return -4;
             int listener = nib_relay_listener();
             if (listener < 0) return -5;
+            if (report && *report && socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, watch_sv) != 0) watch_sv[0] = watch_sv[1] = -1;
             pid_t child = fork();
             if (child < 0) return -5;
-            if (child > 0) nib_relay(child, listener, sock);
+            if (child > 0) {
+                struct nib_watch w;
+                memset(&w, 0, sizeof w);
+                w.fd = -1;
+                w.out = -1;
+                w.report = report;
+                w.writes = writes;
+                w.wdeny = wdeny ? wdeny : "";
+                w.reads = reads ? reads : "";
+                w.reads_on = reads_on;
+                if (watch_sv[0] >= 0) {
+                    close(watch_sv[1]);
+                    w.fd = nib_recv_fd(watch_sv[0]);
+                    close(watch_sv[0]);
+                    /* Kernel 6.6+: the trapped caller hands its CPU to the relay and back. */
+                    if (w.fd >= 0) ioctl(w.fd, NIB_NOTIF_SET_FLAGS, NIB_NOTIF_SYNC_WAKE_UP);
+                }
+                nib_relay(child, listener, sock, &w);
+            }
             close(listener);
+            if (watch_sv[0] >= 0) close(watch_sv[0]);
         }
     }
     uint64_t handled = LL_BASE_WRITE;
@@ -392,6 +749,14 @@ int nibjail_fence(const char *writes, const char *wdeny, const char *reads, int 
     if (syscall(__NR_landlock_restrict_self, fd, 0) != 0) return -1;
     close((int)fd);
     if (net && abi < 9 && nib_seccomp_unix() != 0) return -6;
+    if (watch_sv[1] >= 0) {
+        int lfd = nib_seccomp_watch();
+        if (lfd >= 0) {
+            nib_send_fd(watch_sv[1], lfd);
+            close(lfd);
+        }
+        close(watch_sv[1]);
+    }
     return 0;
 }
 #else
@@ -399,7 +764,7 @@ int nibjail_probe(void) { return 4; }
 int nibjail_abi(void) { return 0; }
 int nibjail_probe_userns(void) { return 0; }
 int nibjail_restrict(const char *roots) { (void)roots; return -1; }
-int nibjail_fence(const char *writes, const char *wdeny, const char *reads, int reads_on, const char *sock) {
+int nibjail_fence(const char *writes, const char *wdeny, const char *reads, int reads_on, const char *sock, const char *report) {
     (void)writes; (void)wdeny; (void)reads; (void)reads_on; (void)sock;
     return -1;
 }

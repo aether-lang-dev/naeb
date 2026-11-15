@@ -59,7 +59,7 @@ expect_imports $T/grep/module.ae "contrib.quickjs|nib.tools.walk|std.fs|std.list
 expect_imports $T/search/module.ae "nib.jsonx|nib.tools.grep|nib.tools.walk|std.json|std.list|std.strbuilder|std.string"
 # Processes.
 expect_imports $T/process/module.ae "nib.sysenv|std.cryptography|std.fs|std.io|std.ipc|std.list|std.os|std.string|std.sync|std.worker"
-expect_imports $T/bash/module.ae "nib.jsonx|nib.tools.egress|nib.tools.jail|nib.tools.policy|nib.tools.process|nib.tools.progress|nib.tools.registry|nib.tools.secrets|std.list|std.os|std.string|std.sync"
+expect_imports $T/bash/module.ae "nib.jsonx|nib.tools.denials|nib.tools.egress|nib.tools.jail|nib.tools.policy|nib.tools.process|nib.tools.progress|nib.tools.registry|nib.tools.secrets|std.list|std.os|std.string|std.sync"
 # Images: file system only (store, read, hash, base64), no network or process.
 expect_imports ae/nib/image/module.ae "nib.fserr|nib.jsonx|nib.lock|nib.tools.atomic_file|std.bytes|std.cryptography|std.encoding|std.fs|std.list|std.strbuilder|std.string"
 expect_imports $T/view/module.ae "nib.fserr|nib.image|nib.jsonx|nib.tools.atomic_file|nib.tools.rules|std.fs|std.list|std.string"
@@ -72,6 +72,9 @@ expect_imports ae/nib/fence/module.ae "nib.tools.atomic_file|nib.tools.jail|nib.
 # naeb.ae: built by `naeb build` (diff, then `ae build --emit=lib` through
 # tools/process), checked against its record and dlopened at start (policy_host.c).
 expect_imports ae/nib/fence/policy/module.ae "nib.build_info|nib.fence|nib.tools.atomic_file|nib.tools.jail|nib.tools.process|std.cryptography|std.fs|std.io|std.list|std.os|std.string"
+# A fenced child's refusals, named: the macOS sandbox's reports through one
+# `log stream` and a sentinel (tools/process), the Linux helper's report file.
+expect_imports $T/denials/module.ae "nib.jsonx|nib.lock|nib.tools.egress|nib.tools.process|std.fs|std.ipc|std.list|std.os|std.string|std.sync|std.worker"
 expect_imports $T/egress/module.ae "nib.fence|nib.lock|std.fs|std.list|std.string|std.sync|std.tcp|std.worker"
 expect_imports $T/agent_sessions/module.ae "nib.lock|std.list|std.string"
 expect_imports $T/agent_input/module.ae "nib.jsonx|nib.provider.types|std.json|std.list|std.strbuilder|std.string"
@@ -83,7 +86,7 @@ expect_imports ae/nib/session/fork_history/module.ae "nib.msg|nib.provider.types
 expect_imports $T/web/module.ae "nib.jsonx|nib.tools.html|std.http.client|std.json|std.string|std.sync|std.worker"
 expect_imports $T/llm_call/module.ae "nib.jsonx|nib.lock|nib.msg|nib.provider|nib.provider.sink|nib.provider.types|std.json|std.list|std.strbuilder|std.string|std.sync"
 expect_imports $T/web_search/module.ae "nib.jsonx|nib.lock|nib.provider.sse|nib.provider.types|std.http.client|std.json|std.list|std.string|std.sync|std.time|std.worker"
-expect_imports $T/module.ae "nib.fence|nib.image|nib.jsonx|nib.lock|nib.provider.types|nib.sandbox|nib.sysenv|nib.tools.agent|nib.tools.agent_input|nib.tools.agent_sessions|nib.tools.atomic_file|nib.tools.background|nib.tools.bash|nib.tools.changes|nib.tools.egress|nib.tools.file_state|nib.tools.files|nib.tools.jail|nib.tools.llm_call|nib.tools.mcp_tool|nib.tools.progress|nib.tools.registry|nib.tools.search|nib.tools.undo|nib.tools.view|nib.tools.web|nib.tools.web_search|std.list|std.os|std.strbuilder|std.string|std.sync"
+expect_imports $T/module.ae "nib.fence|nib.image|nib.jsonx|nib.lock|nib.provider.types|nib.sandbox|nib.sysenv|nib.tools.agent|nib.tools.agent_input|nib.tools.agent_sessions|nib.tools.atomic_file|nib.tools.background|nib.tools.bash|nib.tools.changes|nib.tools.denials|nib.tools.egress|nib.tools.file_state|nib.tools.files|nib.tools.jail|nib.tools.llm_call|nib.tools.mcp_tool|nib.tools.progress|nib.tools.registry|nib.tools.search|nib.tools.undo|nib.tools.view|nib.tools.web|nib.tools.web_search|std.list|std.os|std.strbuilder|std.string|std.sync"
 
 # The Session + provider slice.
 expect_imports ae/nib/auth/module.ae "nib.auth.store|nib.config|nib.config.env|nib.provider.types|std.list|std.string"
@@ -115,9 +118,9 @@ expect_imports ae/nib/session/tool_summary/module.ae "nib.jsonx|nib.sandbox.timi
 # The MCP client (not yet in the Session): pure index/header logic, then the transport (the only reach to MCP servers: a child through tools/process, or HTTP).
 expect_imports ae/nib/mcp/mcp_index/module.ae "nib.jsonx|std.json|std.list|std.strbuilder|std.string"
 expect_imports ae/nib/mcp/mcp_headers/module.ae "nib.jsonx|std.encoding|std.json|std.list|std.string"
-expect_imports ae/nib/mcp/mcp_transport/module.ae "nib.build_info|nib.fence|nib.jsonx|nib.lock|nib.mcp.mcp_headers|nib.provider.sse|nib.provider.types|nib.tools.egress|nib.tools.jail|nib.tools.process|nib.tools.secrets|std.fs|std.http.client|std.ipc|std.json|std.list|std.os|std.string|std.sync|std.worker"
+expect_imports ae/nib/mcp/mcp_transport/module.ae "nib.build_info|nib.fence|nib.jsonx|nib.lock|nib.mcp.mcp_headers|nib.provider.sse|nib.provider.types|nib.tools.denials|nib.tools.egress|nib.tools.jail|nib.tools.process|nib.tools.secrets|std.fs|std.http.client|std.ipc|std.json|std.list|std.os|std.string|std.sync|std.worker"
 expect_imports ae/nib/mcp/module.ae "nib.jsonx|nib.lock|nib.mcp.mcp_headers|nib.mcp.mcp_index|nib.mcp.mcp_transport|nib.provider.types|std.json|std.list|std.string|std.sync"
-expect_imports $T/mcp_tool/module.ae "nib.image|nib.jsonx|nib.mcp|std.encoding|std.json|std.string"
+expect_imports $T/mcp_tool/module.ae "nib.image|nib.jsonx|nib.mcp|std.encoding|std.json|std.list|std.string"
 
 # The TUI (ae/term underneath; no network, no process of its own except the
 # exceptions named in the rules below).

@@ -20,7 +20,7 @@ import std.worker
 import nib.lock
 import nib.fence
 
-exports(Proxy, Channel, new, channel, child_channel, channel_url, channel_port, channel_sock, channel_close, parse_target)
+exports(Proxy, Channel, new, channel, child_channel, channel_url, channel_port, channel_sock, channel_close, channel_take, parse_target)
 
 const HEADER_LIMIT = 16384
 const IDLE_MS = 300000
@@ -118,6 +118,19 @@ channel_close(cp: ptr) -> ptr {
     c.denied = null
     lock.release(c.guard)
     release_(c)
+    return out
+}
+
+// The pairs refused since the last take, oldest first; the channel stays open.
+channel_take(cp: ptr) -> ptr {
+    c = cp as *Channel
+    out = list.list_new()
+    lock.acquire(c.guard)
+    if c.denied != null {
+        out = c.denied
+        c.denied = list.list_new()
+    }
+    lock.release(c.guard)
     return out
 }
 

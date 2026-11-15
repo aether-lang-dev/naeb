@@ -21,8 +21,6 @@ binary loading the project's `naeb.ae` as a policy library built by
   checkout; a release could ship `ae/policy_lib` beside the binary instead.
 - **naeb confining itself** after start-up (Linux, file rules only), once
   the TUI's `open` and clipboard helpers start from an unconfined helper.
-- **A child's denied path, named:** macOS sandbox log after a failed
-  command; Linux Landlock audit (ABI 7) or seccomp user notification.
 - **Per-command scopes** (e.g. Maven Central only for `mvn`): matched on
   command text, so convenience, not a boundary.
 - **Maven's own proxy settings:** verify which Maven versions honour the

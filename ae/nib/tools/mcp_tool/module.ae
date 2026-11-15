@@ -11,12 +11,13 @@
 
 import std.encoding
 import std.json
+import std.list
 import std.string
 import nib.image
 import nib.jsonx
 import nib.mcp
 
-exports(execute, map_content)
+exports(execute, map_content, take_refusals)
 
 failure_(message_text: string) -> string {
     return "{\"ok\":false,\"content\":\"\",\"error\":${jsonx.quote(message_text)}}"
@@ -126,4 +127,16 @@ execute(client: ptr, args: string, schema: int, cancel: @keep ptr, target: ptr) 
         if string.length(content) > 0 { err_text = jsonx.quote(content) } else { err_text = jsonx.quote("MCP tool failed") }
     }
     return 1, "{\"ok\":${ok_text},\"content\":${jsonx.quote(content)},\"structured\":${structured},\"error\":${err_text}}"
+}
+
+// What a project fence refused the server of a call's "server.tool" (args:
+// the call's JSON) since the last take, as "op resource" (mcp.take_refusals).
+take_refusals(client: ptr, args: string) -> ptr {
+    if client == null { return list.list_new() }
+    v = jsonx.parse(args)
+    if v == null { return list.list_new() }
+    server, _tool, serr = mcp.split(string.copy(jsonx.str_or(v, "name", "")))
+    jsonx.free(v)
+    if serr != "" { return list.list_new() }
+    return mcp.take_refusals(client, server)
 }
