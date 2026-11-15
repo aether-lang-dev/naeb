@@ -88,7 +88,49 @@ Metadata (`stat`) stays visible on both OSes; contents do not.
 |---|---|---|
 | Mechanism | Landlock `READ_FILE`/`READ_DIR` (ABI 1+), path-beneath rules | `sandbox-exec`, `(deny file-read-data ...)` |
 | Deny inside allow | rules computed by splitting a granted directory into its entries around the denied path (a snapshot at spawn: entries created later in a split directory are unreadable) | rules emitted shallow to deep; the last matching rule wins (verified on macOS 27.3) |
-| In-process | `read`, `view`, `grep`, `glob` check the canonical path; grep/glob skip denied subtrees | same |
+| In-process | `read`, `view`, `grep`, `glob`, `edit`, `write` check the canonical path, then open the file and check it again as opened (below); grep/glob skip denied subtrees | same |
+
+**Path identity in the in-process tools.** A path string is only one
+spelling of a file: on a case-insensitive volume `~/.SSH` is `~/.ssh`,
+macOS names any file `/.vol/<device>/<inode>` and every Data-volume file
+again under `/System/Volumes/Data`, `/dev/fd/<n>` reopens whatever naeb
+holds, and a symlink swapped in after a check redirects the open that
+follows it. So the tools open first and decide on what they opened
+(`tools.atomic_file`, C stand-in `pathfd.c`):
+
+- The open never blocks or takes a terminal (`O_NONBLOCK | O_NOCTTY`);
+  anything but a regular file (or a directory, where a listing is wanted) is
+  refused `NotFile`, so a FIFO, socket or `/dev/fd/0` no longer hangs a
+  call.
+- The decision is on the path the descriptor names: macOS
+  `fcntl(F_GETPATH)` (on-disk case; firmlinks and `/.vol` mapped back, both
+  verified on macOS 27.3), Linux `readlink(/proc/self/fd/N)`. That path is
+  accepted only when a `stat` of it is the descriptor's own file (`st_dev`,
+  `st_ino`); otherwise the call is refused. The data is read from the same
+  descriptor.
+- On a volume that compares names case-insensitively (macOS
+  `fpathconf(_PC_CASE_SENSITIVE)`; Linux vfat/exfat, or a casefold
+  directory) rules, credential paths, writable roots and read-only paths are
+  compared with ASCII case folded. The volume is asked, never assumed.
+- Writes: the target's directory is opened (made component by component
+  with `mkdirat`, each opened from its opened parent without following a
+  symlink) and checked as opened, against the writable roots and read-only
+  paths, before anything is created in it; the leaf is checked as
+  `<that directory>/<leaf>`; the new file is created with `O_EXCL |
+  O_NOFOLLOW` in that directory and renamed over the leaf there
+  (`renameat`). A leaf that has become a symlink is refused.
+- grep/glob open the root as above, list each directory through its own
+  descriptor, enter a subdirectory only by `openat(O_NOFOLLOW)` from its
+  opened parent, and grep opens each file again as above.
+
+Residue: names are folded ASCII only; a non-ASCII name differing only in
+case or Unicode normalization in a rule path that does not exist yet would
+not match (existing paths compare in their on-disk form). A hard link
+planted outside the fence (no fenced writer can make one into a denied
+directory) names the same file under an allowed path, for both layers.
+The TUI's `/undo` (the user's action, not the model's) still restores
+files by name; a background command swapping a directory for a symlink at
+that moment could redirect a restore.
 
 ### Writes
 
@@ -154,6 +196,9 @@ localhost on macOS and is a named hole.
 | Clipboard, TUI `open` | run from naeb's own unconfined process, on the user's action; the model can no longer read secrets in-process, so it has nothing secret to place there | same |
 | MCP stdio servers, hooks | started inside the same jail spec | same |
 | Keychain | home-closed reads deny the login keychain file; `security dump-keychain` then lists only the System keychain (observed) | |
+| Other spellings of a fenced file in-process: case, `/.vol`, `/System/Volumes/Data`, `/dev/fd`, `/proc/self/fd`, a symlink swapped in after the check | in-process tools decide on the opened descriptor (Reads, "Path identity") | same; case, `/.vol` and the firmlink are macOS's own |
+| Inherited descriptors (`c-devfd`): a descriptor naeb was started with, open on a fenced file, reaches every child, and Landlock and SBPL check opens, not descriptors already open | naeb marks every inherited descriptor above 2 close-on-exec first thing (`atomic_file.cloexec_inherited`, from `/proc/self/fd`); `nib` keeps upstream's behaviour | same, from `/dev/fd` |
+| An allowed name that resolves (or rebinds) to a local service (`c-rebind`, `i-fetch-rebind`) | the proxy resolves the name itself and connects to an address it vetted, never re-resolving: loopback, private (RFC 1918, ULA, `fec0::/10`), carrier-grade NAT (`100.64/10`), link-local, unspecified, multicast and reserved addresses, and IPv4-mapped, IPv4-compatible, NAT64 and 6to4 forms of them, only when an `allow_host` names that very address for the port (a wildcard or a name never does). The refusal is an `egress` record with `reason` ("resolves to 127.0.0.1, a loopback address") and a suggestion naming the address | same |
 
 ### naeb restricting its own process: not now
 
@@ -181,7 +226,9 @@ Every refusal reaches the model as one record, whichever layer made it:
 connection the OS refused), `socket` (a Unix socket) or the OS's own
 operation name; `layer` is `tool` (naeb's in-process tools) or `child` (a
 process naeb started); `command_id` is the bash task id (`b3`),
-`hook:<event>` or `mcp:<server>`, absent for a tool. `suggestion` is the
+`hook:<event>` or `mcp:<server>`, absent for a tool. `reason` (egress
+only, when the pair is allowed but where its name resolves is not) says
+why: `resolves to 127.0.0.1, a loopback address`. `suggestion` is the
 `naeb.ae` line that would allow it, as text only, absent where no policy
 line can (naeb's own files, `.git/hooks`, `.git/config`, `naeb.ae`, a path
 the policy itself denies). Nothing is ever widened automatically: the user
@@ -414,6 +461,17 @@ case asserts refusal on macOS and Linux.
 | `i-fetch-exfil`, `i-fetch-allowed` | in-process | fetch the exfil URL; positive control |
 | `x-naeb-in-root` | start-up | run naeb from a copy inside the project |
 
+`ae/tests/redteam/escapes.py` attacks the same secrets, sockets and hosts by
+other routes: symlinks, hard links, `..`, case (a component, and every
+component), `/.vol` and firmlink spellings, inherited descriptors, a
+check-then-use race on `tools.read` (a leaf swapped for a symlink) and
+`tools.write` (a directory swapped for a symlink to `$HOME`), 600 tries
+each, a FIFO and `/dev/fd/0` given to `tools.read`, daemons, `launchctl`
+and `open`, other loopback spellings and proxy targets, a wildcard pair
+whose name resolves to 127.0.0.1, DNS, loader variables and Unix socket
+spellings. Its `KNOWN` list (holes the fence has, reported but not
+failed) is empty.
+
 The fixture project's policy (`naeb.ae`, allowing the allowed listener) is
 built with `naeb build -y` into the fixture `HOME`. `ae/tests/redteam/attribution.py`
 (run by `run.sh`) checks that each refusal reaches only the command that
@@ -425,9 +483,11 @@ alike getting two keys, another interface refused (in the record and in the
 library), a changed library refused, a library inside a writable root
 refused, the templates, `set_env`, and a sub-agent loading the same policy.
 
-Status (2026-11-15): every case refused on macOS 27.3, ae-x64 (Ubuntu
+Status (2026-11-15): every case refused, `escapes.py` included, with an
+empty `KNOWN` list, on macOS 27.3, ae-x64 (Ubuntu
 22.04, kernel 6.8, Landlock ABI 4: the seccomp path for Unix sockets) and
-cachyos (kernel 7.3, ABI 11: `RESOLVE_UNIX`). Without a Fence (workspace
+cachyos (kernel 7.3, ABI 11: `RESOLVE_UNIX`); the race cases also under
+load (run.sh beside the other test scripts under `aeb .tests.ae`). Without a Fence (workspace
 mode) the same fixtures find 15 holes on macOS.
 
 ## Implementation order

