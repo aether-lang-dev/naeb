@@ -5,6 +5,9 @@ still owes upstream is in [PORT_STATUS.md](PORT_STATUS.md).
 
 ## Port mvdan/sh: a shell built into naeb, in Aether
 
+**Deferred (Paul, 2026-11-15):** this and the Windows steps below wait behind
+bigger goals.
+
 [mvdan/sh](https://github.com/mvdan/sh) (Go, BSD-3-Clause) is a shell parser,
 formatter and interpreter. The Task build tool embeds it so its command lines
 run the same on every OS. Port it to Aether so naeb can run a model's command
