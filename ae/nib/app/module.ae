@@ -23,6 +23,7 @@ import nib.jsonx
 import nib.sandbox
 import nib.tools
 import nib.tools.jail
+import nib.fence
 import nib.tools.background
 import nib.tools.agent_input
 import nib.provider.types
@@ -91,6 +92,35 @@ self_exe_() -> string {
         if err == "" { return real }
     }
     return a0
+}
+
+// This binary's canonical path, looked up on PATH when argv[0] has no
+// slash; "" when not found.
+own_path_(envp: ptr) -> string {
+    exe = self_exe_()
+    if string.index_of(exe, "/") >= 0 { return exe }
+    dirs = string.split(env.get(envp, "PATH"), ":")
+    i = 0
+    while i < list.list_size(dirs) {
+        d, _e = list.get_string(dirs, i)
+        if d != "" && fs.exists("${d}/${exe}") == 1 {
+            real, _k, err = fs.realpath("${d}/${exe}")
+            if err == "" { return real }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// A fenced naeb will not run from inside a root its children may write:
+// a child could rebuild the launcher and widen the next run's fence.
+launcher_outside_roots_(f: ptr, envp: ptr) {
+    exe = own_path_(envp)
+    if exe == "" { return }
+    sp = fence.resolve(f, os.getcwd(), "", env.pairs(envp)) as *jail.Spec
+    if jail.allows(sp.writes, exe) == 0 { return }
+    eprint_("naeb: the launcher ${exe} lies inside a root the project fence lets commands write; build it outside the project (docs/naeb/adr/0001)\n")
+    exit(2)
 }
 
 read_stdin_() -> string {
@@ -298,6 +328,7 @@ run(fence: @keep ptr) {
         exit(126)
     }
     envp = env.from_process()
+    if fence != null { launcher_outside_roots_(fence, envp) }
     i = 1
     while i < n {
         h = os.args_get(i)

@@ -1,0 +1,14 @@
+// A fence template for npm projects (docs/naeb/adr/0001). The cache, not
+// ~/.npmrc (registry tokens stay unreadable). The public registry only.
+
+import nib.fence
+
+exports(apply)
+
+apply(f: ptr) {
+    fence.allow_read(f, "~/.npm")
+    fence.allow_write(f, "~/.npm")
+    fence.allow_host(f, "registry.npmjs.org", 443)
+    fence.pass_env(f, "NVM_DIR")
+    fence.pass_env(f, "NODE_OPTIONS")
+}

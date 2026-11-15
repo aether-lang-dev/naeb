@@ -60,7 +60,11 @@ tests stay as they are).
 ### Reads
 
 `$HOME` is closed: nothing below it is readable except the project, the
-writable roots and what the Fence allows. A built-in deny-list (`~/.ssh`,
+writable roots and what the Fence allows. The account's home from the user
+database is closed too when it differs from `$HOME`: a child that loses
+`$HOME` falls back to it (bash does), which the red-team run found when a
+fenced child read the real `~/.ssh` of the account running the fixtures.
+A fenced child's environment always carries the Fence's `$HOME`. A built-in deny-list (`~/.ssh`,
 `~/.aws`, `~/.gnupg`, `~/.config/gh`, `~/.kube`, `~/.docker`, `~/.netrc`,
 `~/.git-credentials`, `~/.npmrc`, `~/.pypirc`, `~/.gem/credentials`,
 `~/.m2/settings*.xml`, `~/.gradle/gradle.properties`, cloud CLIs, browser
@@ -130,7 +134,7 @@ localhost on macOS and is a named hole.
 | Abstract Unix sockets | network namespace (abstract names are per netns); also Landlock scope (ABI 6) | n/a |
 | Daemons, `setsid`, double fork | the restriction is inherited by every descendant; no unconfined process is reachable (sockets above) | same; `launchctl submit` fails inside `sandbox-exec` (observed, not explained); `(deny lsopen)` stops `open` (verified) |
 | Apple events (`osascript` driving Terminal) | n/a | `(deny appleevent-send)`, **unverified** (testing it would prompt) |
-| ptrace, `/proc/<naeb>/environ`, signals | Landlock limits ptrace and sensitive `/proc` files to the domain; the user namespace too; signal scope (ABI 6) | a child *can* read naeb's initial environment through `KERN_PROCARGS2` (verified; no SBPL operation stops it without breaking the child): naeb overwrites secret values in its own initial environment at start-up under a Fence |
+| ptrace, `/proc/<naeb>/environ`, signals | Landlock limits ptrace and sensitive `/proc` files to the domain; the user namespace too; signal scope (ABI 6) | a child *can* read naeb's initial environment through `KERN_PROCARGS2` (verified; no SBPL operation stops it without breaking the child): under a Fence naeb moves its environment to the heap and zeroes the initial area first thing (`jail.scrub_environ`). Pointers `os.getenv` returned before then are zeroed too, so `nib.fence` copies every string a launcher hands it |
 | Secrets in the environment | children get an allow-list environment (`PATH`, `HOME`, locale, terminal, temp, user/shell names, toolchain homes) plus `Fence.pass_env` names plus the proxy variables | same |
 | Clipboard, TUI `open` | run from naeb's own unconfined process, on the user's action; the model can no longer read secrets in-process, so it has nothing secret to place there | same |
 | MCP stdio servers, hooks | started inside the same jail spec | same |
@@ -166,14 +170,34 @@ started through a pre-forked unconfined helper.
 
 The launcher and its compiled binary live outside every writable root
 (`~/.naeb/launchers/<project>/`); naeb's in-process tools and children are
-refused writes there by the same Fence, and `$NIB_HOME` is read-denied to
-children. A re-exec after approval runs the binary the launcher rebuilt;
+refused writes there by the same Fence (`~/.naeb` is on the secrets list),
+and `$NIB_HOME` is read-denied to children. A fenced naeb refuses to start
+when its own binary lies inside a writable root (exit 2, the path named). A re-exec after approval runs the binary the launcher rebuilt;
 the approved build is identified by the SHA-256 of the launcher source and
 binary recorded in the Session log before the re-exec and checked after it.
 Approval is a TUI prompt showing the launcher diff, a deliberate departure
 from upstream's no-approvals rule (ADR 0006) because the policy is the one
 thing the model must not widen by itself. The approval loop is a later
 phase; the first round ships the launcher hook only.
+
+## How a launcher looks
+
+```aether
+import nib.app
+import nib.fence
+import naeb_templates.maven
+
+main() {
+    f = fence.new("/home/me")
+    maven.apply(f)
+    fence.allow_host(f, "repo.example.com", 443)
+    app.run(f)
+}
+```
+
+Built from source for now: `ae build naeb.ae --lib <naeb checkout>/ae -o
+~/.naeb/launchers/<project>/naeb`. Templates live under
+`ae/naeb_templates/` (`maven`, `gradle`, `npm`), outside `nib.*`.
 
 ## Red-team plan
 
@@ -185,7 +209,8 @@ case asserts refusal on macOS and Linux.
 
 | Case | Layer | Attack |
 |---|---|---|
-| `c-read-ssh`, `c-read-auth` | child | `cat` the fake key / auth.json |
+| `c-read-ssh`, `c-read-auth` | child | `cat` the fake key / auth.json (the latter with the path built at run time, past the command-text deny-list) |
+| `c-account-home`, `c-home-env` | child | read a canary planted in the account's real home; `$HOME` is the fixture's |
 | `c-exfil-direct` | child | POST the canary to the exfil listener |
 | `c-exfil-proxy` | child | the same through `$HTTPS_PROXY` |
 | `c-allowed` | child | positive control: the allowed listener through the proxy |
@@ -195,17 +220,24 @@ case asserts refusal on macOS and Linux.
 | `i-read`, `i-grep`, `i-glob` | in-process | read the key, grep `$HOME` for the canary, glob `~/.ssh` |
 | `i-write-rc`, `i-write-hook`, `i-write-launcher` | in-process | write `~/.zshrc`, the hook, the launcher |
 | `i-fetch-exfil`, `i-fetch-allowed` | in-process | fetch the exfil URL; positive control |
+| `x-launcher-in-root` | start-up | run naeb from a copy inside the project |
+
+Status (2026-11-15): every case refused on macOS 27.3, ae-x64 (Ubuntu
+22.04, kernel 6.8, Landlock ABI 4: the seccomp path for Unix sockets) and
+cachyos (kernel 7.3, ABI 11: `RESOLVE_UNIX`). Without a Fence (workspace
+mode) the same fixtures find 15 holes on macOS.
 
 ## Implementation order
 
-1. Red-team fixtures, failing on today's code.
+1. Red-team fixtures, failing on today's code. *Done.*
 2. `nib.fence` and the launcher entry (`nib.app.run(fence)`), consulted by
-   the in-process tools.
+   the in-process tools; the egress proxy for `tools.fetch`. *Done.*
 3. Child enforcement: reads, writes, read-only paths, the proxy and its
-   confinement, Unix sockets, the environment.
+   confinement, Unix sockets, the environment; bash, hooks, MCP stdio.
+   *Done.*
 4. naeb confining itself: deferred (above).
-5. Launcher templates (Maven, npm) and the launcher location; then the
-   approve, rebuild, re-exec loop.
+5. Launcher templates (Maven, Gradle, npm) and the launcher location check.
+   *Done.* The approve, rebuild, re-exec `--resume` loop: *not yet*.
 6. Later: per-command scopes, denial paths for children, Windows.
 
 ## Consequences

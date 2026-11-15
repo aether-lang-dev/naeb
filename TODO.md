@@ -3,6 +3,27 @@
 Work on the Aether port that goes beyond matching upstream nib. What the port
 still owes upstream is in [PORT_STATUS.md](PORT_STATUS.md).
 
+## The project fence: what is left (docs/naeb/adr/0001)
+
+Landed 2026-11-15: `nib.fence` built by a launcher (`nib.app.run(fence)`),
+in-process checks, the egress proxy, Linux namespace + Landlock + seccomp
+and macOS SBPL confinement of bash, hooks and MCP stdio, the launcher
+location check, Maven/Gradle/npm templates, `ae/tests/redteam/`.
+
+- **Approve, rebuild, re-exec:** on a `fence_denied` (or a read the model
+  reports), propose a launcher diff in the TUI, rebuild it outside the
+  project, record the source and binary SHA-256 in the Session log and
+  re-exec with `--resume <id>` between Turns.
+- **naeb confining itself** after start-up (Linux, file rules only), once
+  the TUI's `open` and clipboard helpers start from an unconfined helper.
+- **A child's denied path, named:** macOS sandbox log after a failed
+  command; Linux Landlock audit (ABI 7) or seccomp user notification.
+- **Per-command scopes** (e.g. Maven Central only for `mvn`): matched on
+  command text, so convenience, not a boundary.
+- **Maven's own proxy settings:** verify which Maven versions honour the
+  JVM proxy properties; otherwise the template writes a settings file
+  outside the project.
+
 ## Port mvdan/sh: a shell built into naeb, in Aether
 
 **Deferred (Paul, 2026-11-15):** this and the Windows steps below wait behind

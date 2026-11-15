@@ -1,0 +1,22 @@
+// A fence template for Maven projects (docs/naeb/adr/0001): a launcher
+// imports it and calls maven.apply(f). The local repository, not ~/.m2:
+// settings.xml (credentials, mirrors) stays unreadable and unwritable.
+// Maven Central only; add mirrors and plugin repositories in the launcher.
+// Unverified: whether a given Maven version's transport honours the JVM
+// proxy properties naeb sets; where it does not, add a <proxy> to a
+// settings file outside the project and pass it with -s.
+
+import nib.fence
+
+exports(apply)
+
+apply(f: ptr) {
+    fence.allow_read(f, "~/.m2/repository")
+    fence.allow_write(f, "~/.m2/repository")
+    fence.allow_read(f, "~/.m2/wrapper")
+    fence.allow_write(f, "~/.m2/wrapper")
+    fence.allow_host(f, "repo.maven.apache.org", 443)
+    fence.allow_host(f, "repo1.maven.org", 443)
+    fence.pass_env(f, "JAVA_HOME")
+    fence.pass_env(f, "MAVEN_OPTS")
+}

@@ -327,6 +327,13 @@ def main(argv):
     verdict("i-write-launcher", "widened" not in (read(launcher_path) or ""), "tools.write changed the launcher")
     verdict("i-fetch-exfil", not exfil_hits("fetch"), "the exfil listener got %r" % exfil_hits("fetch"))
     verdict("i-fetch-allowed", "ALLOWED-OK" in results.get("i-fetch-allowed", ""), "the allowed host was not fetched: %s" % results.get("i-fetch-allowed", "")[:200])
+    if LAUNCHER and (not only or any("x-launcher-in-root".startswith(o) for o in only)):
+        # A launcher a child could rewrite: naeb refuses to start from it.
+        inside = os.path.join(proj, "naeb-copy")
+        shutil.copy(NAEB, inside)
+        r = subprocess.run([inside, "js", "1"], cwd=proj, env=env, capture_output=True, text=True, timeout=120)
+        results["x-launcher-in-root"] = "exit %d %s" % (r.returncode, r.stderr.strip())
+        verdict("x-launcher-in-root", r.returncode == 2 and "lies inside a root" in r.stderr, "naeb ran from a writable root: %s" % results["x-launcher-in-root"][:200])
     os.remove(planted_real)
     allowed.server.shutdown()
     exfil.server.shutdown()
