@@ -5,6 +5,10 @@
 // or Y applies; any other key declines, except the keys that scroll. What
 // was offered once (by op and resource) is not offered again in the
 // Session, whatever the answer.
+//
+// The Maven broker's too-young refusals (op "maven_age", no suggestion)
+// are offered too, one coordinate per prompt, after any naeb.ae change:
+// y fetches exactly the versions the refusal named (maven_override).
 
 import std.list
 import std.string
@@ -12,7 +16,7 @@ import std.json
 import nib.jsonx
 
 exports(Offer, new, collect, collect_result, pending, take, reset, answer_of, text_of, applied_text,
-        ANSWER_NONE, ANSWER_YES, ANSWER_NO)
+        has_policy, take_young, young_text, fetched_text, KIND_POLICY, KIND_MAVEN, ANSWER_NONE, ANSWER_YES, ANSWER_NO)
 
 // A failed build's compiler output shows its first lines only.
 const OUTPUT_LINES = 12
@@ -20,6 +24,10 @@ const OUTPUT_LINES = 12
 const ANSWER_NONE = 0
 const ANSWER_YES = 1
 const ANSWER_NO = 2
+
+// What the open prompt asks.
+const KIND_POLICY = 0
+const KIND_MAVEN = 1
 
 struct Offer {
     records: ptr      // JSON texts of collected records not yet offered
@@ -29,6 +37,8 @@ struct Offer {
     building: int     // 1: approved, the policy is being rebuilt
     proposal: string  // the open prompt's proposal JSON
     entry: int        // the open prompt's transcript entry, -1 none
+    young: ptr        // JSON texts of the broker's too-young refusals not yet offered
+    kind: int         // KIND_*: what the open prompt (or the build/fetch after it) is
 }
 
 new() -> *Offer {
@@ -40,6 +50,8 @@ new() -> *Offer {
     o.building = 0
     o.proposal = ""
     o.entry = -1
+    o.young = list.list_new()
+    o.kind = KIND_POLICY
     return o
 }
 
@@ -59,6 +71,7 @@ reset(o: *Offer, session: string) {
     o.session = string.copy(session)
     o.records = list.list_new()
     o.keys = list.list_new()
+    o.young = list.list_new()
 }
 
 // Adds the records of a fence_denied array (a parsed JSON value) that carry
@@ -68,7 +81,13 @@ collect(o: *Offer, denied: ptr) {
     i = 0
     while i < jsonx.array_size(denied) {
         r = jsonx.array_at(denied, i)
-        if jsonx.str_or(r, "suggestion", "") != "" {
+        if jsonx.str_or(r, "op", "") == "maven_age" {
+            ykey = "maven_age ${jsonx.str_or(r, "resource", "")}"
+            if has_(o.keys, ykey) == 0 {
+                list.list_add(o.keys, string.copy(ykey))
+                list.list_add(o.young, string.copy(jsonx.encode(r)))
+            }
+        } else if jsonx.str_or(r, "suggestion", "") != "" {
             key = "${jsonx.str_or(r, "op", "")} ${jsonx.str_or(r, "resource", "")}"
             if has_(o.keys, key) == 0 {
                 list.list_add(o.keys, string.copy(key))
@@ -89,7 +108,68 @@ collect_result(o: *Offer, text: string) {
     jsonx.free(v)
 }
 
-pending(o: *Offer) -> bool { return list.list_size(o.records) > 0 && o.open == 0 && o.building == 0 }
+pending(o: *Offer) -> bool { return (list.list_size(o.records) > 0 || list.list_size(o.young) > 0) && o.open == 0 && o.building == 0 }
+
+// Whether naeb.ae lines wait to be offered (they go before Maven's).
+has_policy(o: *Offer) -> bool { return list.list_size(o.records) > 0 }
+
+// The next too-young refusal to offer (its JSON), removed; "" none.
+take_young(o: *Offer) -> string {
+    if list.list_size(o.young) == 0 { return "" }
+    r, _g = list.get_string(o.young, 0)
+    out = string.copy(r)
+    list.list_remove(o.young, 0)
+    return out
+}
+
+// The prompt for a too-young refusal: what would be fetched and how old.
+young_text(record: string) -> string {
+    v = jsonx.parse(record)
+    if v == null { return "" }
+    out = "Maven broker refused ${jsonx.str_or(v, "resource", "")}: naeb.ae asks for versions published ${jsonx.int_or(v, "min_age_days", 0)} days ago or more\n"
+    y = jsonx.field(v, "young")
+    i = 0
+    while i < jsonx.array_size(y) {
+        it = jsonx.array_at(y, i)
+        age = jsonx.int_or(it, "age_days", -1)
+        said = if age < 0 { "the newest in the range" } else if age == 1 { "published 1 day ago" } else { "published ${age} days ago" }
+        out = "${out}    ${jsonx.str_or(it, "gav", "")} · ${said}\n"
+        i = i + 1
+    }
+    jsonx.free(v)
+    return "${out}Fetch it anyway (this time, these versions only)? [y/N]"
+}
+
+// The transcript line after maven_fetched (tools.maven_fetch's result).
+fetched_text(result: string) -> (string, bool) {
+    v = jsonx.parse(result)
+    if v == null { return "Maven broker: no result", false }
+    if jsonx.has(v, "error") == 1 {
+        e = string.copy(jsonx.str_or(v, "error", ""))
+        jsonx.free(v)
+        return "Maven broker: nothing fetched · ${e}", false
+    }
+    out = ""
+    f = jsonx.field(v, "fetched")
+    i = 0
+    while i < jsonx.array_size(f) {
+        it = jsonx.array_at(f, i)
+        if i > 0 { out = "${out}, " }
+        out = "${out}${jsonx.str_or(it, "gav", "")}"
+        i = i + 1
+    }
+    ok = jsonx.bool_or(v, "ok", 0) == 1
+    text = if out == "" { "Maven broker: nothing new fetched" } else { "Maven broker fetched ${out} · approved by you" }
+    r = jsonx.field(v, "refused")
+    k = 0
+    while k < jsonx.array_size(r) {
+        it2 = jsonx.array_at(r, k)
+        text = "${text}\nrefused ${jsonx.str_or(it2, "gav", "")} · ${jsonx.str_or(it2, "reason", "")}"
+        k = k + 1
+    }
+    jsonx.free(v)
+    return text, ok
+}
 
 // The collected records as one JSON array, emptied.
 take(o: *Offer) -> string {

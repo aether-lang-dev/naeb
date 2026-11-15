@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <dependencyManagement><dependencies>
+      <dependency><groupId>invalid.naeb.fx</groupId><artifactId>lib-managed</artifactId><version>1.3</version></dependency>  </dependencies></dependencyManagement>
+  <groupId>invalid.naeb.fx</groupId>
+  <artifactId>bom</artifactId>
+  <version>1.0</version>
+  <packaging>pom</packaging>
+</project>

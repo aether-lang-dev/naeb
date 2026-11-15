@@ -324,7 +324,9 @@ at start; `null` for the default fence), `project`, `home`, `home_open`,
 `reads` and `read_denied` (the read rules both layers apply: reads are open
 except `read_denied`, with `reads` reopened inside them, deeper paths
 winning), `writes`, `read_only`, `hosts`, `loopback`, `env_passed` (the
-allow-list plus `pass_env`) and `env_set`. A sub-agent is naeb loading the
+allow-list plus `pass_env`), `env_set`, and `maven` (the Maven broker's
+settings, `null` when it is off) with `maven_fetches` (what it fetched and
+refused this Session) when it is on. A sub-agent is naeb loading the
 same policy, so its `tools.fence()` is the parent's. The TUI's `/fence`
 shows the same as text (listed in `/help` and the menu only under naeb), and
 `/status` says `Sandbox: project fence · /fence`.
@@ -472,8 +474,16 @@ struct naeb_fence_api {                                 /* version 1 */
     const char *(*home)(void *fence);
     const char *(*project_root)(void *fence);
     const char *(*platform)(void *fence);              /* "macos", "linux" */
+    /* version 2 (2026-11-15) */
+    void (*setting)(void *fence, const char *name, const char *value);
 };
 ```
+
+`setting` carries named settings (`maven.broker`, `maven.repository`,
+`maven.min_age_days`, `maven.keyring`, `maven.require_signatures`) so a
+later ecosystem's broker needs no new field; naeb refuses a policy that
+uses a name it does not know (exit 2, the name given), so a policy never
+silently means less than it says.
 
 - naeb's side is `ae/nib/fence/policy/policy_host.c`: `dlopen(RTLD_NOW |
   RTLD_LOCAL)`, `dlsym` of the two exports, the version check, the call. Each
@@ -500,6 +510,139 @@ struct naeb_fence_api {                                 /* version 1 */
   life.
 - Windows: not yet (`LoadLibrary`, and no jail to apply anyway; naeb with a
   Fence refuses commands there).
+
+### The Maven broker (experimental)
+
+Added 2026-11-15, experimental: on only when `naeb.ae` says so, its shape
+may change. The fence keeps a build from writing `~/.m2/repository` and
+from reaching hosts; until now a Maven project then had to open both
+(`maven.apply(p)`), and every plugin and POM extension the build ran could
+write the shared repository other projects build from. With the broker on,
+fenced code never writes it; naeb's own code does, after checks, and only
+for what the project's POMs say they need.
+
+```aether
+fence(p: ptr) {
+    maven.apply(p)                      // reads, ~/.m2/wrapper; its ~/.m2/repository write is dropped
+    policy.maven_broker(p)
+    policy.maven_repository(p, "https://repo.maven.apache.org/maven2")   // none named: Central
+    policy.maven_min_age_days(p, 7)     // the default
+    policy.maven_keyring(p, "~/.naeb/maven/trusted-keys.asc")
+    policy.maven_require_signatures(p)  // optional
+}
+```
+
+- **Offline fenced builds.** `~/.m2/repository` is readable and never
+  writable to fenced writers: an `allow_write` at or below it is dropped,
+  and a writable root above it gets it as a read-only path. Children get
+  `MAVEN_ARGS=--offline` (prepended to a `MAVEN_ARGS` the policy sets),
+  which Maven 3.9+ and the wrapper honour, so a build fails at once on what
+  is missing instead of trying the network. The flag is convenience, not
+  the boundary: a build that drops it still cannot write the repository.
+  (A settings file with `<offline>` was rejected: `~/.m2/settings.xml` is on
+  the secrets list, and one elsewhere needs `-s` on every command line.) A
+  write refused under the repository carries no `allow_write` suggestion.
+- **`tools.maven_fetch({ gavs })`** (only with the broker on) → `{ ok,
+  fetched: [{ gav, requested, repo, files: [{ file, sha256, checksum,
+  signature }], signature, age_days, override }], present: [gav], refused:
+  [{ gav, reason, young? }] }`. Coordinates are `g:a:v`, `g:a:type:v`,
+  `g:a:type:classifier:v` or a range (`g:a:[1.0,2.0)`), as build errors
+  print them; snapshots are refused. The tool table's entry is the Maven
+  skill: run the build offline, collect every missing coordinate from the
+  errors (artifacts, POMs, plugins, parent POMs, BOMs), fetch them in one
+  call, rerun. It lives in the table (seen whenever the broker is on)
+  rather than as a `SKILL.md`, which a Session loads only when configured.
+- **naeb's own resolver, no build tool.** The fetch runs in naeb's
+  unconfined process (`nib.maven.*`): POMs are parsed (`std.xml`), never
+  built; no Maven, mvnw, Gradle or JVM is started, so no plugin, extension
+  or build script runs outside the fence. aeb's `aeb-resolve.jar` (bld's
+  resolver) was considered and not used: it needs a JVM, downloads straight
+  into its cache from Maven Central plus extra repositories (no allow-list,
+  no age or signature check before writing) and cannot be pointed at a
+  fixture repository alone. The resolver expands the closure itself:
+  parents, imported BOMs, `dependencyManagement`, properties, compile and
+  runtime dependencies (not optional ones, not test or provided scope of
+  dependencies), version ranges. It does not mediate versions (nearest
+  wins): it fetches the declared version, or the project's managed one;
+  anything Maven then still misses is asked for again.
+- **Checks before anything is written**, per requested coordinate:
+  1. *Reachable from the project's POMs:* `pom.xml` at the project root and
+     its modules, their parents, imported BOMs, dependencies (any scope),
+     `dependencyManagement`, plugins with their dependencies, build
+     extensions, and transitively the compile/runtime dependencies of what
+     they name. The default-lifecycle plugins (`org.apache.maven.plugins`'
+     clean, resources, compiler, surefire, jar, install, ...) are reachable
+     in any version, as Maven's super POM binds them. Otherwise refused
+     ("not reachable from the project's POMs"), with nothing requested from
+     any repository for it. A walk reads at most 3000 POMs.
+  2. *Allowed repositories only*, in `naeb.ae`'s order; a repository a POM
+     names is never used. The refusal names it with the line that would
+     allow it (`policy.maven_repository(p, "<url>")`). No redirect is
+     followed, no proxy from the environment is used.
+  3. *Checksums:* the strongest of `.sha512`, `.sha256`, `.sha1` the
+     repository publishes must match; none published is a refusal.
+  4. *Signatures:* where the repository has a `.asc`, an OpenPGP v4
+     signature (RSA or Ed25519; SHA-1/224/256/384/512) is verified in Aether
+     (`nib.maven.pgp`, std.cryptography) against the keyring: a bad or
+     unreadable signature is a refusal; a key not in the keyring is recorded
+     as `unknown key <fingerprint>` and allowed unless
+     `maven_require_signatures`. The keyring is trusted as given (no expiry,
+     revocation or web of trust) and must lie outside every writable root
+     (naeb refuses to start otherwise: a fenced command could add a key).
+     The record has room for provenance attestations (Sigstore, SLSA) later.
+  5. *Age:* the publish date is the repository's `Last-Modified` for the
+     version's `.pom` (Maven Central's is the real publish date: Paul
+     checked it for jsoup 1.18.1). Younger than `maven_min_age_days` (default 7) is
+     refused with the ages; a range resolves to the newest version old
+     enough (from `maven-metadata.xml`). No date with a minimum above 0 is
+     a refusal.
+  The checks of one requested coordinate's closure are all or nothing: a
+  failed check anywhere in it writes none of it, and the reason names the
+  file. A write that fails afterwards (a planted symlink) stops there;
+  files of the closure written before it stay (each verified).
+- **Writes** go into the canonical `~/.m2/repository` only: each file is
+  written to a temporary name in its directory and renamed over the leaf
+  (`atomic_file.replace_at`); the directories are opened component by
+  component from the root without following symlinks, each checked to lie
+  inside the root (`open_dir`), so a symlink planted inside the repository
+  cannot redirect a write; a leaf that is a symlink is refused. A file
+  already there (a regular file) is not fetched again.
+- **A too-young version, approved.** The refusal is also a `fence_denied`
+  record `{op: "maven_age", resource, young: [{gav, age_days}],
+  min_age_days}` (no `suggestion`). The TUI offers it after any `naeb.ae`
+  change, through the same prompt machinery, one coordinate per prompt
+  (`Fetch it anyway (this time, these versions only)? [y/N]`); only `y`
+  fetches, on a worker thread, with exactly those versions exempt from the
+  age check, and the transcript says what was fetched. Each coordinate is
+  offered once per Session. `ask`, `--json` and `js` never prompt: the
+  refusal stays in the result and `fence_denied`.
+- **Records.** Every artifact fetched (`gav`, `requested`, `repo`, files
+  with SHA-256, checksum and signature, `age_days`, `override`) and every
+  refusal (`requested`, `reason`) goes to the Session log as `maven_fetch`,
+  and to `tools.fence()` (`maven`, `maven_fetches`) and `/fence`.
+- **Tests:** `ae/tests/maven_test.ae` (coordinates, ranges by age, POMs,
+  reachability over a local copy of the fixture repository, the allow-list,
+  checksums and signatures against the fixtures, the fence settings),
+  `ae/tests/tui_fence_test.ae` (the y/N), and
+  `ae/tests/redteam/maven_broker.py`: the fixture repository
+  (`ae/tests/maven_fixture`, regenerated by its `make.sh` with throwaway
+  gpg keys) served on 127.0.0.1 with chosen `Last-Modified` dates, a second
+  one naeb.ae does not allow (never asked), a fixture HOME; fetch ok, too
+  young refused then `y` (and `n`) in the TUI, `ask --json` never asking,
+  a range by age, an unknown repository, a coordinate in no POM, a bad
+  checksum and a bad signature with nothing written, an unknown key
+  recorded, a fenced command and `tools.write` unable to write
+  `~/.m2/repository` while `MAVEN_ARGS=--offline`, planted directory and
+  leaf symlinks not followed, a build extension (whose class would create
+  a marker if loaded) fetched and never run, a keyring inside the project
+  refused at start. No real Maven build runs in the tests: no `mvn` is
+  installed and a Maven distribution would have to come from outside.
+- **Not yet:** brokers for npm, Cargo, Go modules, uv/pip and Bundler (TODO.md);
+  Gradle (it reads the same repository layout but has its own offline
+  switch and module metadata); Maven's `maven-metadata-<repo>.xml` for
+  ranges in offline builds; artifacts Maven resolves at run time without a
+  POM naming them (surefire's providers, for instance) are refused as
+  unreachable until a POM names them.
 
 ## How a policy looks
 
@@ -558,7 +701,8 @@ The fixture project's policy (`naeb.ae`, allowing the allowed listener) is
 built with `naeb build -y` into the fixture `HOME`. `ae/tests/redteam/attribution.py`
 (run by `run.sh`) checks that each refusal reaches only the command that
 caused it: a fetch, two concurrent commands, a background command and an
-MCP server. `ae/tests/redteam/naeb_policy.py` (also run by `run.sh`) checks
+MCP server. `ae/tests/redteam/maven_broker.py` (run by `run.sh`) checks the
+Maven broker (above). `ae/tests/redteam/naeb_policy.py` (also run by `run.sh`) checks
 the policy's life: the default fence without `naeb.ae`, a refused changed
 `naeb.ae`, `naeb build` with EOF or `n` changing nothing, two projects named
 alike getting two keys, another interface refused (in the record and in the
@@ -623,5 +767,20 @@ mode) the same fixtures find 15 holes on macOS.
    or open it and accept local services as reachable?
 5. Linux below Landlock ABI 9: refusing `socket(AF_UNIX)` breaks tools that
    talk to local daemons on purpose (ssh-agent, Docker). Acceptable?
+7. Maven broker (experimental): should a signature by a key not in the
+   keyring be refused by default (today it is recorded and allowed unless
+   `maven_require_signatures`)? Central has no single key set, so
+   requiring known keys means curating a keyring per project.
+8. Maven broker: artifacts Maven resolves at run time with no POM naming
+   them (surefire's JUnit provider, a plugin's dynamic dependencies) are
+   refused as unreachable. Allow the groups of reachable plugins, or ask
+   the user per coordinate as for a young version?
+9. Maven broker: should the broker drop the policy's `allow_host` for its
+   own repositories while it is on (so a build cannot download at all,
+   offline flag or not)? Today the hosts stay as the policy has them; the
+   read-only repository is what holds.
+10. Maven broker: age is the `.pom`'s `Last-Modified`; a mirror that
+   re-stamps files on sync makes everything look young. Trust another
+   source (Central's search API, `maven-metadata.xml`'s `lastUpdated`)?
 6. *(Settled 2026-11-15: a unified diff with y/N in the TUI now; opening the
    proposed change in `$EDITOR` to adjust it before applying comes later.)*

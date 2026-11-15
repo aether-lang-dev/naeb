@@ -1,0 +1,46 @@
+// maven.repo: one GET of a Maven repository file, by naeb's own process
+// for its Maven broker (docs/naeb/adr/0001, "The Maven broker"). No
+// redirect is followed (a repository answering with one is refused), no
+// proxy from the environment is used, the body is binary-safe and capped.
+
+import std.string
+import std.http.client
+
+exports(Got, get, MAX_BYTES)
+
+// The largest file the broker fetches.
+const MAX_BYTES = 268435456
+
+struct Got {
+    status: int
+    body: string
+    last_modified: string
+}
+
+// GET `url`: (got, "") with any HTTP status, or (null, transport error).
+get(url: string) -> (*Got, string) {
+    if string.starts_with(url, "http://") == 0 && string.starts_with(url, "https://") == 0 { return null, "not an http(s) URL: ${url}" }
+    req = client.request("GET", url)
+    if req == null { return null, "not a URL: ${url}" }
+    client.ignore_http_proxy(req)
+    client.set_timeout(req, 120s)
+    client.set_header(req, "user-agent", "naeb-maven-broker")
+    resp, err = client.send_request(req)
+    if err != "" {
+        client.request_free(req)
+        return null, err
+    }
+    g = heap.new(Got)
+    g.status = client.response_status(resp)
+    g.last_modified = string.copy(client.response_header(resp, "last-modified"))
+    body = client.response_body(resp)
+    if string.length(body) > MAX_BYTES {
+        client.response_free(resp)
+        client.request_free(req)
+        return null, "larger than ${MAX_BYTES} bytes: ${url}"
+    }
+    g.body = string.concat(body, "")
+    client.response_free(resp)
+    client.request_free(req)
+    return g, ""
+}

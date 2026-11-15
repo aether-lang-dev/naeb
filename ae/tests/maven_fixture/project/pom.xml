@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The fixture project of ae/tests/redteam/maven_broker.py. @OTHER@ is the
+     URL of a fixture repository naeb.ae does not allow. -->
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>invalid.naeb.fx</groupId>
+    <artifactId>parent</artifactId>
+    <version>1.0</version>
+  </parent>
+  <artifactId>app</artifactId>
+  <version>0.1</version>
+  <properties>
+    <fx.a.version>1.0</fx.a.version>
+  </properties>
+  <repositories>
+    <repository>
+      <id>other</id>
+      <url>@OTHER@</url>
+    </repository>
+  </repositories>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>invalid.naeb.fx</groupId>
+        <artifactId>bom</artifactId>
+        <version>1.0</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+    <dependency><groupId>invalid.naeb.fx</groupId><artifactId>lib-a</artifactId><version>${fx.a.version}</version></dependency>
+    <dependency><groupId>invalid.naeb.fx</groupId><artifactId>lib-managed</artifactId></dependency>
+    <dependency><groupId>invalid.naeb.fx</groupId><artifactId>lib-young</artifactId><version>2.0</version></dependency>
+    <dependency><groupId>invalid.naeb.fx</groupId><artifactId>lib-range</artifactId><version>[1.0,2.0)</version></dependency>
+    <dependency><groupId>invalid.naeb.fx</groupId><artifactId>lib-badsum</artifactId><version>1.0</version></dependency>
+    <dependency><groupId>invalid.naeb.fx</groupId><artifactId>lib-badsig</artifactId><version>1.0</version></dependency>
+    <dependency><groupId>invalid.naeb.fx</groupId><artifactId>lib-unknownkey</artifactId><version>1.0</version></dependency>
+    <dependency><groupId>invalid.naeb.fx</groupId><artifactId>lib-elsewhere</artifactId><version>1.0</version></dependency>
+  </dependencies>
+  <build>
+    <extensions>
+      <extension>
+        <groupId>invalid.naeb.fx</groupId>
+        <artifactId>fx-maven-plugin</artifactId>
+        <version>1.0</version>
+      </extension>
+    </extensions>
+  </build>
+</project>

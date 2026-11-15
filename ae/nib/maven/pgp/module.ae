@@ -1,0 +1,408 @@
+// maven.pgp: OpenPGP detached signatures (RFC 4880 v4), as Maven
+// repositories publish them beside each file (`.asc`), checked against a
+// keyring of trusted public keys (docs/naeb/adr/0001, "The Maven broker").
+// Pure Aether over std.cryptography: RSA (PKCS#1 v1.5) and Ed25519 (EdDSA,
+// algorithm 22); SHA-1, SHA-224, SHA-256, SHA-384 and SHA-512 digests.
+//
+// The keyring is trusted as given: key expiry, revocation and user-ID
+// certifications are not consulted. A binary-document signature (type 0) is
+// the only kind accepted. Data are binary-safe Aether strings.
+
+import std.list
+import std.string
+import std.bytes
+import std.encoding
+import std.cryptography
+import std.cryptography.rsa
+import std.cryptography.ed25519
+
+exports(Key, keyring, key_count, verify, GOOD, BAD, UNKNOWN_KEY, UNREADABLE, UNSUPPORTED)
+
+const GOOD = "good"
+const BAD = "bad"
+const UNKNOWN_KEY = "unknown key"
+const UNREADABLE = "unreadable"
+const UNSUPPORTED = "unsupported"
+
+struct Key {
+    fpr: string       // the v4 fingerprint, upper-case hex
+    keyid: string     // its last 16 hex digits
+    algo: int         // 1, 2, 3 RSA; 22 EdDSA
+    n: string         // RSA modulus, big-endian
+    e: string         // RSA exponent
+    q: string         // Ed25519 public point, 32 bytes
+}
+
+struct Packet {
+    tag: int
+    body: string
+}
+
+byte_(s: string, i: int) -> int { return string.char_at(s, i) & 255 }
+
+be_(s: string, at: int, n: int) -> long {
+    v = 0 as long
+    i = 0
+    while i < n {
+        v = v * (256 as long) + (byte_(s, at + i) as long)
+        i = i + 1
+    }
+    return v
+}
+
+hex_(s: string) -> string {
+    if string.length(s) == 0 { return "" }
+    return string.to_upper(encoding.hex_encode(string.bytes(s)[0..string.length(s)]))
+}
+
+// The binary contents of every ASCII-armored block in `text`, concatenated;
+// text that is not armored is taken as binary already.
+dearmor_(text: string) -> string {
+    if string.contains(text, "-----BEGIN PGP") == 0 { return text }
+    out = ""
+    lines = string.split(string.replace_all(text, "\r", ""), "\n")
+    n = string.array_size(lines)
+    i = 0
+    state = 0
+    b64 = ""
+    while i < n {
+        line = string.trim(string.array_get(lines, i))
+        if state == 0 {
+            if string.starts_with(line, "-----BEGIN PGP") == 1 {
+                state = 1
+                b64 = ""
+            }
+        } else if state == 1 {
+            if line == "" { state = 2 } else if string.contains(line, ":") == 0 {
+                state = 2
+                b64 = line
+            }
+        } else {
+            if string.starts_with(line, "-----END PGP") == 1 || string.starts_with(line, "=") == 1 {
+                if b64 != "" {
+                    raw, err = encoding.base64_decode(b64)
+                    if err == "" { out = string.concat(out, raw) }
+                }
+                b64 = ""
+                state = if string.starts_with(line, "=") == 1 { 3 } else { 0 }
+            } else {
+                b64 = "${b64}${line}"
+            }
+        }
+        if state == 3 && string.starts_with(line, "-----END PGP") == 1 { state = 0 }
+        i = i + 1
+    }
+    string.array_free(lines)
+    return out
+}
+
+// The packets of a binary OpenPGP message; null when one is malformed or
+// uses a partial length.
+packets_(data: string) -> ptr {
+    out = list.list_new()
+    n = string.length(data)
+    i = 0
+    while i < n {
+        h = byte_(data, i)
+        if (h & 128) == 0 { return null }
+        tag = 0
+        len = 0 as long
+        hl = 0
+        if (h & 64) != 0 {
+            tag = h & 63
+            if i + 1 >= n { return null }
+            o1 = byte_(data, i + 1)
+            if o1 < 192 {
+                len = o1 as long
+                hl = 2
+            } else if o1 < 224 {
+                if i + 2 >= n { return null }
+                len = (((o1 - 192) * 256) + byte_(data, i + 2) + 192) as long
+                hl = 3
+            } else if o1 == 255 {
+                if i + 5 >= n { return null }
+                len = be_(data, i + 2, 4)
+                hl = 6
+            } else {
+                return null
+            }
+        } else {
+            tag = (h >> 2) & 15
+            lt = h & 3
+            if lt == 0 {
+                if i + 1 >= n { return null }
+                len = byte_(data, i + 1) as long
+                hl = 2
+            } else if lt == 1 {
+                if i + 2 >= n { return null }
+                len = be_(data, i + 1, 2)
+                hl = 3
+            } else if lt == 2 {
+                if i + 4 >= n { return null }
+                len = be_(data, i + 1, 4)
+                hl = 5
+            } else {
+                len = (n - i - 1) as long
+                hl = 1
+            }
+        }
+        start = i + hl
+        if len < (0 as long) || (start as long) + len > (n as long) { return null }
+        p = heap.new(Packet)
+        p.tag = tag
+        p.body = string.substring(data, start, start + (len as int))
+        list.list_add(out, p as ptr)
+        i = start + (len as int)
+    }
+    return out
+}
+
+// An MPI at `at`: (its bytes, the offset after it), or ("", -1).
+mpi_(s: string, at: int) -> (string, int) {
+    if at + 2 > string.length(s) { return "", -1 }
+    bits = byte_(s, at) * 256 + byte_(s, at + 1)
+    nb = (bits + 7) / 8
+    if at + 2 + nb > string.length(s) { return "", -1 }
+    return string.substring(s, at + 2, at + 2 + nb), at + 2 + nb
+}
+
+const ED25519_OID = "2B06010401DA470F01"
+
+// A v4 public-key or public-subkey packet body as a Key, or null for
+// another version or an algorithm naeb does not verify.
+key_of_(body: string) -> *Key {
+    if string.length(body) < 6 || byte_(body, 0) != 4 { return null }
+    algo = byte_(body, 5)
+    k = heap.new(Key)
+    k.algo = algo
+    k.n = ""
+    k.e = ""
+    k.q = ""
+    if algo == 1 || algo == 2 || algo == 3 {
+        nn, at = mpi_(body, 6)
+        if at < 0 { return null }
+        ee, at2 = mpi_(body, at)
+        if at2 < 0 { return null }
+        k.n = nn
+        k.e = ee
+    } else if algo == 22 {
+        if string.length(body) < 7 { return null }
+        ol = byte_(body, 6)
+        if 7 + ol > string.length(body) { return null }
+        if hex_(string.substring(body, 7, 7 + ol)) != ED25519_OID { return null }
+        pt, at3 = mpi_(body, 7 + ol)
+        if at3 < 0 || string.length(pt) != 33 || byte_(pt, 0) != 64 { return null }
+        k.q = string.substring(pt, 1, 33)
+    } else {
+        return null
+    }
+    blen = string.length(body)
+    pre = bytes.new(3)
+    bytes.set(pre, 0, 153)
+    bytes.set(pre, 1, (blen >> 8) & 255)
+    bytes.set(pre, 2, blen & 255)
+    framed = string.concat(bytes.finish(pre, 3), body)
+    d, _dn, derr = cryptography.hash_bytes("sha1", string.bytes(framed)[0..string.length(framed)])
+    if derr != "" { return null }
+    k.fpr = hex_(d)
+    k.keyid = string.substring(k.fpr, 24, 40)
+    return k
+}
+
+// The verifying keys of a keyring file (ASCII-armored or binary public
+// keys, any number): a list of *Key, primary keys and subkeys alike.
+keyring(text: string) -> ptr {
+    out = list.list_new()
+    ps = packets_(dearmor_(text))
+    if ps == null { return out }
+    i = 0
+    while i < list.list_size(ps) {
+        p = list.list_get_raw(ps, i) as *Packet
+        if p.tag == 6 || p.tag == 14 {
+            k = key_of_(p.body)
+            if k != null { list.list_add(out, k as ptr) }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+key_count(ring: ptr) -> int { return list.list_size(ring) }
+
+hash_name_(id: int) -> string {
+    if id == 2 { return "sha1" }
+    if id == 8 { return "sha256" }
+    if id == 9 { return "sha384" }
+    if id == 10 { return "sha512" }
+    if id == 11 { return "sha224" }
+    return ""
+}
+
+digest_info_(id: int) -> string {
+    if id == 2 { return "3021300906052b0e03021a05000414" }
+    if id == 11 { return "302d300d06096086480165030402040500041c" }
+    if id == 8 { return "3031300d060960864801650304020105000420" }
+    if id == 9 { return "3041300d060960864801650304020205000430" }
+    if id == 10 { return "3051300d060960864801650304020305000440" }
+    return ""
+}
+
+// The issuer of a signature's subpacket area: (fingerprint or "", key id or "").
+issuer_(area: string) -> (string, string) {
+    fpr = ""
+    kid = ""
+    i = 0
+    n = string.length(area)
+    while i < n {
+        o = byte_(area, i)
+        len = 0
+        hl = 1
+        if o < 192 {
+            len = o
+        } else if o < 255 {
+            if i + 1 >= n { break }
+            len = ((o - 192) * 256) + byte_(area, i + 1) + 192
+            hl = 2
+        } else {
+            if i + 4 >= n { break }
+            len = be_(area, i + 1, 4) as int
+            hl = 5
+        }
+        if len < 1 || i + hl + len > n { break }
+        t = byte_(area, i + hl) & 127
+        val = string.substring(area, i + hl + 1, i + hl + len)
+        if t == 33 && string.length(val) == 21 && byte_(val, 0) == 4 { fpr = hex_(string.substring(val, 1, 21)) }
+        if t == 16 && string.length(val) == 8 { kid = hex_(val) }
+        i = i + hl + len
+    }
+    return fpr, kid
+}
+
+find_key_(ring: ptr, fpr: string, kid: string) -> *Key {
+    i = 0
+    while i < list.list_size(ring) {
+        k = list.list_get_raw(ring, i) as *Key
+        if (fpr != "" && k.fpr == fpr) || (fpr == "" && kid != "" && k.keyid == kid) { return k }
+        i = i + 1
+    }
+    return null
+}
+
+pad_(s: string, n: int) -> string {
+    out = s
+    while string.length(out) > n && byte_(out, 0) == 0 { out = string.substring(out, 1, string.length(out)) }
+    if string.length(out) >= n { return out }
+    z = bytes.new(n - string.length(out))
+    i = 0
+    while i < n - string.length(out) {
+        bytes.set(z, i, 0)
+        i = i + 1
+    }
+    return string.concat(bytes.finish(z, n - string.length(out)), out)
+}
+
+handle_(s: string) -> ptr {
+    b = bytes.new(string.length(s))
+    i = 0
+    while i < string.length(s) {
+        bytes.set(b, i, byte_(s, i))
+        i = i + 1
+    }
+    return b
+}
+
+rsa_ok_(k: *Key, hash_id: int, digest: string, sig_mpi: string) -> int {
+    prefix, perr = encoding.hex_decode(digest_info_(hash_id))
+    if perr != "" { return 0 }
+    di = handle_(string.concat(prefix, digest))
+    empty = "x"
+    key = rsa.key_from_bytes(string.bytes(k.n)[0..string.length(k.n)], string.bytes(k.e)[0..string.length(k.e)], string.bytes(empty)[0..0])
+    if key == null { return 0 }
+    sig = pad_(sig_mpi, rsa.modulus_bytes(key))
+    ok = rsa.verify_pkcs1(key, di, string.bytes(sig)[0..string.length(sig)])
+    rsa.key_free(key)
+    return ok
+}
+
+ed_ok_(k: *Key, digest: string, r: string, s: string) -> int {
+    if string.length(r) > 32 || string.length(s) > 32 { return 0 }
+    sig = string.concat(pad_(r, 32), pad_(s, 32))
+    pub = handle_(k.q)
+    return ed25519.verify(pub, string.bytes(digest)[0..string.length(digest)], string.bytes(sig)[0..64])
+}
+
+// `asc` (a detached signature, armored or binary) over `data`, against
+// `ring` (keyring's list): (GOOD, signer's fingerprint), (BAD, signer),
+// (UNKNOWN_KEY, the issuer's key id or fingerprint), (UNREADABLE, "") or
+// (UNSUPPORTED, what).
+verify(ring: ptr, data: string, asc: string) -> (string, string) {
+    ps = packets_(dearmor_(asc))
+    if ps == null || list.list_size(ps) == 0 { return UNREADABLE, "" }
+    sigp = null as *Packet
+    i = 0
+    while i < list.list_size(ps) {
+        p = list.list_get_raw(ps, i) as *Packet
+        if p.tag == 2 && sigp == null { sigp = p }
+        i = i + 1
+    }
+    if sigp == null { return UNREADABLE, "" }
+    b = sigp.body
+    if string.length(b) < 6 { return UNREADABLE, "" }
+    if byte_(b, 0) != 4 { return UNSUPPORTED, "signature version ${byte_(b, 0)}" }
+    if byte_(b, 1) != 0 { return UNSUPPORTED, "signature type ${byte_(b, 1)}" }
+    algo = byte_(b, 2)
+    hid = byte_(b, 3)
+    hname = hash_name_(hid)
+    if hname == "" { return UNSUPPORTED, "digest algorithm ${hid}" }
+    hlen = byte_(b, 4) * 256 + byte_(b, 5)
+    if 6 + hlen + 2 > string.length(b) { return UNREADABLE, "" }
+    hashed = string.substring(b, 6, 6 + hlen)
+    ulen = byte_(b, 6 + hlen) * 256 + byte_(b, 7 + hlen)
+    ustart = 8 + hlen
+    if ustart + ulen + 2 > string.length(b) { return UNREADABLE, "" }
+    unhashed = string.substring(b, ustart, ustart + ulen)
+    left16 = string.substring(b, ustart + ulen, ustart + ulen + 2)
+    mstart = ustart + ulen + 2
+    fpr, kid = issuer_(hashed)
+    if fpr == "" && kid == "" {
+        fpr2, kid2 = issuer_(unhashed)
+        fpr = fpr2
+        kid = kid2
+    }
+    if fpr != "" && kid == "" { kid = string.substring(fpr, 24, 40) }
+    k = find_key_(ring, fpr, kid)
+    if k == null {
+        who = fpr
+        if who == "" { who = kid }
+        return UNKNOWN_KEY, who
+    }
+    if k.algo != algo && !((algo == 1 || algo == 3) && (k.algo == 1 || k.algo == 3)) { return BAD, k.fpr }
+    tr = bytes.new(6)
+    tlen = 6 + hlen
+    bytes.set(tr, 0, 4)
+    bytes.set(tr, 1, 255)
+    bytes.set(tr, 2, (tlen >> 24) & 255)
+    bytes.set(tr, 3, (tlen >> 16) & 255)
+    bytes.set(tr, 4, (tlen >> 8) & 255)
+    bytes.set(tr, 5, tlen & 255)
+    msg = string.concat(string.concat(data, string.substring(b, 0, 6 + hlen)), bytes.finish(tr, 6))
+    digest, _dn, derr = cryptography.hash_bytes(hname, string.bytes(msg)[0..string.length(msg)])
+    if derr != "" { return UNSUPPORTED, "digest ${hname}: ${derr}" }
+    if string.substring(digest, 0, 2) != left16 { return BAD, k.fpr }
+    ok = 0
+    if algo == 1 || algo == 3 {
+        s, at = mpi_(b, mstart)
+        if at < 0 { return UNREADABLE, "" }
+        ok = rsa_ok_(k, hid, digest, s)
+    } else if algo == 22 {
+        r, at1 = mpi_(b, mstart)
+        if at1 < 0 { return UNREADABLE, "" }
+        s2, at2 = mpi_(b, at1)
+        if at2 < 0 { return UNREADABLE, "" }
+        ok = ed_ok_(k, digest, r, s2)
+    } else {
+        return UNSUPPORTED, "public-key algorithm ${algo}"
+    }
+    if ok == 1 { return GOOD, k.fpr }
+    return BAD, k.fpr
+}

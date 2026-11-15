@@ -39,6 +39,40 @@ Session, grouped suggestions, the approval in the Session log).
   JVM proxy properties; otherwise the template writes a settings file
   outside the project.
 
+## Dependency brokers (experimental; docs/naeb/adr/0001, "The Maven broker")
+
+Landed 2026-11-15, experimental: the Maven broker (`policy.maven_broker`,
+`tools.maven_fetch`, naeb's own resolver in `ae/nib/maven/`, the TUI's y/N
+for a too-young version). Still to do there:
+
+- **A real Maven build in the tests:** a fixture project built offline by a
+  Maven whose distribution comes from the fixture repository (none is
+  installed here, and none may come from outside in tests).
+- **Run-time artifacts no POM names** (surefire's providers, plugins'
+  dynamic dependencies): refused as unreachable today (ADR open question 8).
+- **`maven-metadata-<repo>.xml`** for version ranges in offline builds.
+- **Provenance attestations** (Sigstore bundles, SLSA) beside the PGP
+  result in each record.
+- **Gradle:** the same repository layout, its own offline switch
+  (`--offline`, `GRADLE_OPTS` does not carry it) and Gradle Module Metadata.
+
+Per-ecosystem primers to write next, each a broker of the same shape
+(offline fenced installs, a fetch tool, naeb's own resolver outside the
+fence, reachability from the project's manifests, allowed registries,
+integrity, signatures or provenance where the ecosystem has them, minimum
+age, atomic writes into the shared cache). Listed, not built:
+
+- **npm** (`package-lock.json`, the registry's `time` field, `integrity`
+  hashes, npm provenance attestations; `npm ci --offline` against the cache).
+- **Cargo** (`Cargo.lock`, the crates.io index, checksums in the lock file;
+  `cargo build --offline` / `--frozen`).
+- **Go modules** (`go.sum`, the checksum database, `GOFLAGS=-mod=mod`,
+  `GOPROXY=off` inside the fence).
+- **uv / pip** (`uv.lock` or hashes in requirements, PyPI's upload time and
+  attestations; `uv sync --offline`).
+- **Bundler** (`Gemfile.lock` checksums, rubygems.org's `created_at`;
+  `bundle install --local`).
+
 ## Port mvdan/sh: a shell built into naeb, in Aether
 
 **Deferred (Paul, 2026-11-15):** this and the Windows steps below wait behind

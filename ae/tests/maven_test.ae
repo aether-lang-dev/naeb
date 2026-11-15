@@ -1,0 +1,343 @@
+// naeb's experimental Maven broker (docs/naeb/adr/0001, "The Maven broker"):
+// coordinates, version ranges chosen by age, POMs, what the project's POMs
+// reach, the repository allow-list, checksums and OpenPGP signatures,
+// against the checked-in fixtures under ae/tests/maven_fixture. No network:
+// the reachability walk reads the fixture repository copied into a
+// temporary ~/.m2/repository. ae/tests/redteam/maven_broker.py runs the
+// whole tool against the fixture repository served on 127.0.0.1.
+
+import std.spec
+import std.fs
+import std.list
+import std.string
+import nib.fence
+import nib.maven.gav
+import nib.maven.pom
+import nib.maven.pgp
+import nib.maven.broker
+
+const FX = "ae/tests/maven_fixture"
+const REPO = "ae/tests/maven_fixture/repo/invalid/naeb/fx"
+
+read_(p: string) -> string {
+    s, _e = fs.read(p)
+    return s
+}
+
+bin_(p: string) -> string {
+    s, _n, _e = fs.read_binary(p)
+    return s
+}
+
+tmp_() -> string {
+    d, _e = fs.make_temp_dir("", "naeb-maven")
+    real, _k, _m = fs.realpath(d)
+    return real
+}
+
+strings_(items: string) -> ptr {
+    l = list.list_new()
+    parts = string.split(items, " ")
+    i = 0
+    while i < string.array_size(parts) {
+        list.list_add(l, string.copy(string.array_get(parts, i)))
+        i = i + 1
+    }
+    string.array_free(parts)
+    return l
+}
+
+ring_() -> ptr { return pgp.keyring(read_("${FX}/keys/trusted.asc")) }
+
+verify_(ring: ptr, artifact: string, file: string) -> string {
+    st, _who = pgp.verify(ring, bin_("${REPO}/${artifact}/1.0/${file}"), read_("${REPO}/${artifact}/1.0/${file}.asc"))
+    return st
+}
+
+copy_tree_(src: string, dst: string) {
+    fs.mkdir_p(dst)
+    names, _e = fs.list_dir(src)
+    i = 0
+    while i < fs.dir_list_count(names) {
+        n = fs.dir_list_get(names, i)
+        s = "${src}/${n}"
+        d = "${dst}/${n}"
+        st, _k, _m = fs.stat(s, 0)
+        if st.kind == fs.STAT_KIND_DIR {
+            copy_tree_(s, d)
+        } else {
+            data, _n2, _e2 = fs.read_binary(s)
+            fs.write(d, data)
+        }
+        i = i + 1
+    }
+}
+
+// A broker over a temporary ~/.m2/repository holding the whole fixture
+// repository and a project with the fixture pom.xml; no repository is
+// allowed, so nothing is ever fetched.
+offline_broker_() -> *broker.Broker {
+    home = tmp_()
+    copy_tree_("${FX}/repo", "${home}/.m2/repository")
+    fs.mkdir_p("${home}/proj")
+    fs.write("${home}/proj/pom.xml", string.replace_all(read_("${FX}/project/pom.xml"), "@OTHER@", "http://127.0.0.1:1/other"))
+    return broker.new(home, "${home}/.m2/repository", "${home}/proj", list.list_new(), 7, "", 0)
+}
+
+main() {
+    fw = spec.init()
+    spec.describe(fw, "maven.gav coordinates") {
+        spec.it("parses g:a:v, g:a:ext:v and g:a:ext:classifier:v, as build errors print them") callback {
+            x, e = gav.parse("org.example:lib:1.2.3")
+            spec.assert_str_eq(e, "", "plain")
+            spec.assert_str_eq(gav.text_of(x), "org.example:lib:1.2.3", "plain text")
+            y, e2 = gav.parse("  org.example:lib:jar:1.2.3 (absent)")
+            spec.assert_str_eq(e2, "", "with type and a note")
+            spec.assert_str_eq(y.ext, "jar", "type")
+            spec.assert_str_eq(gav.text_of(y), "org.example:lib:1.2.3", "jar is the default")
+            z, e3 = gav.parse("org.example:lib:jar:tests:1.0")
+            spec.assert_str_eq(e3, "", "classifier")
+            spec.assert_str_eq(z.classifier, "tests", "classifier field")
+            p, e4 = gav.parse("org.example:parent:pom:7")
+            spec.assert_str_eq(e4, "", "pom")
+            spec.assert_str_eq(gav.text_of(p), "org.example:parent:pom:7", "pom keeps its type")
+            r, e5 = gav.parse("org.example:lib:[1.0,2.0)")
+            spec.assert_str_eq(e5, "", "range")
+            spec.assert_eq(gav.is_range(r.version), 1, "is a range")
+        }
+        spec.it("refuses what is no coordinate, path tricks and snapshots") callback {
+            _a, e1 = gav.parse("org.example:lib")
+            spec.assert_true(e1 != "", "two parts")
+            _b, e2 = gav.parse("org/../x:lib:1.0")
+            spec.assert_true(e2 != "", "a slash")
+            _c, e3 = gav.parse("org.example:..:1.0")
+            spec.assert_true(e3 != "", "dot-dot artifact")
+            _d, e4 = gav.parse("org.example:lib:../../1.0")
+            spec.assert_true(e4 != "", "dot-dot version")
+            _f, e5 = gav.parse("org.example:lib:1.0-SNAPSHOT")
+            spec.assert_str_eq(e5, "snapshots are not fetched", "snapshot")
+            _g, e6 = gav.parse("org.example:lib:[1.0,2.0),[3.0,)")
+            spec.assert_true(e6 != "", "a union of ranges")
+            _h, e7 = gav.parse("a:b:c:d:e:f")
+            spec.assert_true(e7 != "", "six parts")
+        }
+        spec.it("names a repository's files") callback {
+            spec.assert_str_eq(gav.dir_of("org.example.x", "lib", "1.0"), "org/example/x/lib/1.0", "dir")
+            spec.assert_str_eq(gav.file_of("lib", "1.0", "", "jar"), "lib-1.0.jar", "file")
+            spec.assert_str_eq(gav.file_of("lib", "1.0", "tests", "jar"), "lib-1.0-tests.jar", "classified")
+            spec.assert_str_eq(gav.ext_of_type("maven-plugin"), "jar", "a plugin is a jar")
+            spec.assert_str_eq(gav.ext_of_type("pom"), "pom", "pom")
+        }
+    }
+    spec.describe(fw, "maven.gav versions and ranges") {
+        spec.it("orders versions as Maven does in the common cases") callback {
+            spec.assert_eq(gav.compare("1.0", "1"), 0, "trailing zero")
+            spec.assert_eq(gav.compare("1.10", "1.9"), 1, "numeric")
+            spec.assert_eq(gav.compare("1.0-rc1", "1.0"), -1, "rc before release")
+            spec.assert_eq(gav.compare("1.0-alpha", "1.0-beta"), -1, "alpha before beta")
+            spec.assert_eq(gav.compare("1.0-beta", "1.0-RC1"), -1, "beta before rc, case folded")
+            spec.assert_eq(gav.compare("2.0.0", "10.0"), -1, "major")
+            spec.assert_eq(gav.compare("1.0.Final", "1.0"), 0, "Final is a release")
+        }
+        spec.it("tells what lies in a range") callback {
+            spec.assert_eq(gav.range_contains("[1.0,2.0)", "1.0"), 1, "inclusive low")
+            spec.assert_eq(gav.range_contains("[1.0,2.0)", "1.9.9"), 1, "inside")
+            spec.assert_eq(gav.range_contains("[1.0,2.0)", "2.0"), 0, "exclusive high")
+            spec.assert_eq(gav.range_contains("(1.0,]", "1.0"), 0, "exclusive low")
+            spec.assert_eq(gav.range_contains("(,1.5]", "0.1"), 1, "open low")
+            spec.assert_eq(gav.range_contains("[1.2]", "1.2"), 1, "pinned")
+            spec.assert_eq(gav.range_contains("1.2", "1.2.0"), 1, "a plain version is itself")
+        }
+        spec.it("picks the newest version in a range that is old enough") callback {
+            vs = strings_("1.0 1.5 1.9 2.0")
+            ages = strings_("40 30 2 60")
+            v, newest, why = gav.newest_old_enough(vs, ages, "[1.0,2.0)", 7)
+            spec.assert_str_eq(v, "1.5", "1.9 is too young, 2.0 is out of range")
+            spec.assert_str_eq(newest, "1.9", "and the newest in range, younger")
+            spec.assert_str_eq(why, "", "no error")
+            v2, newest2, why2 = gav.newest_old_enough(vs, strings_("1 2 3 4"), "[1.0,2.0)", 7)
+            spec.assert_str_eq(v2, "", "none old enough")
+            spec.assert_str_eq(newest2, "1.9", "the newest in range, for an override")
+            spec.assert_true(why2 != "", "says why")
+            v3, _n3, _w3 = gav.newest_old_enough(vs, strings_("1 2 3 4"), "[1.0,2.0)", 0)
+            spec.assert_str_eq(v3, "1.9", "minimum age 0")
+            _v4, n4, w4 = gav.newest_old_enough(vs, ages, "[3.0,)", 7)
+            spec.assert_str_eq(n4, "", "nothing in range")
+            spec.assert_true(w4 != "", "says so")
+        }
+        spec.it("reads HTTP dates and ages") callback {
+            spec.assert_eq_long(gav.http_date("Sun, 06 Nov 1994 08:49:37 GMT"), 784111777 as long, "RFC 9110 example")
+            spec.assert_eq_long(gav.http_date("Sunday, 06-Nov-94 08:49:37 GMT"), -1 as long, "obsolete form refused")
+            spec.assert_eq_long(gav.http_date(""), -1 as long, "none")
+            spec.assert_eq_long(gav.age_days(784111777 as long, (784111777 + 7 * 86400 - 1) as long), 6, "a second short of 7 days")
+            spec.assert_eq_long(gav.age_days(784111777 as long, (784111777 + 7 * 86400) as long), 7, "7 days")
+            spec.assert_eq_long(gav.age_days(-1 as long, 784111777 as long), -1, "unknown")
+        }
+    }
+    spec.describe(fw, "maven.pom") {
+        spec.it("reads coordinates, parent, properties, dependencies, management, extensions and repositories") callback {
+            p = pom.parse(read_("${FX}/project/pom.xml"))
+            spec.assert_str_eq(p.error, "", "parses")
+            spec.assert_str_eq(p.artifact, "app", "artifact")
+            pa = p.parent as *pom.Dep
+            spec.assert_str_eq("${pa.group}:${pa.artifact}:${pa.version}", "invalid.naeb.fx:parent:1.0", "parent")
+            spec.assert_eq(list.list_size(p.deps), 8, "dependencies")
+            spec.assert_eq(list.list_size(p.managed), 1, "managed")
+            spec.assert_eq(list.list_size(p.extensions), 1, "extensions")
+            spec.assert_eq(list.list_size(p.repos), 1, "repositories")
+            m = list.list_get_raw(p.managed, 0) as *pom.Dep
+            spec.assert_str_eq("${m.artifact} ${m.type} ${m.scope}", "bom pom import", "the BOM import")
+            d = list.list_get_raw(p.deps, 0) as *pom.Dep
+            spec.assert_str_eq(pom.interpolate(d.version, p.props), "1.0", "a property")
+        }
+        spec.it("skips exclusions and keeps a plugin's own dependencies apart") callback {
+            text = "<project><artifactId>x</artifactId><dependencies><dependency><groupId>g</groupId><artifactId>a</artifactId><version>1</version><exclusions><exclusion><groupId>evil</groupId><artifactId>e</artifactId></exclusion></exclusions></dependency></dependencies><build><plugins><plugin><artifactId>maven-surefire-plugin</artifactId><version>3</version><dependencies><dependency><groupId>p</groupId><artifactId>d</artifactId><version>2</version></dependency></dependencies></plugin></plugins></build></project>"
+            p = pom.parse(text)
+            spec.assert_str_eq(p.error, "", "parses")
+            d = list.list_get_raw(p.deps, 0) as *pom.Dep
+            spec.assert_str_eq("${d.group}:${d.artifact}", "g:a", "exclusion fields ignored")
+            spec.assert_eq(list.list_size(p.deps), 1, "the plugin's dependency is not the project's")
+            pl = list.list_get_raw(p.plugins, 0) as *pom.Dep
+            spec.assert_str_eq(pl.group, "org.apache.maven.plugins", "default plugin group")
+            spec.assert_eq(list.list_size(pl.deps), 1, "the plugin's own")
+        }
+        spec.it("refuses what is not a POM, and reads metadata versions") callback {
+            spec.assert_true(pom.parse("<project><a></b></project>").error != "", "malformed")
+            spec.assert_true(pom.parse("<html></html>").error != "", "no artifactId")
+            vs = pom.metadata_versions(read_("${REPO}/lib-range/maven-metadata.xml"))
+            spec.assert_eq(list.list_size(vs), 4, "four versions")
+        }
+        spec.it("interpolates nested properties and leaves unknown ones") callback {
+            props = strings_("a=\${b} b=2 c=x")
+            spec.assert_str_eq(pom.interpolate("v\${a}-\${c}-\${zz}", props), "v2-x-\${zz}", "nested and unknown")
+        }
+    }
+    spec.describe(fw, "maven.pgp against the fixture keyring") {
+        spec.it("reads the RSA and Ed25519 keys") callback {
+            spec.assert_eq(pgp.key_count(ring_()), 2, "two keys")
+        }
+        spec.it("verifies good RSA and Ed25519 signatures") callback {
+            ring = ring_()
+            spec.assert_str_eq(verify_(ring, "lib-a", "lib-a-1.0.jar"), pgp.GOOD, "RSA jar")
+            spec.assert_str_eq(verify_(ring, "lib-a", "lib-a-1.0.pom"), pgp.GOOD, "RSA pom")
+            spec.assert_str_eq(verify_(ring, "lib-b", "lib-b-1.0.jar"), pgp.GOOD, "Ed25519 jar")
+        }
+        spec.it("refuses a signature over other bytes, and tampered data") callback {
+            ring = ring_()
+            spec.assert_str_eq(verify_(ring, "lib-badsig", "lib-badsig-1.0.jar"), pgp.BAD, "signed other bytes")
+            data = bin_("${REPO}/lib-a/1.0/lib-a-1.0.pom")
+            asc = read_("${REPO}/lib-a/1.0/lib-a-1.0.pom.asc")
+            st, _w = pgp.verify(ring, string.concat(data, " "), asc)
+            spec.assert_str_eq(st, pgp.BAD, "RSA, one byte more")
+            ed = bin_("${REPO}/lib-b/1.0/lib-b-1.0.pom")
+            st2, _w2 = pgp.verify(ring, string.replace_all(ed, "lib-b", "lib-c"), read_("${REPO}/lib-b/1.0/lib-b-1.0.pom.asc"))
+            spec.assert_str_eq(st2, pgp.BAD, "Ed25519, changed bytes")
+        }
+        spec.it("names an unknown key and an unreadable signature") callback {
+            ring = ring_()
+            st, who = pgp.verify(ring, bin_("${REPO}/lib-unknownkey/1.0/lib-unknownkey-1.0.jar"), read_("${REPO}/lib-unknownkey/1.0/lib-unknownkey-1.0.jar.asc"))
+            spec.assert_str_eq(st, pgp.UNKNOWN_KEY, "not in the keyring")
+            spec.assert_eq(string.length(who), 40, "its fingerprint")
+            st2, _w2 = pgp.verify(ring, "x", "-----BEGIN PGP SIGNATURE-----\n\nnot base64 at all!\n-----END PGP SIGNATURE-----\n")
+            spec.assert_str_eq(st2, pgp.UNREADABLE, "garbage")
+            st3, _w3 = pgp.verify(pgp.keyring(""), bin_("${REPO}/lib-a/1.0/lib-a-1.0.jar"), read_("${REPO}/lib-a/1.0/lib-a-1.0.jar.asc"))
+            spec.assert_str_eq(st3, pgp.UNKNOWN_KEY, "an empty keyring knows no key")
+        }
+    }
+    spec.describe(fw, "maven.broker checks") {
+        spec.it("checks a file against the repository's checksum") callback {
+            jar = bin_("${REPO}/lib-a/1.0/lib-a-1.0.jar")
+            spec.assert_str_eq(broker.checksum_check("sha1", jar, read_("${REPO}/lib-a/1.0/lib-a-1.0.jar.sha1")), "", "sha1")
+            spec.assert_str_eq(broker.checksum_check("sha256", jar, "${read_("${REPO}/lib-a/1.0/lib-a-1.0.jar.sha256")}  lib-a-1.0.jar\n"), "", "sha256 with a file name")
+            bad = bin_("${REPO}/lib-badsum/1.0/lib-badsum-1.0.jar")
+            spec.assert_true(broker.checksum_check("sha256", bad, read_("${REPO}/lib-badsum/1.0/lib-badsum-1.0.jar.sha256")) != "", "mismatch")
+            spec.assert_true(broker.checksum_check("sha1", string.concat(jar, " "), read_("${REPO}/lib-a/1.0/lib-a-1.0.jar.sha1")) != "", "one byte more")
+        }
+        spec.it("knows what the project's POMs reach") callback {
+            b = offline_broker_()
+            ok, err = broker.reachable(b, "invalid.naeb.fx", "lib-a", "1.0")
+            spec.assert_str_eq(err, "", "walks")
+            spec.assert_eq(ok, 1, "a direct dependency, by property")
+            ok2, _e2 = broker.reachable(b, "invalid.naeb.fx", "lib-b", "1.0")
+            spec.assert_eq(ok2, 1, "transitive, managed by the parent")
+            ok3, _e3 = broker.reachable(b, "invalid.naeb.fx", "lib-managed", "1.3")
+            spec.assert_eq(ok3, 1, "versioned by the imported BOM")
+            ok4, _e4 = broker.reachable(b, "invalid.naeb.fx", "bom", "1.0")
+            spec.assert_eq(ok4, 1, "the BOM itself")
+            ok5, _e5 = broker.reachable(b, "invalid.naeb.fx", "parent", "1.0")
+            spec.assert_eq(ok5, 1, "the parent")
+            ok6, _e6 = broker.reachable(b, "invalid.naeb.fx", "fx-maven-plugin", "1.0")
+            spec.assert_eq(ok6, 1, "a build extension")
+            ok7, _e7 = broker.reachable(b, "invalid.naeb.fx", "lib-range", "1.5")
+            spec.assert_eq(ok7, 1, "in a declared range")
+            ok8, _e8 = broker.reachable(b, "org.apache.maven.plugins", "maven-surefire-plugin", "3.2.5")
+            spec.assert_eq(ok8, 1, "a default-lifecycle plugin, any version")
+            no1, _n1 = broker.reachable(b, "invalid.naeb.fx", "lib-unreached", "1.0")
+            spec.assert_eq(no1, 0, "in the repository, in no POM")
+            no2, _n2 = broker.reachable(b, "invalid.naeb.fx", "lib-test-only", "1.0")
+            spec.assert_eq(no2, 0, "a dependency's test scope")
+            no3, _n3 = broker.reachable(b, "invalid.naeb.fx", "lib-a", "9.9")
+            spec.assert_eq(no3, 0, "another version")
+            no4, _n4 = broker.reachable(b, "invalid.naeb.fx", "lib-range", "2.0")
+            spec.assert_eq(no4, 0, "outside the declared range")
+            no5, _n5 = broker.reachable(b, "org.apache.maven.plugins", "maven-evil-plugin", "1.0")
+            spec.assert_eq(no5, 0, "not a default plugin")
+        }
+        spec.it("fetches only from allowed repositories, never one a POM names") callback {
+            b = offline_broker_()
+            fs.mkdir_p("${b.m2}/elsewhere")
+            ok, text, denied, _r = broker.fetch(b, "{\"gavs\":[\"invalid.naeb.fx:lib-elsewhere:1.0\"]}", list.list_new())
+            spec.assert_eq(ok, 1, "answers")
+            spec.assert_true(string.contains(text, "not found in the allowed repositories (none)") == 1, "none allowed")
+            spec.assert_true(string.contains(text, "http://127.0.0.1:1/other, which naeb.ae does not allow") == 1, "names the POM's repository")
+            spec.assert_str_eq(denied, "", "no y/N for it")
+        }
+        spec.it("refuses arguments that are not a list of coordinates") callback {
+            b = offline_broker_()
+            ok, text, _d, _r = broker.fetch(b, "{\"gav\":\"x\"}", list.list_new())
+            spec.assert_eq(ok, 0, "rejected")
+            spec.assert_true(string.contains(text, "expected { gavs") == 1, "usage")
+        }
+    }
+    spec.describe(fw, "fence settings for the broker") {
+        spec.it("turns the broker on and checks its settings") callback {
+            f = fence.new("/h")
+            spec.assert_eq(fence.maven_on(f), 0, "off by default")
+            spec.assert_str_eq(fence.setting(f, "maven.broker", ""), "", "on")
+            spec.assert_eq(fence.maven_on(f), 1, "is on")
+            spec.assert_eq(fence.maven_min_age(f), 7, "7 days by default")
+            r = fence.maven_repos(f)
+            first, _e = list.get_string(r, 0)
+            spec.assert_str_eq(first, "https://repo.maven.apache.org/maven2", "Maven Central by default")
+            spec.assert_str_eq(fence.setting(f, "maven.repository", "http://127.0.0.1:9/maven2/"), "", "a repository")
+            r2 = fence.maven_repos(f)
+            only, _e2 = list.get_string(r2, 0)
+            spec.assert_eq(list.list_size(r2), 1, "only the named one")
+            spec.assert_str_eq(only, "http://127.0.0.1:9/maven2", "trailing slash dropped")
+            spec.assert_true(fence.setting(f, "maven.repository", "file:///etc") != "", "not http")
+            spec.assert_true(fence.setting(f, "maven.min_age_days", "-1") != "", "negative")
+            spec.assert_str_eq(fence.setting(f, "maven.min_age_days", "0"), "", "zero")
+            spec.assert_str_eq(fence.setting(f, "maven.keyring", "~/.naeb/keys.asc"), "", "keyring")
+            spec.assert_str_eq(fence.maven_keyring(f), "/h/.naeb/keys.asc", "expanded")
+            spec.assert_true(fence.setting(f, "maven.mirror", "x") != "", "an unknown setting is refused")
+        }
+        spec.it("keeps ~/.m2/repository out of the writable roots and offers no line for it") callback {
+            f = fence.new("/h")
+            fence.allow_write(f, "~/.m2/repository")
+            fence.setting(f, "maven.broker", "")
+            spec.assert_str_eq(fence.suggestion(f, "/", "", "write", "/h/.m2/repository/org/x.jar"), "", "no allow_write offered")
+            env = list.list_new()
+            list.list_add(env, "PATH=/bin")
+            ce = fence.child_env(f, env, "")
+            found = 0
+            i = 0
+            while i < list.list_size(ce) {
+                e, _g = list.get_string(ce, i)
+                if e == "MAVEN_ARGS=--offline" { found = 1 }
+                i = i + 1
+            }
+            spec.assert_eq(found, 1, "Maven runs offline")
+        }
+    }
+    return spec.run_summary(fw)
+}

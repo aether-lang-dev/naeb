@@ -1,0 +1,341 @@
+// maven.gav: Maven coordinates, versions and ranges, the paths of a
+// repository's files, and the HTTP dates repositories publish them with
+// (docs/naeb/adr/0001, "The Maven broker"). Pure text.
+//
+// A coordinate is what a model copies out of a build's error:
+//     g:a:v    g:a:ext:v    g:a:ext:classifier:v    g:a:[1.0,2.0)
+// Version order is Maven's ComparableVersion in the common cases: numeric
+// parts compare as numbers, "alpha" < "beta" < "milestone" < "rc" <
+// "snapshot" < release < "sp", other qualifiers after "sp" in text order.
+
+import std.list
+import std.string
+import std.time
+
+exports(Gav, parse, text_of, ga_of, is_range, range_contains, compare, newest_old_enough, dir_of,
+        file_of, ext_of_type, http_date, age_days, DAY)
+
+const DAY = 86400
+
+struct Gav {
+    group: string
+    artifact: string
+    version: string     // a version, or a range ("[1.0,2.0)")
+    ext: string         // "" when not given (the POM's packaging decides)
+    classifier: string
+}
+
+new_(g: string, a: string, v: string, ext: string, cls: string) -> *Gav {
+    x = heap.new(Gav)
+    x.group = string.copy(g)
+    x.artifact = string.copy(a)
+    x.version = string.copy(v)
+    x.ext = string.copy(ext)
+    x.classifier = string.copy(cls)
+    return x
+}
+
+name_ok_(s: string) -> int {
+    n = string.length(s)
+    if n == 0 || n > 200 { return 0 }
+    i = 0
+    while i < n {
+        c = string.char_at(s, i)
+        ok = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 46 || c == 45 || c == 95
+        if !ok { return 0 }
+        i = i + 1
+    }
+    if string.starts_with(s, ".") == 1 || string.contains(s, "..") == 1 { return 0 }
+    return 1
+}
+
+version_ok_(s: string) -> int {
+    n = string.length(s)
+    if n == 0 || n > 200 { return 0 }
+    i = 0
+    while i < n {
+        c = string.char_at(s, i)
+        ok = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 46 || c == 45 || c == 95 || c == 43
+        if !ok { return 0 }
+        i = i + 1
+    }
+    if string.starts_with(s, ".") == 1 || string.contains(s, "..") == 1 { return 0 }
+    return 1
+}
+
+// A range: "[1.0,2.0)", "(,1.5]", "[1.2]" (one bound list, no unions).
+is_range(v: string) -> int {
+    return string.starts_with(v, "[") == 1 || string.starts_with(v, "(") == 1
+}
+
+range_ok_(v: string) -> int {
+    n = string.length(v)
+    if n < 3 { return 0 }
+    last = string.char_at(v, n - 1)
+    if last != 93 && last != 41 { return 0 }
+    inner = string.substring(v, 1, n - 1)
+    if string.contains(inner, "[") == 1 || string.contains(inner, "(") == 1 || string.contains(inner, "]") == 1 || string.contains(inner, ")") == 1 { return 0 }
+    comma = string.index_of(inner, ",")
+    if comma < 0 {
+        if string.starts_with(v, "[") == 0 || last != 93 { return 0 }
+        return version_ok_(inner)
+    }
+    lo = string.trim(string.substring(inner, 0, comma))
+    hi = string.trim(string.substring(inner, comma + 1, string.length(inner)))
+    if string.contains(hi, ",") == 1 { return 0 }
+    if lo != "" && version_ok_(lo) == 0 { return 0 }
+    if hi != "" && version_ok_(hi) == 0 { return 0 }
+    return 1
+}
+
+// A coordinate as a model or a build error writes it: (gav, "") or (null,
+// why). Surrounding whitespace and a trailing " (absent)" or similar are
+// ignored.
+parse(text: string) -> (*Gav, string) {
+    t = string.trim(text)
+    sp = string.index_of(t, " ")
+    if sp > 0 { t = string.substring(t, 0, sp) }
+    parts = string.split(t, ":")
+    n = string.array_size(parts)
+    if n < 3 || n > 5 {
+        string.array_free(parts)
+        return null, "not a Maven coordinate (group:artifact:version)"
+    }
+    g = string.copy(string.array_get(parts, 0))
+    a = string.copy(string.array_get(parts, 1))
+    v = string.copy(string.array_get(parts, n - 1))
+    ext = ""
+    cls = ""
+    if n >= 4 { ext = string.copy(string.array_get(parts, 2)) }
+    if n == 5 { cls = string.copy(string.array_get(parts, 3)) }
+    string.array_free(parts)
+    if name_ok_(g) == 0 || name_ok_(a) == 0 { return null, "not a Maven coordinate (group:artifact:version)" }
+    if ext != "" && name_ok_(ext) == 0 { return null, "not a Maven type: ${ext}" }
+    if cls != "" && name_ok_(cls) == 0 { return null, "not a Maven classifier: ${cls}" }
+    if is_range(v) == 1 {
+        if range_ok_(v) == 0 { return null, "not a version range: ${v}" }
+    } else if version_ok_(v) == 0 {
+        return null, "not a version: ${v}"
+    }
+    if string.ends_with(v, "-SNAPSHOT") == 1 { return null, "snapshots are not fetched" }
+    return new_(g, a, v, ext, cls), ""
+}
+
+text_of(x: *Gav) -> string {
+    if x.classifier != "" { return "${x.group}:${x.artifact}:${x.ext}:${x.classifier}:${x.version}" }
+    if x.ext != "" && x.ext != "jar" { return "${x.group}:${x.artifact}:${x.ext}:${x.version}" }
+    return "${x.group}:${x.artifact}:${x.version}"
+}
+
+ga_of(x: *Gav) -> string { return "${x.group}:${x.artifact}" }
+
+// The file extension a dependency's <type> stands for.
+ext_of_type(t: string) -> string {
+    if t == "" || t == "jar" || t == "test-jar" || t == "maven-plugin" || t == "bundle" || t == "ejb" || t == "ejb-client" || t == "java-source" || t == "javadoc" { return "jar" }
+    return t
+}
+
+// group "org.x", artifact "y", version "1.0" -> "org/x/y/1.0"
+dir_of(group: string, artifact: string, version: string) -> string {
+    return "${string.replace_all(group, ".", "/")}/${artifact}/${version}"
+}
+
+file_of(artifact: string, version: string, classifier: string, ext: string) -> string {
+    if classifier != "" { return "${artifact}-${version}-${classifier}.${ext}" }
+    return "${artifact}-${version}.${ext}"
+}
+
+// ---- versions ---------------------------------------------------------
+
+is_digit_(c: int) -> bool { return c >= 48 && c <= 57 }
+
+// The version's items: numbers as "#<digits>", qualifiers lower-cased.
+items_(v: string) -> ptr {
+    out = list.list_new()
+    s = string.to_lower(v)
+    n = string.length(s)
+    i = 0
+    cur = ""
+    cur_digit = false
+    while i < n {
+        c = string.char_at(s, i)
+        if c == 46 || c == 45 || c == 95 {
+            if cur != "" { list.list_add(out, if cur_digit { "#${cur}" } else { cur }) }
+            cur = ""
+        } else {
+            d = is_digit_(c)
+            if cur != "" && d != cur_digit {
+                list.list_add(out, if cur_digit { "#${cur}" } else { cur })
+                cur = ""
+            }
+            cur_digit = d
+            cur = "${cur}${string.substring(s, i, i + 1)}"
+        }
+        i = i + 1
+    }
+    if cur != "" { list.list_add(out, if cur_digit { "#${cur}" } else { cur }) }
+    // Trailing zeros and release qualifiers are no part of the order: 1.0 == 1.
+    while list.list_size(out) > 0 {
+        last, _e = list.get_string(out, list.list_size(out) - 1)
+        if last == "#0" || last == "final" || last == "ga" || last == "release" {
+            list.list_remove(out, list.list_size(out) - 1)
+        } else {
+            break
+        }
+    }
+    return out
+}
+
+qual_rank_(q: string) -> int {
+    if q == "alpha" || q == "a" { return 0 }
+    if q == "beta" || q == "b" { return 1 }
+    if q == "milestone" || q == "m" { return 2 }
+    if q == "rc" || q == "cr" { return 3 }
+    if q == "snapshot" { return 4 }
+    if q == "" { return 5 }
+    if q == "sp" { return 6 }
+    return 7
+}
+
+num_cmp_(a: string, b: string) -> int {
+    x = a
+    y = b
+    while string.length(x) > 1 && string.starts_with(x, "0") == 1 { x = string.substring(x, 1, string.length(x)) }
+    while string.length(y) > 1 && string.starts_with(y, "0") == 1 { y = string.substring(y, 1, string.length(y)) }
+    if string.length(x) != string.length(y) { return if string.length(x) < string.length(y) { -1 } else { 1 } }
+    c = string.compare(x, y)
+    if c < 0 { return -1 }
+    if c > 0 { return 1 }
+    return 0
+}
+
+// One item against another ("" for a missing one).
+item_cmp_(a: string, b: string) -> int {
+    an = string.starts_with(a, "#") == 1
+    bn = string.starts_with(b, "#") == 1
+    if an && bn { return num_cmp_(string.substring(a, 1, string.length(a)), string.substring(b, 1, string.length(b))) }
+    if a == "" && b == "" { return 0 }
+    // A number beats any qualifier and a missing item; a missing item is a release.
+    if an { return if b == "" { if a == "#0" { 0 } else { 1 } } else { 1 } }
+    if bn { return if a == "" { if b == "#0" { 0 } else { -1 } } else { -1 } }
+    ra = qual_rank_(a)
+    rb = qual_rank_(b)
+    if ra != rb { return if ra < rb { -1 } else { 1 } }
+    if ra == 7 {
+        c = string.compare(a, b)
+        if c < 0 { return -1 }
+        if c > 0 { return 1 }
+    }
+    return 0
+}
+
+// -1, 0 or 1.
+compare(a: string, b: string) -> int {
+    x = items_(a)
+    y = items_(b)
+    n = list.list_size(x)
+    if list.list_size(y) > n { n = list.list_size(y) }
+    i = 0
+    while i < n {
+        ai = ""
+        bi = ""
+        if i < list.list_size(x) {
+            ai, _e = list.get_string(x, i)
+        }
+        if i < list.list_size(y) {
+            bi, _e2 = list.get_string(y, i)
+        }
+        c = item_cmp_(ai, bi)
+        if c != 0 { return c }
+        i = i + 1
+    }
+    return 0
+}
+
+// 1 when version `v` lies in `range` (a range, or one version: equal).
+range_contains(range: string, v: string) -> int {
+    if is_range(range) == 0 { return if compare(range, v) == 0 { 1 } else { 0 } }
+    n = string.length(range)
+    lo_incl = string.starts_with(range, "[") == 1
+    hi_incl = string.char_at(range, n - 1) == 93
+    inner = string.substring(range, 1, n - 1)
+    comma = string.index_of(inner, ",")
+    if comma < 0 { return if compare(string.trim(inner), v) == 0 { 1 } else { 0 } }
+    lo = string.trim(string.substring(inner, 0, comma))
+    hi = string.trim(string.substring(inner, comma + 1, string.length(inner)))
+    if lo != "" {
+        c = compare(v, lo)
+        if c < 0 || (c == 0 && !lo_incl) { return 0 }
+    }
+    if hi != "" {
+        c2 = compare(v, hi)
+        if c2 > 0 || (c2 == 0 && !hi_incl) { return 0 }
+    }
+    return 1
+}
+
+// The newest of `versions` (a list) in `range` whose age (`ages`: a list of
+// ints as strings, days, -1 unknown, in the same order) is at least
+// `min_days`: (version, newest in range, ""), or ("", newest in range, why).
+newest_old_enough(versions: ptr, ages: ptr, range: string, min_days: int) -> (string, string, string) {
+    best = ""
+    newest = ""
+    i = 0
+    while i < list.list_size(versions) {
+        v, _e = list.get_string(versions, i)
+        if range_contains(range, v) == 1 && string.ends_with(v, "-SNAPSHOT") == 0 {
+            if newest == "" || compare(v, newest) > 0 { newest = v }
+            a, _e2 = list.get_string(ages, i)
+            days, _pe = string.to_int(a)
+            if days >= min_days && (best == "" || compare(v, best) > 0) { best = v }
+        }
+        i = i + 1
+    }
+    if newest == "" { return "", "", "no version in ${range}" }
+    if best == "" { return "", newest, "no version in ${range} was published ${min_days} days ago or more" }
+    return best, newest, ""
+}
+
+// ---- dates ------------------------------------------------------------
+
+month_(m: string) -> int {
+    names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    for i in 0..12 {
+        if names[i] == m { return i + 1 }
+    }
+    return 0
+}
+
+// An HTTP date ("Sun, 06 Nov 1994 08:49:37 GMT", RFC 9110's preferred form)
+// as Unix seconds, or -1.
+http_date(s: string) -> long {
+    parts = string.split(string.trim(s), " ")
+    if string.array_size(parts) != 6 {
+        string.array_free(parts)
+        return -1 as long
+    }
+    day, de = string.to_int(string.array_get(parts, 1))
+    mon = month_(string.array_get(parts, 2))
+    year, ye = string.to_int(string.array_get(parts, 3))
+    hms = string.split(string.array_get(parts, 4), ":")
+    zone = string.copy(string.array_get(parts, 5))
+    string.array_free(parts)
+    if string.array_size(hms) != 3 || de != "" || ye != "" || mon == 0 || zone != "GMT" {
+        string.array_free(hms)
+        return -1 as long
+    }
+    h, he = string.to_int(string.array_get(hms, 0))
+    mi, me = string.to_int(string.array_get(hms, 1))
+    se, see = string.to_int(string.array_get(hms, 2))
+    string.array_free(hms)
+    if he != "" || me != "" || see != "" { return -1 as long }
+    if day < 1 || day > 31 || h > 23 || mi > 59 || se > 60 || year < 1970 { return -1 as long }
+    return time.to_unix(time.from_civil(year, mon, day, h, mi, se))
+}
+
+// Whole days from `published` to `now` (Unix seconds); -1 when unknown.
+age_days(published: long, now: long) -> int {
+    if published < (0 as long) { return -1 }
+    if now <= published { return 0 }
+    return ((now - published) / (DAY as long)) as int
+}

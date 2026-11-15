@@ -1,0 +1,404 @@
+#!/usr/bin/env python3
+"""naeb's experimental Maven broker (docs/naeb/adr/0001, "The Maven broker").
+
+Runs the built naeb (NAEB) in a fixture HOME (absolute fake paths under
+target/redteam) whose project has the fixture pom.xml and a naeb.ae with
+policy.maven_broker, built by `naeb build -y` against this checkout. The
+repository is ae/tests/maven_fixture/repo served on 127.0.0.1 (serve.py)
+with fixture Last-Modified dates; the keyring is the fixture's trusted
+keys; a second fixture repository, which naeb.ae does not allow, is served
+too and must never be asked. `naeb js` drives tools.maven_fetch directly
+(no model); the TUI case runs on a pty with upstream's mock provider
+(tests/test_interjections.py), and `ask --json` with the same mock. No real
+~/.m2, home, host, key or provider is touched.
+
+    NAEB=target/build/bin/naeb python3 -I ae/tests/redteam/maven_broker.py [case ...]
+
+Prints `ok   <case>` or `FAIL <case> ...`; the exit status is the number of
+failures.
+"""
+import atexit
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "tests"))
+sys.path.insert(0, str(ROOT / "ae" / "tests" / "maven_fixture"))
+import test_interjections as tui  # noqa: E402
+from test_interjections import Mock, Reply, Terminal, screen  # noqa: E402
+from serve import Repo  # noqa: E402
+
+NAEB = Path(os.environ.get("NAEB", ROOT / "target/build/bin/naeb"))
+tui.BIN = NAEB
+FIXTURE = ROOT / "ae" / "tests" / "maven_fixture"
+FX = "invalid/naeb/fx"
+G = "invalid.naeb.fx"
+AGES = {FX + "/lib-young/": 2, FX + "/lib-range/1.9/": 2}
+
+fails = 0
+
+
+def check(name, held, why=""):
+    global fails
+    if held:
+        print("ok   %s" % name)
+    else:
+        fails += 1
+        print("FAIL %s %s" % (name, why))
+
+
+def wait(fn, what, timeout=180):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        v = fn()
+        if v:
+            return v
+        time.sleep(.05)
+    raise AssertionError("timed out: " + what)
+
+
+class Case:
+    """A fixture HOME with the fixture project and a built naeb.ae."""
+
+    def __init__(self, work, name, repo, other, policy_extra="", keyring="~/.naeb/maven/trusted.asc"):
+        self.home = os.path.realpath(os.path.join(work, name, "home"))
+        self.nib_home = os.path.join(self.home, ".nib")
+        self.project = os.path.join(self.home, "proj")
+        self.m2 = os.path.join(self.home, ".m2", "repository")
+        os.makedirs(os.path.join(self.project, ".git"))
+        os.makedirs(self.nib_home)
+        os.makedirs(os.path.join(self.home, ".naeb", "maven"))
+        shutil.copy(FIXTURE / "keys" / "trusted.asc", os.path.join(self.home, ".naeb", "maven", "trusted.asc"))
+        with open(FIXTURE / "project" / "pom.xml") as f:
+            pom = f.read().replace("@OTHER@", other.url)
+        with open(os.path.join(self.project, "pom.xml"), "w") as f:
+            f.write(pom)
+        self.marker = os.path.join(self.home, "extension-ran")
+        self.policy = os.path.join(self.project, "naeb.ae")
+        with open(self.policy, "w") as f:
+            f.write("import naeb.policy\nimport naeb_templates.maven\n\nfence(p: ptr) {\n"
+                    "    maven.apply(p)\n"
+                    "    policy.maven_broker(p)\n"
+                    "    policy.maven_repository(p, \"%s\")\n"
+                    "    policy.maven_keyring(p, \"%s\")\n%s}\n" % (repo.url, keyring, policy_extra))
+        self.env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": self.home,
+            "NIB_HOME": self.nib_home,
+            "NAEB_SRC": str(ROOT),
+            "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
+            "LANG": "C.UTF-8",
+            "TERM": "xterm-256color",
+            "NIB_PROVIDER": "chat_completions",
+            "NIB_API_KEY": "mock",
+            "NAEB_FX_MARKER": self.marker,
+        }
+        self.built = subprocess.run([str(NAEB), "build", "-y"], cwd=self.project, env=self.env, capture_output=True, text=True, timeout=600)
+
+    def js(self, code, timeout=300):
+        r = subprocess.run([str(NAEB), "js", code], cwd=self.project, env=self.env, capture_output=True, text=True, timeout=timeout,
+                           stdin=subprocess.DEVNULL)
+        out = r.stdout.strip()
+        try:
+            v = json.loads(out)
+        except ValueError:
+            return r, None
+        if isinstance(v, str) and v[:1] in ("{", "["):
+            v = json.loads(v)
+        return r, v
+
+    def fetch(self, *gavs):
+        r, v = self.js("JSON.stringify(await tools.maven_fetch({gavs: %s}))" % json.dumps(list(gavs)))
+        if v is None:
+            raise AssertionError("maven_fetch gave no JSON: %r %r" % (r.stdout[-800:], r.stderr[-800:]))
+        return v
+
+    def files(self, artifact=None):
+        base = os.path.join(self.m2, *FX.split("/"))
+        if artifact:
+            base = os.path.join(base, artifact)
+        out = []
+        for d, _dirs, names in os.walk(base):
+            out += [os.path.relpath(os.path.join(d, n), self.m2) for n in names]
+        return sorted(out)
+
+    def records(self, member):
+        d = os.path.join(self.nib_home, "sessions")
+        out = []
+        if not os.path.isdir(d):
+            return out
+        for name in sorted(os.listdir(d)):
+            if not name.endswith(".jsonl"):
+                continue
+            for line in open(os.path.join(d, name), "rb").read().split(b"\n"):
+                if line.strip():
+                    rec = json.loads(line)
+                    if member in rec:
+                        out.append(rec[member])
+        return out
+
+
+def refused(v, gav):
+    return [r for r in v.get("refused", []) if r["gav"] == gav]
+
+
+def fetched(v):
+    return [f["gav"] for f in v.get("fetched", [])]
+
+
+def fetch_ok(c):
+    v = c.fetch(G + ":lib-a:1.0")
+    check("fetch-ok", v["ok"] and set(fetched(v)) == {G + ":lib-a:1.0", G + ":lib-b:1.0", G + ":parent:1.0"}, json.dumps(v)[:800])
+    got = c.files()
+    want = [FX + "/lib-a/1.0/lib-a-1.0.jar", FX + "/lib-a/1.0/lib-a-1.0.pom", FX + "/lib-b/1.0/lib-b-1.0.jar",
+            FX + "/lib-b/1.0/lib-b-1.0.pom", FX + "/parent/1.0/parent-1.0.pom"]
+    check("fetch-writes-closure", got == want, repr(got))
+    same = all(open(os.path.join(c.m2, p), "rb").read() == open(FIXTURE / "repo" / p, "rb").read() for p in want)
+    check("fetch-bytes-intact", same, "a written file differs from the repository's")
+    sigs = {f["gav"]: f["signature"] for f in v["fetched"]}
+    check("fetch-signatures", sigs[G + ":lib-a:1.0"].startswith("good ") and sigs[G + ":lib-b:1.0"].startswith("good "), repr(sigs))
+    check("fetch-test-scope-skipped", not c.files("lib-test-only"), repr(c.files("lib-test-only")))
+    again = c.fetch(G + ":lib-a:1.0")
+    check("fetch-again-present", again["ok"] and not again["fetched"] and G + ":lib-a:1.0" in again["present"], json.dumps(again)[:400])
+
+
+def young(c):
+    v = c.fetch(G + ":lib-young:2.0")
+    r = refused(v, G + ":lib-young:2.0")
+    check("young-refused", not v["ok"] and r and "too young" in r[0]["reason"] and r[0]["young"] == [{"gav": G + ":lib-young:2.0", "age_days": 2}],
+          json.dumps(v)[:600])
+    check("young-denied-record", any(d.get("op") == "maven_age" for d in v.get("fence_denied", [])), json.dumps(v)[:600])
+    check("young-nothing-written", not c.files("lib-young"), repr(c.files("lib-young")))
+
+
+def range_by_age(c):
+    v = c.fetch(G + ":lib-range:[1.0,2.0)")
+    check("range-picks-newest-old-enough", v["ok"] and fetched(v) == [G + ":lib-range:1.5"], json.dumps(v)[:600])
+
+
+def unknown_repo(c, other):
+    before = len(other.hits)
+    v = c.fetch(G + ":lib-elsewhere:1.0")
+    r = refused(v, G + ":lib-elsewhere:1.0")
+    check("unknown-repo-refused", r and "not found in the allowed repositories" in r[0]["reason"] and other.url in r[0]["reason"]
+          and "policy.maven_repository" in r[0]["reason"], json.dumps(v)[:600])
+    check("unknown-repo-never-asked", len(other.hits) == before == 0, repr(other.hits))
+    check("unknown-repo-nothing-written", not c.files("lib-elsewhere"), repr(c.files("lib-elsewhere")))
+
+
+def not_in_poms(c, repo):
+    v = c.fetch(G + ":lib-unreached:1.0", G + ":lib-a:9.9")
+    r = refused(v, G + ":lib-unreached:1.0")
+    r2 = refused(v, G + ":lib-a:9.9")
+    check("not-in-poms-refused", r and "not reachable from the project's POMs" in r[0]["reason"] and r2 and "not reachable" in r2[0]["reason"],
+          json.dumps(v)[:600])
+    check("not-in-poms-never-asked", not [h for h in repo.hits if "lib-unreached" in h or "/9.9/" in h], repr([h for h in repo.hits if "unreached" in h]))
+    check("not-in-poms-nothing-written", not c.files("lib-unreached"), repr(c.files("lib-unreached")))
+
+
+def bad_checksum(c):
+    v = c.fetch(G + ":lib-badsum:1.0")
+    r = refused(v, G + ":lib-badsum:1.0")
+    check("bad-checksum-refused", r and "checksum mismatch" in r[0]["reason"], json.dumps(v)[:600])
+    check("bad-checksum-nothing-written", not c.files("lib-badsum"), repr(c.files("lib-badsum")))
+
+
+def bad_signature(c):
+    v = c.fetch(G + ":lib-badsig:1.0")
+    r = refused(v, G + ":lib-badsig:1.0")
+    check("bad-signature-refused", r and "bad signature" in r[0]["reason"], json.dumps(v)[:600])
+    check("bad-signature-nothing-written", not c.files("lib-badsig"), repr(c.files("lib-badsig")))
+
+
+def unknown_key(c):
+    v = c.fetch(G + ":lib-unknownkey:1.0")
+    sig = [f["signature"] for f in v.get("fetched", [])]
+    check("unknown-key-recorded", v["ok"] and sig and sig[0].startswith("unknown key "), json.dumps(v)[:600])
+
+
+def offline_build(c):
+    r, v = c.js("const b = await tools.bash({command: 'echo \"args=$MAVEN_ARGS\"; mkdir -p ~/.m2/repository/invalid; touch ~/.m2/repository/planted 2>&1; echo touch=$?; ls ~/.m2/repository'}); b.output")
+    out = v if isinstance(v, str) else r.stdout
+    check("offline-maven-args", "args=--offline" in out, out[-400:])
+    check("offline-cannot-write-m2", "touch=0" not in out and not os.path.exists(os.path.join(c.m2, "planted")), out[-400:])
+    r2, v2 = c.js("JSON.stringify((await tools.fence()).maven)")
+    check("offline-fence-shows-broker", isinstance(v2, dict) and v2.get("broker") is True and v2.get("min_age_days") == 7, r2.stdout[-400:])
+    r3, v3 = c.js("await tools.write({path: %s, content: 'x'}).then(() => 'wrote', e => 'refused')" % json.dumps(os.path.join(c.m2, "tool-planted"))
+                  )
+    check("offline-tool-cannot-write-m2", v3 == "refused" and not os.path.exists(os.path.join(c.m2, "tool-planted")), r3.stdout[-300:])
+
+
+def symlinks(c):
+    elsewhere = os.path.join(c.home, "elsewhere")
+    os.makedirs(elsewhere)
+    os.makedirs(os.path.join(c.m2, *FX.split("/")), exist_ok=True)
+    os.symlink(elsewhere, os.path.join(c.m2, *FX.split("/"), "lib-managed"))
+    v = c.fetch(G + ":lib-managed:1.3")
+    r = refused(v, G + ":lib-managed:1.3")
+    check("symlink-dir-refused", r and "not written" in r[0]["reason"], json.dumps(v)[:600])
+    check("symlink-dir-not-redirected", os.listdir(elsewhere) == [], repr(os.listdir(elsewhere)))
+    leaf_target = os.path.join(c.home, "leaf-target")
+    with open(leaf_target, "w") as f:
+        f.write("original\n")
+    d = os.path.join(c.m2, *FX.split("/"), "lib-unknownkey", "1.0")
+    os.makedirs(d)
+    os.symlink(leaf_target, os.path.join(d, "lib-unknownkey-1.0.jar"))
+    v2 = c.fetch(G + ":lib-unknownkey:1.0")
+    r2 = refused(v2, G + ":lib-unknownkey:1.0")
+    check("symlink-leaf-refused", r2 and "not a regular file" in r2[0]["reason"], json.dumps(v2)[:600])
+    check("symlink-leaf-not-written-through", open(leaf_target).read() == "original\n" and os.path.islink(os.path.join(d, "lib-unknownkey-1.0.jar")),
+          open(leaf_target).read())
+
+
+def extension(c):
+    v = c.fetch(G + ":fx-maven-plugin:1.0")
+    check("extension-fetched", v["ok"] and fetched(v) == [G + ":fx-maven-plugin:1.0"], json.dumps(v)[:400])
+    check("extension-never-run", not os.path.exists(c.marker), "the marker exists")
+
+
+def keyring_in_root(work, repo, other):
+    c = Case(work, "keyring", repo, other, keyring="~/proj/keys.asc")
+    shutil.copy(FIXTURE / "keys" / "trusted.asc", os.path.join(c.project, "keys.asc"))
+    r = subprocess.run([str(NAEB), "js", "1"], cwd=c.project, env=c.env, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
+    check("keyring-in-root-refused", r.returncode == 2 and "Maven keyring" in r.stderr, "exit %d %r" % (r.returncode, r.stderr[-300:]))
+
+
+def tui_override(work, repo, other):
+    c = Case(work, "tui", repo, other)
+    code = "const r = await tools.maven_fetch({gavs: [%s]}); JSON.stringify(r.refused)" % json.dumps(G + ":lib-young:2.0")
+    replies = [Reply("r1", code=code), Reply("first done")]
+    mock = Mock(replies)
+    th = threading.Thread(target=mock.serve_forever, daemon=True)
+    th.start()
+    c.env["NIB_BASE_URL"] = "http://127.0.0.1:%d" % mock.server_port
+    t = Terminal(c.project, c.env)
+
+    def shown():
+        return "\n".join(screen(t.read(), 120, 32))
+    try:
+        t.send("build it\r")
+        wait(lambda: "[y/N]" in shown(), "the prompt\n" + shown())
+        s = shown()
+        check("tui-prompt", "Maven broker refused %s:lib-young:2.0" % G in s and "published 2 days ago" in s and "Fetch it anyway" in s, s)
+        check("tui-nothing-before-y", not c.files("lib-young"), repr(c.files("lib-young")))
+        t.send("y")
+        wait(lambda: "approved by you" in shown() or "nothing fetched" in shown(), "the fetch\n" + shown())
+        check("tui-y-fetched", "Maven broker fetched %s:lib-young:2.0 · approved by you" % G in shown() and c.files("lib-young"), shown())
+        log = c.records("maven_fetch")
+        ov = [r for r in log if r.get("gav") == G + ":lib-young:2.0"]
+        check("tui-log", ov and ov[0]["override"] is True and ov[0]["age_days"] == 2 and ov[0]["files"] and ov[0]["signature"].startswith("good ")
+              and any(r.get("ok") is False and "too young" in r.get("reason", "") for r in log), json.dumps(log)[:800])
+        t.send("/fence\r")
+        wait(lambda: "Maven fetched:" in shown(), "/fence\n" + shown(), 30)
+        s2 = shown()
+        check("tui-fence-shows", "Maven broker: on" in s2 and "lib-young:2.0" in s2 and "override" in s2, s2)
+    finally:
+        try:
+            t.close()
+        finally:
+            for r in replies:
+                r.release.set()
+            mock.shutdown()
+            th.join()
+
+
+def tui_decline(work, repo, other):
+    c = Case(work, "tui-n", repo, other)
+    code = "const r = await tools.maven_fetch({gavs: [%s]}); JSON.stringify(r.refused)" % json.dumps(G + ":lib-young:2.0")
+    replies = [Reply("r1", code=code), Reply("first done")]
+    mock = Mock(replies)
+    th = threading.Thread(target=mock.serve_forever, daemon=True)
+    th.start()
+    c.env["NIB_BASE_URL"] = "http://127.0.0.1:%d" % mock.server_port
+    t = Terminal(c.project, c.env)
+
+    def shown():
+        return "\n".join(screen(t.read(), 120, 32))
+    try:
+        t.send("build it\r")
+        wait(lambda: "[y/N]" in shown(), "the prompt\n" + shown())
+        t.send("n")
+        wait(lambda: "[y/N] n" in shown(), "the answer\n" + shown())
+        time.sleep(1)
+        check("tui-n-nothing-written", not c.files("lib-young") and "approved by you" not in shown(), shown())
+    finally:
+        try:
+            t.close()
+        finally:
+            for r in replies:
+                r.release.set()
+            mock.shutdown()
+            th.join()
+
+
+def ask_json(work, repo, other):
+    c = Case(work, "ask", repo, other)
+    code = "const r = await tools.maven_fetch({gavs: [%s]}); JSON.stringify(r.refused)" % json.dumps(G + ":lib-young:2.0")
+    replies = [Reply("r1", code=code), Reply("done")]
+    mock = Mock(replies)
+    th = threading.Thread(target=mock.serve_forever, daemon=True)
+    th.start()
+    try:
+        env = dict(c.env, NIB_BASE_URL="http://127.0.0.1:%d" % mock.server_port)
+        r = subprocess.run([str(NAEB), "ask", "--json", "build it"], cwd=c.project, env=env, capture_output=True, text=True, timeout=300,
+                           stdin=subprocess.DEVNULL)
+        check("ask-reports", r.returncode == 0 and "maven_age" in r.stdout and "too young" in r.stdout, (r.stdout + r.stderr)[-800:])
+        check("ask-never-asks", "[y/N]" not in r.stdout + r.stderr and not c.files("lib-young"), (r.stdout + r.stderr)[-300:])
+        log = c.records("maven_fetch")
+        check("ask-logged", any(x.get("ok") is False and "too young" in x.get("reason", "") for x in log), json.dumps(log)[:400])
+    finally:
+        mock.shutdown()
+        th.join()
+
+
+def main():
+    os.chdir(ROOT / "tests")
+    scratch = ROOT / "target" / "redteam"
+    scratch.mkdir(parents=True, exist_ok=True)
+    work = tempfile.mkdtemp(prefix="maven-", dir=scratch)
+    atexit.register(shutil.rmtree, work, True)
+    repo = Repo(FIXTURE / "repo", AGES)
+    other = Repo(FIXTURE / "repo-other")
+    only = sys.argv[1:]
+    js_cases = [fetch_ok, young, range_by_age, unknown_repo, not_in_poms, bad_checksum, bad_signature, unknown_key, offline_build, symlinks, extension]
+    shared = None
+    for case in js_cases:
+        if only and case.__name__ not in only:
+            continue
+        try:
+            if shared is None:
+                shared = Case(work, "js", repo, other)
+                if shared.built.returncode != 0:
+                    raise AssertionError("naeb build: %s %s" % (shared.built.stdout[-500:], shared.built.stderr[-500:]))
+            c = shared
+            if case is symlinks:
+                c = Case(work, "symlinks", repo, other)
+            if case is unknown_repo:
+                case(c, other)
+            elif case is not_in_poms:
+                case(c, repo)
+            else:
+                case(c)
+        except Exception as e:  # a broken fixture fails its case, not the run
+            check(case.__name__, False, "%s: %s" % (type(e).__name__, str(e)[-1500:]))
+    for case in (keyring_in_root, tui_override, tui_decline, ask_json):
+        if only and case.__name__ not in only:
+            continue
+        try:
+            case(work, repo, other)
+        except Exception as e:
+            check(case.__name__, False, "%s: %s" % (type(e).__name__, str(e)[-1500:]))
+    repo.close()
+    other.close()
+    return fails
+
+
+if __name__ == "__main__":
+    sys.exit(main())

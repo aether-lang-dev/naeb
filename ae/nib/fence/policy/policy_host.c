@@ -15,7 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define NAEB_POLICY_INTERFACE 1
+#define NAEB_POLICY_INTERFACE 2
 
 enum {
     NAEB_OP_ALLOW_READ = 1,
@@ -26,7 +26,8 @@ enum {
     NAEB_OP_PASS_ENV,
     NAEB_OP_SET_ENV,
     NAEB_OP_ALLOW_LOOPBACK,
-    NAEB_OP_OPEN_HOME
+    NAEB_OP_OPEN_HOME,
+    NAEB_OP_SETTING
 };
 
 struct naeb_op {
@@ -61,6 +62,9 @@ struct naeb_fence_api {
     const char *(*home)(void *fence);
     const char *(*project_root)(void *fence);
     const char *(*platform)(void *fence);
+    /* version 2: a named setting naeb applies or refuses (unknown names stop
+       the policy from loading), e.g. "maven.broker". */
+    void (*setting)(void *fence, const char *name, const char *value);
 };
 
 static char *dup_(const char *s) { return strdup(s ? s : ""); }
@@ -97,6 +101,7 @@ static void pass_env_(void *f, const char *n) { push_(f, NAEB_OP_PASS_ENV, n, NU
 static void set_env_(void *f, const char *n, const char *v) { push_(f, NAEB_OP_SET_ENV, n, v, 0, 2); }
 static void allow_loopback_(void *f) { push_(f, NAEB_OP_ALLOW_LOOPBACK, NULL, NULL, 0, 0); }
 static void open_home_(void *f) { push_(f, NAEB_OP_OPEN_HOME, NULL, NULL, 0, 0); }
+static void setting_(void *f, const char *n, const char *v) { push_(f, NAEB_OP_SETTING, n, v, 0, 2); }
 static const char *home_(void *f) { return ((struct naeb_policy_ctx *)f)->home; }
 static const char *project_root_(void *f) { return ((struct naeb_policy_ctx *)f)->project; }
 static const char *platform_(void *f) { return ((struct naeb_policy_ctx *)f)->platform; }
@@ -106,6 +111,7 @@ static const struct naeb_fence_api NAEB_FENCE_API = {
     allow_read_, deny_read_, allow_write_, deny_write_, allow_host_,
     pass_env_, set_env_, allow_loopback_, open_home_,
     home_, project_root_, platform_,
+    setting_,
 };
 
 int naeb_policy_interface(void) { return NAEB_POLICY_INTERFACE; }

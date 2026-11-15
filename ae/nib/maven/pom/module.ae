@@ -1,0 +1,258 @@
+// maven.pom: what naeb's Maven broker reads from a POM, as data
+// (docs/naeb/adr/0001, "The Maven broker"). A POM is only ever parsed
+// here, never built: no plugin, extension or build script of it runs.
+//
+// parse(text) collects the coordinates, the parent, properties, modules,
+// repositories, dependencies (profiles' included), dependency management,
+// build plugins (with their own dependencies) and build extensions.
+// Exclusions are skipped. Values are not interpolated here; interpolate
+// does that with the properties the caller merged down the parent chain.
+// metadata_versions reads a maven-metadata.xml's <versions>.
+
+import std.list
+import std.string
+import std.xml
+
+exports(Pom, Dep, parse, interpolate, metadata_versions, prop_get)
+
+struct Dep {
+    group: string
+    artifact: string
+    version: string
+    type: string
+    classifier: string
+    scope: string
+    optional: string
+    deps: ptr          // a plugin's own <dependencies> (list of *Dep); null otherwise
+}
+
+struct Pom {
+    group: string
+    artifact: string
+    version: string
+    packaging: string
+    parent: ptr        // *Dep (group, artifact, version), or null
+    props: ptr         // list of "name=value"
+    modules: ptr       // list of strings
+    repos: ptr         // list of repository URLs (<repository> and <pluginRepository>)
+    deps: ptr          // list of *Dep
+    managed: ptr       // list of *Dep (dependencyManagement)
+    plugins: ptr       // list of *Dep (build plugins and pluginManagement), deps filled
+    extensions: ptr    // list of *Dep
+    error: string
+}
+
+new_dep_() -> *Dep {
+    d = heap.new(Dep)
+    d.group = ""
+    d.artifact = ""
+    d.version = ""
+    d.type = ""
+    d.classifier = ""
+    d.scope = ""
+    d.optional = ""
+    d.deps = null
+    return d
+}
+
+new_pom_() -> *Pom {
+    p = heap.new(Pom)
+    p.group = ""
+    p.artifact = ""
+    p.version = ""
+    p.packaging = "jar"
+    p.parent = null
+    p.props = list.list_new()
+    p.modules = list.list_new()
+    p.repos = list.list_new()
+    p.deps = list.list_new()
+    p.managed = list.list_new()
+    p.plugins = list.list_new()
+    p.extensions = list.list_new()
+    p.error = ""
+    return p
+}
+
+in_(stack: ptr, name: string) -> int {
+    i = 0
+    while i < list.list_size(stack) {
+        s, _e = list.get_string(stack, i)
+        if s == name { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+at_(stack: ptr, from_top: int) -> string {
+    n = list.list_size(stack)
+    if n - 1 - from_top < 0 { return "" }
+    s, _e = list.get_string(stack, n - 1 - from_top)
+    return s
+}
+
+set_field_(d: *Dep, name: string, value: string) {
+    if name == "groupId" { d.group = value }
+    if name == "artifactId" { d.artifact = value }
+    if name == "version" { d.version = value }
+    if name == "type" { d.type = value }
+    if name == "classifier" { d.classifier = value }
+    if name == "scope" { d.scope = value }
+    if name == "optional" { d.optional = value }
+}
+
+// The POM as data; on malformed XML, a Pom whose error is set.
+parse(text: string) -> *Pom {
+    p = new_pom_()
+    x = xml.parser(text)
+    stack = list.list_new()
+    dep = new_dep_()
+    plugin = new_dep_()
+    ext = new_dep_()
+    parent = new_dep_()
+    has_parent = 0
+    buf = ""
+    while true {
+        ev = xml.next(x)
+        if ev == xml.EVENT_EOF { break }
+        if ev == xml.EVENT_ERROR {
+            p.error = string.copy(xml.error(x))
+            break
+        }
+        if ev == xml.EVENT_START {
+            name = string.copy(xml.name(x))
+            list.list_add(stack, name)
+            buf = ""
+            if name == "dependency" { dep = new_dep_() }
+            if name == "plugin" {
+                plugin = new_dep_()
+                plugin.deps = list.list_new()
+            }
+            if name == "extension" { ext = new_dep_() }
+        }
+        if ev == xml.EVENT_TEXT { buf = "${buf}${xml.text(x)}" }
+        if ev == xml.EVENT_END {
+            name = at_(stack, 0)
+            up = at_(stack, 1)
+            depth = list.list_size(stack)
+            value = string.trim(buf)
+            buf = ""
+            if up == "dependency" && in_(stack, "exclusion") == 0 { set_field_(dep, name, value) }
+            if up == "plugin" { set_field_(plugin, name, value) }
+            if up == "extension" { set_field_(ext, name, value) }
+            if up == "parent" && depth == 3 {
+                set_field_(parent, name, value)
+                has_parent = 1
+            }
+            if up == "project" && depth == 2 {
+                if name == "groupId" { p.group = value }
+                if name == "artifactId" { p.artifact = value }
+                if name == "version" { p.version = value }
+                if name == "packaging" { p.packaging = value }
+            }
+            if up == "properties" && depth >= 3 { list.list_add(p.props, "${name}=${value}") }
+            if name == "module" && up == "modules" { list.list_add(p.modules, value) }
+            if name == "url" && (up == "repository" || up == "pluginRepository") && in_(stack, "distributionManagement") == 0 { list.list_add(p.repos, value) }
+            if name == "dependency" {
+                if in_(stack, "dependencyManagement") == 1 {
+                    list.list_add(p.managed, dep as ptr)
+                } else if in_(stack, "plugin") == 1 {
+                    list.list_add(plugin.deps, dep as ptr)
+                } else {
+                    list.list_add(p.deps, dep as ptr)
+                }
+                dep = new_dep_()
+            }
+            if name == "plugin" && (up == "plugins") {
+                if plugin.group == "" { plugin.group = "org.apache.maven.plugins" }
+                list.list_add(p.plugins, plugin as ptr)
+                plugin = new_dep_()
+                plugin.deps = list.list_new()
+            }
+            if name == "extension" && up == "extensions" {
+                list.list_add(p.extensions, ext as ptr)
+                ext = new_dep_()
+            }
+            list.list_remove(stack, list.list_size(stack) - 1)
+        }
+    }
+    xml.free(x)
+    if has_parent == 1 { p.parent = parent as ptr }
+    if p.error == "" && p.artifact == "" { p.error = "no artifactId: not a POM" }
+    return p
+}
+
+// The value of property `name` in `props` (a list of "name=value", later
+// entries win), or (".", 0) when absent.
+prop_get(props: ptr, name: string) -> (string, int) {
+    i = list.list_size(props) - 1
+    while i >= 0 {
+        e, _g = list.get_string(props, i)
+        eq = string.index_of(e, "=")
+        if eq > 0 && string.substring(e, 0, eq) == name { return string.substring(e, eq + 1, string.length(e)), 1 }
+        i = i - 1
+    }
+    return "", 0
+}
+
+// `text` with ${name} replaced from `props` (repeatedly, for a property
+// naming another, at most 10 rounds); an unknown name stays as written.
+interpolate(text: string, props: ptr) -> string {
+    out = text
+    round = 0
+    while round < 10 && string.contains(out, "\${") == 1 {
+        changed = 0
+        res = ""
+        i = 0
+        n = string.length(out)
+        while i < n {
+            at = string.index_of_from(out, "\${", i)
+            if at < 0 {
+                res = "${res}${string.substring(out, i, n)}"
+                break
+            }
+            close = string.index_of_from(out, "}", at)
+            if close < 0 {
+                res = "${res}${string.substring(out, i, n)}"
+                break
+            }
+            res = "${res}${string.substring(out, i, at)}"
+            name = string.substring(out, at + 2, close)
+            v, found = prop_get(props, name)
+            if found == 1 {
+                res = "${res}${v}"
+                changed = 1
+            } else {
+                res = "${res}${string.substring(out, at, close + 1)}"
+            }
+            i = close + 1
+        }
+        out = res
+        if changed == 0 { break }
+        round = round + 1
+    }
+    return out
+}
+
+// The <version>s of a maven-metadata.xml, in document order.
+metadata_versions(text: string) -> ptr {
+    out = list.list_new()
+    x = xml.parser(text)
+    stack = list.list_new()
+    buf = ""
+    while true {
+        ev = xml.next(x)
+        if ev == xml.EVENT_EOF || ev == xml.EVENT_ERROR { break }
+        if ev == xml.EVENT_START {
+            list.list_add(stack, string.copy(xml.name(x)))
+            buf = ""
+        }
+        if ev == xml.EVENT_TEXT { buf = "${buf}${xml.text(x)}" }
+        if ev == xml.EVENT_END {
+            if at_(stack, 0) == "version" && at_(stack, 1) == "versions" { list.list_add(out, string.trim(buf)) }
+            buf = ""
+            list.list_remove(stack, list.list_size(stack) - 1)
+        }
+    }
+    xml.free(x)
+    return out
+}

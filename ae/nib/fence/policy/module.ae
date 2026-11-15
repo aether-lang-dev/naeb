@@ -122,6 +122,13 @@ load(f: ptr, lib: string, home: string, project: string) -> string {
     while i < n {
         k = naeb_policy_op_kind(ctx, i)
         a = naeb_policy_op_a(ctx, i)
+        if k == 10 {
+            serr = fence.setting(f, a, naeb_policy_op_b(ctx, i))
+            if serr != "" {
+                naeb_policy_free(ctx)
+                return serr
+            }
+        }
         match k {
             1 -> { fence.allow_read(f, a) }
             2 -> { fence.deny_read(f, a) }
@@ -194,7 +201,13 @@ fill_(f: ptr, cwd: string, env: ptr, home: string, project: string, dir: string,
     if before != "" { return before }
     lerr = load(f, lib, home, project)
     if lerr != "" { return lerr }
-    return outside_roots_(f, cwd, env, dir, "the policy library's directory")
+    after = outside_roots_(f, cwd, env, dir, "the policy library's directory")
+    if after != "" { return after }
+    ring = fence.maven_keyring(f)
+    if ring != "" && outside_roots_(f, cwd, env, ring, "the Maven keyring") != "" {
+        return "the Maven keyring ${ring} lies inside a root the project fence lets commands write; keep it outside them (a fenced command could add its own key)"
+    }
+    return ""
 }
 
 // What approve did: the new Fence, or the error (with the compiler's

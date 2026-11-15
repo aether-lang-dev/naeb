@@ -242,6 +242,7 @@ refresh_of(kind: string) -> int {
         "flow" -> { return frames.REFRESH_IMMEDIATE }
         "prediction" -> { return frames.REFRESH_IMMEDIATE }
         "fence_applied" -> { return frames.REFRESH_IMMEDIATE }
+        "maven_fetched" -> { return frames.REFRESH_IMMEDIATE }
         _ -> { return frames.REFRESH_CONTENT }
     }
 }
@@ -854,7 +855,11 @@ fence_key_(a: *App, k: input.Key) -> bool {
     o.entry = -1
     if ans == fence_offer.ANSWER_YES {
         o.building = 1
-        call(a.p.fence_apply, a.p.ctx, o.proposal, a.q as ptr)
+        if o.kind == fence_offer.KIND_MAVEN {
+            call(a.p.maven_override, a.p.ctx, o.proposal, a.q as ptr)
+        } else {
+            call(a.p.fence_apply, a.p.ctx, o.proposal, a.q as ptr)
+        }
     } else {
         offer_fence_(a)
     }
@@ -882,17 +887,35 @@ offer_fence_(a: *App) {
     }
     string sid = call(a.p.session_id, a.p.ctx)
     fence_offer.reset(a.fence, sid)
+    if !fence_offer.has_policy(a.fence) {
+        young = fence_offer.take_young(a.fence)
+        if young == "" {
+            return
+        }
+        transcript.add(a.transcript, entry.KIND_FENCE, fence_offer.young_text(young))
+        a.fence.kind = fence_offer.KIND_MAVEN
+        a.fence.open = 1
+        a.fence.proposal = string.copy(young)
+        a.fence.entry = transcript.count(a.transcript) - 1
+        return
+    }
     records = fence_offer.take(a.fence)
     string prop = call(a.p.fence_propose, a.p.ctx, records)
     if prop == "" {
+        offer_fence_(a)
         return
     }
     transcript.add(a.transcript, entry.KIND_FENCE, fence_offer.text_of(prop))
     v = jsonx.parse(prop)
     if v != null && jsonx.has(v, "diff") == 1 {
+        a.fence.kind = fence_offer.KIND_POLICY
         a.fence.open = 1
         a.fence.proposal = string.copy(prop)
         a.fence.entry = transcript.count(a.transcript) - 1
+    } else {
+        jsonx.free(v)
+        offer_fence_(a)
+        return
     }
     jsonx.free(v)
 }
@@ -1179,6 +1202,12 @@ handle_app(a: *App, ev: string, data: ptr) -> bool {
             a.fence.building = 0
             text, ok = fence_offer.applied_text(jsonx.encode(body))
             transcript.add(a.transcript, if ok { entry.KIND_INFO } else { entry.KIND_ERR }, text)
+            offer_fence_(a)
+        }
+        "maven_fetched" -> {
+            a.fence.building = 0
+            mtext, mok = fence_offer.fetched_text(jsonx.encode(body))
+            transcript.add(a.transcript, if mok { entry.KIND_INFO } else { entry.KIND_ERR }, mtext)
             offer_fence_(a)
         }
         "turn_end" -> {
@@ -1664,7 +1693,7 @@ render(a: *App) {
         s.notice = a.notice
     }
     s.detail = activity_detail_(a)
-    s.hint = if provider_flow.flow_active(a.flow) != 0 { provider_flow.flow_hint(a.flow) } else if menu.is_pinned(a.menu) { "Choose a service" } else if a.fence.open != 0 { "Allow the naeb.ae change? [y/N]" } else if a.fence.building != 0 { "Rebuilding the policy" } else { "" }
+    s.hint = if provider_flow.flow_active(a.flow) != 0 { provider_flow.flow_hint(a.flow) } else if menu.is_pinned(a.menu) { "Choose a service" } else if a.fence.open != 0 && a.fence.kind == fence_offer.KIND_MAVEN { "Fetch the too-young Maven version? [y/N]" } else if a.fence.open != 0 { "Allow the naeb.ae change? [y/N]" } else if a.fence.building != 0 && a.fence.kind == fence_offer.KIND_MAVEN { "Fetching through the Maven broker" } else if a.fence.building != 0 { "Rebuilding the policy" } else { "" }
     s.signed_out = a.signed_out
     s.title = heading
     s.revision = a.transcript.revision as int
@@ -1870,7 +1899,36 @@ fence_text(fj: string) -> string {
     closed = if jsonx.bool_or(v, "home_open", 0) == 1 { "home open except secrets" } else { "home closed" }
     loop = if jsonx.bool_or(v, "loopback", 0) == 1 { "open" } else { "closed" }
     out = "${head}\nReads (${closed}): ${joined_(v, "reads", home, "none")}\nRead-denied: ${joined_(v, "read_denied", home, "none")}\nWrites: ${joined_(v, "writes", home, "none")}\nRead-only: ${joined_(v, "read_only", home, "none")}\nHosts: ${joined_(v, "hosts", home, "none")} · loopback ${loop}\nEnv passed: ${joined_(v, "env_passed", home, "none")}\nEnv set: ${joined_(v, "env_set", home, "none")}"
+    mv = jsonx.field(v, "maven")
+    if mv != null && jsonx.bool_or(mv, "broker", 0) == 1 {
+        kr = jsonx.str_or(mv, "keyring", "")
+        sig = if jsonx.bool_or(mv, "require_signatures", 0) == 1 { " · signatures required" } else { "" }
+        out = "${out}\nMaven broker: on (experimental) · ${tilde_(home, jsonx.str_or(mv, "repository", ""))} read-only to commands · from ${joined_(mv, "repositories", home, "none")} · minimum age ${jsonx.int_or(mv, "min_age_days", 0)} days · keyring ${if kr == "" { "none" } else { tilde_(home, kr) }}${sig}"
+        out = "${out}${maven_fetches_text_(jsonx.field(v, "maven_fetches"))}"
+    }
     jsonx.free(v)
+    return out
+}
+
+// The broker's records this Session, one line each.
+maven_fetches_text_(recs: ptr) -> string {
+    n = jsonx.array_size(recs)
+    if n == 0 { return "\nMaven fetched: nothing yet" }
+    out = "\nMaven fetched:"
+    i = 0
+    while i < n {
+        r = jsonx.array_at(recs, i)
+        if jsonx.has(r, "gav") == 1 {
+            files = jsonx.field(r, "files")
+            sha = ""
+            if jsonx.array_size(files) > 0 { sha = string.substring(jsonx.str_or(jsonx.array_at(files, 0), "sha256", ""), 0, 12) }
+            ov = if jsonx.bool_or(r, "override", 0) == 1 { " · override (approved)" } else { "" }
+            out = "${out}\n  ${jsonx.str_or(r, "gav", "")} · ${jsonx.str_or(r, "repo", "")} · sha256 ${sha}… · signature ${jsonx.str_or(r, "signature", "")} · ${jsonx.int_or(r, "age_days", -1)} days${ov}"
+        } else {
+            out = "${out}\n  refused ${jsonx.str_or(r, "requested", "")} · ${jsonx.str_or(r, "reason", "")}"
+        }
+        i = i + 1
+    }
     return out
 }
 

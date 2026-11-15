@@ -346,6 +346,10 @@ aeb(cap) {
             lib("ae")
         }
         aether.program_test() {
+            source("ae/tests/maven_test.ae")
+            lib("ae")
+        }
+        aether.program_test() {
             source("ae/tests/tui_fence_test.ae")
             lib("ae")
         }

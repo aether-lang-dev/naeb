@@ -174,6 +174,41 @@ Only your key does this: the model cannot write `naeb.ae` or answer the
 prompt. `naeb ask` and `naeb js` never ask; the refusals and their
 suggested lines are in their results.
 
+### Maven broker (experimental)
+
+With `policy.maven_broker(p)` in `naeb.ae`, fenced builds run offline
+(`MAVEN_ARGS=--offline`) against a `~/.m2/repository` they can read but
+never write, whatever else the policy allows. The model runs the build,
+collects what it missed from the errors and asks for it:
+`tools.maven_fetch({ gavs: ["g:a:v", ...] })`. naeb itself fetches it,
+outside the fence, without running Maven, mvnw, Gradle or a JVM: only
+coordinates reachable from the project's POMs, only from the repositories
+`naeb.ae` names, checksums checked, OpenPGP signatures verified against
+your keyring, versions at least `maven_min_age_days` old (default 7), each
+file written atomically into `~/.m2/repository`.
+
+```aether
+fence(p: ptr) {
+    maven.apply(p)
+    policy.maven_broker(p)
+    policy.maven_repository(p, "https://repo.maven.apache.org/maven2")
+    policy.maven_min_age_days(p, 7)
+    policy.maven_keyring(p, "~/.naeb/maven/trusted-keys.asc")
+}
+```
+
+A version too young is refused; in the TUI naeb asks once per coordinate:
+
+```text
+ Maven broker refused org.example:lib:2.0: naeb.ae asks for versions published 7 days ago or more
+     org.example:lib:2.0 · published 2 days ago
+ Fetch it anyway (this time, these versions only)? [y/N]
+```
+
+Every fetch and refusal is in the Session log (`maven_fetch`) and in
+`/fence`. Experimental: the details, limits and open questions are in
+[ADR 0001](docs/naeb/adr/0001-supply-chain-sandbox.md#the-maven-broker-experimental).
+
 ## A Run
 
 ```text

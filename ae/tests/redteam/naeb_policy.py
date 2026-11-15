@@ -132,13 +132,13 @@ def main():
     # Another interface: in the record, or in the library itself.
     saved = open(record).read()
     with open(record, "w") as f:
-        f.write(saved.replace("interface=1\n", "interface=0\n"))
+        f.write(saved.replace("interface=2\n", "interface=0\n"))
     r = naeb(a, "js", "1")
     check("interface-record-refused", r.returncode == 2 and "interface 0" in r.stderr and "naeb build" in r.stderr, "exit %d %r" % (r.returncode, r.stderr[-300:]))
     other = os.path.join(work, "other")
     os.makedirs(other)
     with open(os.path.join(other, "v2.ae"), "w") as f:
-        f.write("naeb_policy_interface() -> int { return 2 }\n\nnaeb_policy_v1(api: ptr, f: ptr) -> int { return 0 }\n")
+        f.write("naeb_policy_interface() -> int { return 99 }\n\nnaeb_policy_v1(api: ptr, f: ptr) -> int { return 0 }\n")
     c = subprocess.run(["ae", "build", "--emit=lib", "v2.ae", "-o", "v2lib"], cwd=other, env=env, capture_output=True, text=True, timeout=600)
     built = [n for n in os.listdir(other) if n.startswith("v2lib")]
     if c.returncode != 0 or not built:
@@ -149,7 +149,7 @@ def main():
         with open(record, "w") as f:
             f.write("\n".join("library_sha256=" + sha(lib) if l.startswith("library_sha256=") else l for l in saved.split("\n")))
         r = naeb(a, "js", "1")
-        check("interface-library-refused", r.returncode == 2 and "built for interface 2" in r.stderr and "naeb build" in r.stderr, "exit %d %r" % (r.returncode, r.stderr[-300:]))
+        check("interface-library-refused", r.returncode == 2 and "built for interface 99" in r.stderr and "naeb build" in r.stderr, "exit %d %r" % (r.returncode, r.stderr[-300:]))
         with open(lib, "wb") as f:
             f.write(orig_lib)
     with open(record, "w") as f:

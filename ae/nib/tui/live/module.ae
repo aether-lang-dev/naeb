@@ -348,6 +348,14 @@ new(sp: @keep ptr, cfg: @keep ptr, op: @keep ptr, home: string) -> *port.Port {
             return null
         })
     }
+    p.maven_override = |ctx: @keep ptr, record: string, qp: @keep ptr| {
+        text = string.copy(record)
+        worker.run_detached(|| {
+            r = tools.maven_override(tools_(ctx as *Live) as ptr, text)
+            app_queue.post(qp as *app_queue.Queue, "{\"maven_fetched\":${r}}")
+            return null
+        })
+    }
     // Upstream's idle tick: the progress snapshots due while no Turn runs.
     p.drain_progress = |ctx: ptr| {
         pq = tools_(ctx as *Live).progress

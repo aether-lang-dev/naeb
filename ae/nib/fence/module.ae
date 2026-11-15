@@ -28,7 +28,8 @@ import nib.tools.jail
 import nib.tools.rules
 
 exports(Fence, new, open_home, allow_read, deny_read, allow_write, deny_write, allow_host, pass_env,
-        set_env, allow_loopback, set_origin, describe, host_allowed, host_named, resolve, child_env, proxy_env, read_rules, write_denied, refusal, refusals_json,
+        set_env, allow_loopback, set_origin, setting, maven_on, maven_repos, maven_min_age, maven_keyring,
+        maven_require_signatures, maven_m2, describe, host_allowed, host_named, resolve, child_env, proxy_env, read_rules, write_denied, refusal, refusals_json,
         suggestion, home_canonical, forbidden, SECRETS)
 
 // Relative to $HOME: denied to every fenced reader unless allowed exactly.
@@ -74,7 +75,16 @@ struct Fence {
     policy_sha256: string
     library: string        // the policy library naeb loaded, ""
     library_sha256: string
+    maven: int             // 1: the Maven broker is on (docs/naeb/adr/0001, "The Maven broker")
+    maven_repos: ptr       // repository URLs naeb's broker may fetch from
+    maven_min_age: int     // days a version must have been published
+    maven_keyring: string  // trusted PGP public keys, "" none
+    maven_require_sig: int
 }
+
+// The broker's repository when naeb.ae names none.
+const MAVEN_CENTRAL = "https://repo.maven.apache.org/maven2"
+const MAVEN_MIN_AGE_DAYS = 7
 
 new(home: string) -> ptr {
     f = heap.new(Fence)
@@ -92,8 +102,64 @@ new(home: string) -> ptr {
     f.policy_sha256 = ""
     f.library = ""
     f.library_sha256 = ""
+    f.maven = 0
+    f.maven_repos = list.list_new()
+    f.maven_min_age = MAVEN_MIN_AGE_DAYS
+    f.maven_keyring = ""
+    f.maven_require_sig = 0
     return f as ptr
 }
+
+// A named setting of naeb.ae (naeb.policy's setting call): "" or why it
+// is refused. Unknown names are refused, so a policy never silently means
+// less than it says.
+setting(fp: ptr, name: string, value: string) -> string {
+    f = fp as *Fence
+    if name == "maven.broker" {
+        f.maven = 1
+        return ""
+    }
+    if name == "maven.repository" {
+        if string.starts_with(value, "https://") == 0 && string.starts_with(value, "http://") == 0 { return "maven_repository: not an http(s) URL: ${value}" }
+        u = string.copy(value)
+        while string.ends_with(u, "/") == 1 { u = string.substring(u, 0, string.length(u) - 1) }
+        list.list_add(f.maven_repos, u)
+        return ""
+    }
+    if name == "maven.min_age_days" {
+        n, err = string.to_int(value)
+        if err != "" || n < 0 { return "maven_min_age_days: not a number of days: ${value}" }
+        f.maven_min_age = n
+        return ""
+    }
+    if name == "maven.keyring" {
+        f.maven_keyring = expand_(f, value)
+        return ""
+    }
+    if name == "maven.require_signatures" {
+        f.maven_require_sig = 1
+        return ""
+    }
+    return "naeb.ae uses a setting this naeb does not know: ${name}"
+}
+
+maven_on(fp: ptr) -> int { return (fp as *Fence).maven }
+
+// The broker's repositories: naeb.ae's, else Maven Central.
+maven_repos(fp: ptr) -> ptr {
+    f = fp as *Fence
+    if list.list_size(f.maven_repos) > 0 { return f.maven_repos }
+    out = list.list_new()
+    list.list_add(out, MAVEN_CENTRAL)
+    return out
+}
+
+maven_min_age(fp: ptr) -> int { return (fp as *Fence).maven_min_age }
+maven_keyring(fp: ptr) -> string { return (fp as *Fence).maven_keyring }
+maven_require_signatures(fp: ptr) -> int { return (fp as *Fence).maven_require_sig }
+
+// ~/.m2/repository: read-only to the fenced while the broker is on.
+maven_m2(fp: ptr) -> string { return atomic_file.join((fp as *Fence).home, ".m2/repository") }
 
 // Copies: a caller may pass getenv() results, which naeb zeroes at start-up.
 expand_(f: *Fence, path: string) -> string { return string.copy(jail.expand_home(f.home, path)) }
@@ -170,7 +236,12 @@ describe(fp: ptr, cwd: string, nib_home: string, env: ptr) -> string {
     if f.home_open == 1 { ho = "true" }
     lb = "false"
     if f.loopback == 1 { lb = "true" }
-    return "{\"platform\":${jsonx.quote(platform)},\"policy\":${policy},\"project\":${jsonx.quote(canon_(jail.project_root(cwd)))},\"home\":${jsonx.quote(f.home)},\"home_open\":${ho},\"reads\":${json_strings_(reads)},\"read_denied\":${json_strings_(denied)},\"writes\":${json_strings_(sp.writes)},\"read_only\":${json_strings_(sp.write_deny)},\"hosts\":${json_strings_(f.hosts)},\"loopback\":${lb},\"env_passed\":${json_strings_(passed)},\"env_set\":${json_strings_(f.env_set)}}"
+    maven = "null"
+    if f.maven == 1 {
+        rq = if f.maven_require_sig == 1 { "true" } else { "false" }
+        maven = "{\"broker\":true,\"repository\":${jsonx.quote(canon_(maven_m2(fp)))},\"repositories\":${json_strings_(maven_repos(fp))},\"min_age_days\":${f.maven_min_age},\"keyring\":${jsonx.quote(f.maven_keyring)},\"require_signatures\":${rq}}"
+    }
+    return "{\"platform\":${jsonx.quote(platform)},\"policy\":${policy},\"maven\":${maven},\"project\":${jsonx.quote(canon_(jail.project_root(cwd)))},\"home\":${jsonx.quote(f.home)},\"home_open\":${ho},\"reads\":${json_strings_(reads)},\"read_denied\":${json_strings_(denied)},\"writes\":${json_strings_(sp.writes)},\"read_only\":${json_strings_(sp.write_deny)},\"hosts\":${json_strings_(f.hosts)},\"loopback\":${lb},\"env_passed\":${json_strings_(passed)},\"env_set\":${json_strings_(f.env_set)}}"
 }
 
 host_allowed(fp: ptr, host: string, port: int) -> int {
@@ -246,6 +317,7 @@ read_rules(fp: ptr, cwd: string, nib_home: string, writes: ptr) -> ptr {
         list.list_add(allowed, canon_(a))
         i = i + 1
     }
+    if f.maven == 1 { list.list_add(allowed, canon_(maven_m2(fp))) }
     homes = homes_(f)
     h = 0
     while h < list.list_size(homes) {
@@ -334,16 +406,19 @@ write_denied(fp: ptr, cwd: string) -> ptr {
 resolve(fp: ptr, cwd: string, nib_home: string, env: ptr) -> ptr {
     f = fp as *Fence
     extra = list.list_new()
+    m2 = canon_(maven_m2(fp))
     i = 0
     while i < list.list_size(f.write_allow) {
         w, _e = list.get_string(f.write_allow, i)
-        list.list_add(extra, w)
+        // With the broker on, ~/.m2/repository is naeb's to write, never a fenced writer's.
+        if f.maven == 0 || under_(m2, canon_(w)) == 0 { list.list_add(extra, w) }
         i = i + 1
     }
     writes = jail.base_roots(cwd, env, extra)
     sp = jail.new_spec(writes)
     s = sp as *jail.Spec
     s.write_deny = write_denied(fp, cwd)
+    if f.maven == 1 && jail.allows(writes, m2) == 1 { list.list_add(s.write_deny, m2) }
     s.reads = read_rules(fp, cwd, nib_home, writes)
     s.loopback = f.loopback
     return sp
@@ -391,6 +466,7 @@ child_env(fp: ptr, base: ptr, proxy_url: string) -> ptr {
         i = i + 1
     }
     if has_prefix_(out, "HOME=") == 0 && string.length(f.home) > 0 { list.list_add(out, "HOME=${f.home}") }
+    if f.maven == 1 { offline_(out) }
     if proxy_url != "" {
         pe = proxy_env(proxy_url)
         i = 0
@@ -401,6 +477,22 @@ child_env(fp: ptr, base: ptr, proxy_url: string) -> ptr {
         }
     }
     return out
+}
+
+// With the broker on, Maven (3.9+, and mvnw, which runs it) starts offline:
+// MAVEN_ARGS is prepended to every mvn command line. Not the boundary (a
+// build can drop it); ~/.m2/repository being read-only is.
+offline_(env: ptr) {
+    i = 0
+    while i < list.list_size(env) {
+        e, _e = list.get_string(env, i)
+        if string.starts_with(e, "MAVEN_ARGS=") == 1 {
+            list.list_set(env, i, "MAVEN_ARGS=--offline ${string.substring(e, 11, string.length(e))}")
+            return
+        }
+        i = i + 1
+    }
+    list.list_add(env, "MAVEN_ARGS=--offline")
 }
 
 // What tells curl, git, pip, gem, npm, Node and the JVM about the proxy
@@ -495,6 +587,8 @@ suggestion(fp: ptr, cwd: string, nib_home: string, op: string, resource: string)
         return ""
     }
     if under_any_(f.write_deny, path) == 1 { return "" }
+    // The broker writes ~/.m2/repository; tools.maven_fetch is the way in.
+    if f.maven == 1 && under_(canon_(maven_m2(fp)), path) == 1 { return "" }
     return "policy.allow_write(p, ${jsonx.quote(tilde_(f, path))})"
 }
 

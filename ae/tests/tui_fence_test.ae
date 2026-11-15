@@ -30,6 +30,8 @@ const DIFF = "--- naeb.ae\n+++ naeb.ae (proposed)\n@@ -3,3 +3,6 @@\n fence(p: pt
 
 const DENIED = "[{\"op\":\"egress\",\"resource\":\"127.0.0.1:4100\",\"layer\":\"child\",\"command_id\":\"b1\",\"suggestion\":\"policy.allow_host(p, \\\"127.0.0.1\\\", 4100)\"},{\"op\":\"read\",\"resource\":\"/h/.ssh/id\",\"layer\":\"tool\"}]"
 
+const YOUNG = "[{\"op\":\"maven_age\",\"resource\":\"x:y:2.0\",\"layer\":\"tool\",\"reason\":\"too young\",\"young\":[{\"gav\":\"x:y:2.0\",\"age_days\":2}],\"min_age_days\":7}]"
+
 proposal_() -> string {
     return "{\"items\":[{\"line\":\"policy.allow_host(p, \\\"127.0.0.1\\\", 4100)\",\"summary\":\"refused egress 127.0.0.1:4100 · b1\"}],\"diff\":${json_(DIFF)},\"text\":\"t\",\"base\":\"b\",\"expected\":\"e\",\"path\":\"/h/p/naeb.ae\"}"
 }
@@ -237,6 +239,62 @@ main() {
             spec.assert_eq(fence_offer.answer_of("", true), fence_offer.ANSWER_NONE, "scroll")
             spec.assert_eq(fence_offer.answer_of("yes", false), fence_offer.ANSWER_NO, "yes is not a key")
             spec.assert_eq(fence_offer.answer_of("", false), fence_offer.ANSWER_NO, "Enter, Esc")
+        }
+    }
+    spec.describe(fw, "naeb's Maven broker: a too-young version, y/N") {
+        spec.it("offered at the Turn's end, after any naeb.ae change; y fetches through the port") callback {
+            r = rig_(true)
+            driver.type_text(r.t, "build")
+            tui.step(r.a)
+            key_(r, "enter")
+            emit_(r, "{\"run_start\":\"await tools.maven_fetch({gavs: ['x:y:2.0']})\",\"step\":1}")
+            emit_(r, "{\"run_end\":{\"ok\":true,\"output\":\"refused\",\"changes\":[],\"tool_summary\":{\"counts\":[],\"omitted\":0},\"fence_denied\":${YOUNG}}}")
+            spec.assert_eq(r.s.overridden.len, 0, "not while the Turn runs")
+            port.end_turn(r.s, 1)
+            tui.settle(r.a)
+            spec.assert_eq(r.s.proposed.len, 0, "no naeb.ae proposal for it")
+            e = last_(r)
+            spec.assert_eq(e.kind, entry.KIND_FENCE, "a prompt entry")
+            spec.assert_str_eq(e.text, "Maven broker refused x:y:2.0: naeb.ae asks for versions published 7 days ago or more\n    x:y:2.0 · published 2 days ago\nFetch it anyway (this time, these versions only)? [y/N]", "what, how old, the question")
+            driver.expect_row_contains(r.t, "Fetch the too-young Maven version? [y/N]")
+            key_(r, "y")
+            spec.assert_eq(r.s.overridden.len, 1, "fetched once")
+            spec.assert_true(string.contains(r.s.overridden[0], "\"op\":\"maven_age\"") == 1, "the refusal itself: ${r.s.overridden[0]}")
+            tui.settle(r.a)
+            driver.expect_row_contains(r.t, "Fetching through the Maven broker")
+            app_queue.post(r.a.q, "{\"maven_fetched\":{\"ok\":true,\"fetched\":[{\"gav\":\"x:y:2.0\"}],\"present\":[],\"refused\":[]}}")
+            tui.step(r.a)
+            tui.settle(r.a)
+            spec.assert_str_eq(last_(r).text, "Maven broker fetched x:y:2.0 · approved by you", "confirmation")
+            spec.assert_eq(last_(r).kind, entry.KIND_INFO, "quiet")
+        }
+        spec.it("n declines, and the same coordinate is not offered again") callback {
+            r = rig_(true)
+            driver.type_text(r.t, "build")
+            tui.step(r.a)
+            key_(r, "enter")
+            emit_(r, "{\"run_end\":{\"ok\":true,\"output\":\"refused\",\"changes\":[],\"tool_summary\":{\"counts\":[],\"omitted\":0},\"fence_denied\":${YOUNG}}}")
+            port.end_turn(r.s, 1)
+            tui.settle(r.a)
+            key_(r, "n")
+            spec.assert_eq(r.s.overridden.len, 0, "nothing fetched")
+            n = transcript.count(r.a.transcript)
+            driver.type_text(r.t, "again")
+            tui.step(r.a)
+            key_(r, "enter")
+            emit_(r, "{\"run_end\":{\"ok\":true,\"output\":\"refused\",\"changes\":[],\"tool_summary\":{\"counts\":[],\"omitted\":0},\"fence_denied\":${YOUNG}}}")
+            port.end_turn(r.s, 1)
+            tui.settle(r.a)
+            spec.assert_true(string.contains(last_(r).text, "Fetch it anyway") == 0, "not asked twice")
+            spec.assert_true(transcript.count(r.a.transcript) > n, "the second Turn ran")
+        }
+        spec.it("a refused override is an error line with the reason") callback {
+            text, ok = fence_offer.fetched_text("{\"ok\":false,\"fetched\":[],\"present\":[],\"refused\":[{\"gav\":\"x:y:2.0\",\"reason\":\"bad signature\"}]}")
+            spec.assert_true(!ok, "not ok")
+            spec.assert_str_eq(text, "Maven broker: nothing new fetched\nrefused x:y:2.0 · bad signature", "says why")
+            t2, ok2 = fence_offer.fetched_text("{\"ok\":false,\"error\":\"nothing to fetch\"}")
+            spec.assert_true(!ok2, "an error")
+            spec.assert_str_eq(t2, "Maven broker: nothing fetched · nothing to fetch", "the error")
         }
     }
     return spec.run_summary(fw)

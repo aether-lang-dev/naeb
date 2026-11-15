@@ -15,15 +15,26 @@
 //         policy.allow_host(p, "repo.example.com", 443)
 //     }
 //
+// Experimental: naeb's Maven broker (docs/naeb/adr/0001, "The Maven
+// broker"). Fenced builds then run offline against a ~/.m2/repository they
+// can only read, and naeb itself fetches what the model asks for through
+// tools.maven_fetch, checked first:
+//
+//         policy.maven_broker(p)
+//         policy.maven_repository(p, "https://repo.maven.apache.org/maven2")
+//         policy.maven_min_age_days(p, 7)
+//         policy.maven_keyring(p, "~/.naeb/maven/trusted-keys.asc")
+//
 // Paths may start with "~/" ($HOME) and may be relative to the project
 // (deny_write).
 
 exports(INTERFACE, open, allow_read, deny_read, allow_write, deny_write, allow_host, pass_env, set_env,
-        allow_loopback, open_home, home, project_root, platform)
+        allow_loopback, open_home, home, project_root, platform, maven_broker, maven_repository,
+        maven_min_age_days, maven_keyring, maven_require_signatures)
 
 // The table's version. naeb refuses a library built for another: append to
 // the table and bump this together with naeb's NAEB_POLICY_INTERFACE.
-const INTERFACE = 1
+const INTERFACE = 2
 
 // struct naeb_fence_api, field for field: its layout is the interface.
 struct Api {
@@ -40,6 +51,7 @@ struct Api {
     home: ptr            // const char *(*)(void *fence)
     project_root: ptr
     platform: ptr
+    setting: ptr         // void (*)(void *fence, const char *name, const char *value); interface 2
 }
 
 struct Policy {
@@ -111,3 +123,31 @@ home(p: ptr) -> string { return getter_(p, api_(p).home) }
 project_root(p: ptr) -> string { return getter_(p, api_(p).project_root) }
 // "macos" or "linux".
 platform(p: ptr) -> string { return getter_(p, api_(p).platform) }
+
+setting_(p: ptr, name: string, value: string) {
+    f = api_(p).setting as fn(ptr, string, string)
+    f(fence_(p), name, value)
+}
+
+// Experimental: the Maven broker on. ~/.m2/repository becomes read-only to
+// every fenced writer (whatever allow_write says), Maven runs offline
+// (MAVEN_ARGS=--offline), and tools.maven_fetch asks naeb to fetch.
+maven_broker(p: ptr) { setting_(p, "maven.broker", "") }
+
+// A repository the broker may fetch from (in order); none named: Maven
+// Central. A repository a project's POM names is not used unless named here.
+maven_repository(p: ptr, url: string) { setting_(p, "maven.repository", url) }
+
+// How long a version must have been published (its POM's Last-Modified)
+// before the broker fetches it; default 7. Naeb's TUI can approve a younger
+// one, per coordinate.
+maven_min_age_days(p: ptr, days: int) { setting_(p, "maven.min_age_days", "${days}") }
+
+// A file of trusted OpenPGP public keys (armored or binary). Signatures by
+// them must verify; others are recorded as by an unknown key. Keep it
+// outside every root fenced commands may write (naeb refuses to start
+// otherwise).
+maven_keyring(p: ptr, path: string) { setting_(p, "maven.keyring", path) }
+
+// Refuse files without a signature by a key in the keyring.
+maven_require_signatures(p: ptr) { setting_(p, "maven.require_signatures", "") }

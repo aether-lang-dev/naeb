@@ -1,0 +1,1189 @@
+// maven.broker: naeb's Maven dependency broker (experimental;
+// docs/naeb/adr/0001, "The Maven broker"). With it on, fenced builds run
+// offline against a ~/.m2/repository they can only read; the model asks
+// for what a build missed with tools.maven_fetch, and naeb's own process
+// fetches it, outside the fence, into ~/.m2/repository.
+//
+// Nothing a POM names is ever run: POMs are parsed (maven.pom), never
+// built, and no Maven, mvnw, Gradle or JVM is started here. Before anything
+// is written, for each requested coordinate:
+//   - it must be reachable from the project's POMs (pom.xml, its modules,
+//     their parents, imported BOMs, plugins, extensions and, transitively,
+//     compile and runtime dependencies), or it is refused;
+//   - each file of it and of its closure (POM, artifact, parents, BOMs and
+//     compile/runtime dependencies) comes from an allowed repository only,
+//     matches the repository's checksum (SHA-512, SHA-256 or SHA-1, the
+//     strongest published) and, where the repository has a signature,
+//     verifies against the keyring (maven.pgp);
+//   - every version was published (its POM's Last-Modified) at least
+//     min_age days ago, unless the user approved exactly that version;
+//     a range picks the newest version old enough.
+// The closure is written all or nothing, each file atomically (a temporary
+// file renamed over the leaf) inside the canonical repository root, its
+// directories opened component by component, so a symlink planted inside
+// the repository cannot redirect a write, and a symlink leaf is refused.
+
+import std.fs
+import std.list
+import std.map
+import std.string
+import std.time
+import std.cryptography
+import nib.jsonx
+import nib.lock
+import nib.tools.atomic_file
+import nib.maven.gav
+import nib.maven.pom
+import nib.maven.pgp
+import nib.maven.repo
+
+exports(Broker, new, set_now, fetch, records_json, reachable, repo_root, checksum_check, sha256_of, MAX_POMS, DEFAULT_PLUGINS)
+
+// The most POMs one reachability walk reads.
+const MAX_POMS = 3000
+
+// Default-lifecycle plugins (org.apache.maven.plugins), which Maven's super
+// POM binds whatever the project's POMs say: reachable in any version.
+const DEFAULT_PLUGINS[] = ["maven-clean-plugin", "maven-resources-plugin", "maven-compiler-plugin", "maven-surefire-plugin",
+                           "maven-jar-plugin", "maven-install-plugin", "maven-deploy-plugin", "maven-site-plugin",
+                           "maven-war-plugin", "maven-failsafe-plugin", "maven-dependency-plugin", "maven-enforcer-plugin",
+                           "maven-source-plugin", "maven-javadoc-plugin", "maven-shade-plugin", "maven-assembly-plugin",
+                           "maven-antrun-plugin", "maven-help-plugin", "maven-wrapper-plugin", "maven-release-plugin"]
+const DEFAULT_PLUGIN_COUNT = 20
+
+struct Broker {
+    home: string
+    m2: string            // ~/.m2/repository, as named
+    project: string       // the project root
+    repos: ptr            // allowed repository URLs, no trailing "/"
+    min_age: int
+    keyring: string       // the trusted keys' file, "" none
+    ring: ptr             // its keys (maven.pgp)
+    ring_err: string      // why the keyring cannot be used, "" none
+    require_sig: int
+    guard: ptr
+    srcs: ptr             // map: repository-relative path -> *Src
+    effs: ptr             // map: "g:a:v" -> *Eff
+    locals: ptr           // map: "g:a:v" -> the project's own POM text
+    project_effs: ptr     // list of *Eff: the project's POMs
+    project_repos: ptr    // repository URLs the project's POMs name
+    reach: ptr            // map: "g:a" -> list of versions, ranges or "*"; null until walked
+    reach_err: string
+    records: ptr          // JSON objects: what was fetched or refused this Session
+    now: long             // Unix seconds; 0: the clock
+    poms_read: int
+}
+
+// A repository file, verified.
+struct Src {
+    rel: string
+    data: string
+    repo: string          // "" for a file already in ~/.m2/repository or the project
+    published: long       // Last-Modified, Unix seconds; -1 unknown
+    checksum: string      // "sha512", "sha256", "sha1"
+    sha256: string
+    sig: string           // "good <fpr>", "unknown key <id>", "none", "unverified (...)"
+    present: int          // 1: already in ~/.m2/repository
+}
+
+struct Eff {
+    group: string
+    artifact: string
+    version: string
+    packaging: string
+    props: ptr            // "name=value", later wins
+    managed: ptr          // *pom.Dep, interpolated, first match wins
+    deps: ptr             // *pom.Dep, interpolated, versions from managed
+    plugins: ptr
+    extensions: ptr
+    lineage: ptr          // "g:a:v" of each parent, nearest first
+    boms: ptr             // "g:a:v" of each imported BOM (and theirs)
+    repos: ptr
+}
+
+// One artifact of a closure: a coordinate and its files.
+struct Art {
+    group: string
+    artifact: string
+    version: string
+    files: ptr            // *Src
+    age: int              // days; -1 unknown; 0 for present
+    present: int
+}
+
+trim_slash_(u: string) -> string {
+    out = u
+    while string.ends_with(out, "/") == 1 { out = string.substring(out, 0, string.length(out) - 1) }
+    return out
+}
+
+// repos: list of allowed repository URLs; keyring: a file of trusted public
+// keys ("" none), never inside a root fenced commands may write (the caller
+// checks).
+new(home: string, m2: string, project: string, repos: ptr, min_age: int, keyring: string, require_sig: int) -> *Broker {
+    b = heap.new(Broker)
+    b.home = string.copy(home)
+    b.m2 = string.copy(m2)
+    b.project = string.copy(project)
+    b.repos = list.list_new()
+    i = 0
+    while i < list.list_size(repos) {
+        r, _e = list.get_string(repos, i)
+        list.list_add(b.repos, trim_slash_(r))
+        i = i + 1
+    }
+    b.min_age = min_age
+    b.keyring = string.copy(keyring)
+    b.ring = list.list_new()
+    b.ring_err = ""
+    if keyring != "" {
+        text, n, err = fs.read_binary(keyring)
+        if err != "" {
+            b.ring_err = "cannot read the keyring ${keyring}: ${err}"
+        } else {
+            b.ring = pgp.keyring(text)
+            if list.list_size(b.ring) == 0 && n > 0 { b.ring_err = "the keyring ${keyring} holds no key naeb can verify with" }
+        }
+    }
+    b.require_sig = require_sig
+    b.guard = lock.new()
+    b.srcs = map.map_new()
+    b.effs = map.map_new()
+    b.locals = map.map_new()
+    b.project_effs = list.list_new()
+    b.project_repos = list.list_new()
+    b.reach = null
+    b.reach_err = ""
+    b.records = list.list_new()
+    b.now = 0 as long
+    b.poms_read = 0
+    return b
+}
+
+// Tests pin the clock.
+set_now(b: *Broker, unix: long) { b.now = unix }
+
+now_(b: *Broker) -> long {
+    if b.now > (0 as long) { return b.now }
+    return time.now_ms() / (1000 as long)
+}
+
+repo_root(b: *Broker) -> string {
+    c, err = atomic_file.canonical_path(b.m2)
+    if err != "" { return b.m2 }
+    return c
+}
+
+// ---- files ------------------------------------------------------------
+
+// A file already in ~/.m2/repository: (data, 1) when it is a regular file
+// (not a symlink), else ("", 0).
+local_(b: *Broker, rel: string) -> (string, int) {
+    path = atomic_file.join(b.m2, rel)
+    st, k, _m = fs.stat(path, 0)
+    if k != fs.KIND_OK || st.kind != fs.STAT_KIND_FILE { return "", 0 }
+    data, _n, err = fs.read_binary(path)
+    if err != "" { return "", 0 }
+    return data, 1
+}
+
+first_token_(s: string) -> string {
+    t = string.trim(s)
+    sp = string.index_of(t, " ")
+    if sp > 0 { t = string.substring(t, 0, sp) }
+    tab = string.index_of(t, "\t")
+    if tab > 0 { t = string.substring(t, 0, tab) }
+    return string.to_lower(t)
+}
+
+// The lower-case hex digest of `data` (binary-safe).
+digest_hex_(algo: string, data: string) -> (string, string) {
+    n = string.length(data)
+    if n == 0 {
+        h0, e0 = cryptography.hash_hex(algo, string.bytes(" ")[0..0])
+        return string.to_lower(h0), e0
+    }
+    h, err = cryptography.hash_hex(algo, string.bytes(data)[0..n])
+    return string.to_lower(h), err
+}
+
+sha256_of(data: string) -> string {
+    h, _e = digest_hex_("sha256", data)
+    return h
+}
+
+// `data` against a repository's checksum file for it (`published`, the
+// .sha512/.sha256/.sha1 text: the hex digest, perhaps followed by a file
+// name): "" when they match, else why not.
+checksum_check(algo: string, data: string, published: string) -> string {
+    want = first_token_(published)
+    got, err = digest_hex_(algo, data)
+    if err != "" { return "${algo}: ${err}" }
+    if want != got { return "checksum mismatch (${algo}: the repository says ${want}, the file is ${got})" }
+    return ""
+}
+
+// One file from one repository, verified: (src, 200, ""), (null, 404, "")
+// when the repository does not have it, or (null, status, why).
+fetch_file_(b: *Broker, repo_url: string, rel: string) -> (*Src, int, string) {
+    url = "${repo_url}/${rel}"
+    g, err = repo.get(url)
+    if err != "" { return null, 0, "${url}: ${err}" }
+    if g.status == 404 || g.status == 410 { return null, 404, "" }
+    if g.status != 200 { return null, g.status, "${url}: HTTP status ${g.status}" }
+    s = heap.new(Src)
+    s.rel = string.copy(rel)
+    s.data = g.body
+    s.repo = repo_url
+    s.published = gav.http_date(g.last_modified)
+    s.present = 0
+    s.checksum = ""
+    algos = ["sha512", "sha256", "sha1"]
+    for i in 0..3 {
+        if s.checksum == "" {
+            c, cerr = repo.get("${url}.${algos[i]}")
+            if cerr != "" { return null, 0, "${url}.${algos[i]}: ${cerr}" }
+            if c.status == 200 {
+                why = checksum_check(algos[i], s.data, c.body)
+                if why != "" { return null, 200, "${rel}: ${why}" }
+                s.checksum = algos[i]
+            } else if c.status != 404 && c.status != 410 {
+                return null, 0, "${url}.${algos[i]}: HTTP status ${c.status}"
+            }
+        }
+    }
+    if s.checksum == "" { return null, 200, "${rel}: the repository publishes no checksum for it" }
+    s.sha256 = sha256_of(s.data)
+    a, aerr = repo.get("${url}.asc")
+    if aerr != "" { return null, 0, "${url}.asc: ${aerr}" }
+    if a.status == 200 {
+        st, who = pgp.verify(b.ring, s.data, a.body)
+        if st == pgp.GOOD {
+            s.sig = "good ${who}"
+        } else if st == pgp.BAD {
+            return null, 200, "${rel}: bad signature (key ${who})"
+        } else if st == pgp.UNREADABLE {
+            return null, 200, "${rel}: its signature (.asc) is unreadable"
+        } else if st == pgp.UNKNOWN_KEY {
+            s.sig = "unknown key ${who}"
+            if b.require_sig == 1 { return null, 200, "${rel}: signed by key ${who}, which is not in the keyring" }
+        } else {
+            s.sig = "unverified (${who})"
+            if b.require_sig == 1 { return null, 200, "${rel}: signature not verifiable: ${who}" }
+        }
+    } else if a.status == 404 || a.status == 410 {
+        s.sig = "none"
+        if b.require_sig == 1 { return null, 200, "${rel}: the repository has no signature for it" }
+    } else {
+        return null, 0, "${url}.asc: HTTP status ${a.status}"
+    }
+    return s, 200, ""
+}
+
+// A file, from ~/.m2/repository when there, else from the first allowed
+// repository that has it, verified: (src, "") or (null, why).
+locate_(b: *Broker, rel: string) -> (*Src, string) {
+    cached = map.lookup(b.srcs, rel)
+    if cached != null { return cached as *Src, "" }
+    data, ok = local_(b, rel)
+    if ok == 1 {
+        s = heap.new(Src)
+        s.rel = string.copy(rel)
+        s.data = data
+        s.repo = ""
+        s.published = -1 as long
+        s.checksum = ""
+        s.sha256 = ""
+        s.sig = ""
+        s.present = 1
+        map.map_put(b.srcs, rel, s as ptr)
+        return s, ""
+    }
+    i = 0
+    while i < list.list_size(b.repos) {
+        r, _e = list.get_string(b.repos, i)
+        s2, status, err = fetch_file_(b, r, rel)
+        if s2 != null {
+            map.map_put(b.srcs, rel, s2 as ptr)
+            return s2, ""
+        }
+        if status != 404 { return null, err }
+        i = i + 1
+    }
+    return null, "not found in the allowed repositories (${allowed_text_(b)})"
+}
+
+allowed_text_(b: *Broker) -> string {
+    out = ""
+    i = 0
+    while i < list.list_size(b.repos) {
+        r, _e = list.get_string(b.repos, i)
+        if i > 0 { out = "${out}, " }
+        out = "${out}${r}"
+        i = i + 1
+    }
+    if out == "" { out = "none" }
+    return out
+}
+
+pom_rel_(g: string, a: string, v: string) -> string {
+    return "${gav.dir_of(g, a, v)}/${gav.file_of(a, v, "", "pom")}"
+}
+
+// ---- the effective model ---------------------------------------------
+
+copy_dep_(d: *pom.Dep, props: ptr) -> *pom.Dep {
+    c = heap.new(pom.Dep)
+    c.group = pom.interpolate(d.group, props)
+    c.artifact = pom.interpolate(d.artifact, props)
+    c.version = pom.interpolate(d.version, props)
+    c.type = pom.interpolate(d.type, props)
+    c.classifier = pom.interpolate(d.classifier, props)
+    c.scope = pom.interpolate(d.scope, props)
+    c.optional = pom.interpolate(d.optional, props)
+    c.deps = null
+    if d.deps != null {
+        c.deps = list.list_new()
+        i = 0
+        while i < list.list_size(d.deps) {
+            list.list_add(c.deps, copy_dep_(list.list_get_raw(d.deps, i) as *pom.Dep, props) as ptr)
+            i = i + 1
+        }
+    }
+    return c
+}
+
+managed_of_(managed: ptr, group: string, artifact: string) -> *pom.Dep {
+    i = 0
+    while i < list.list_size(managed) {
+        m = list.list_get_raw(managed, i) as *pom.Dep
+        if m.group == group && m.artifact == artifact && m.scope != "import" { return m }
+        i = i + 1
+    }
+    return null
+}
+
+append_all_(dst: ptr, src: ptr) {
+    i = 0
+    while i < list.list_size(src) {
+        list.list_add(dst, list.list_get_raw(src, i))
+        i = i + 1
+    }
+}
+
+append_strings_(dst: ptr, src: ptr) {
+    i = 0
+    while i < list.list_size(src) {
+        s, _e = list.get_string(src, i)
+        list.list_add(dst, s)
+        i = i + 1
+    }
+}
+
+// The POM text of g:a:v: the project's own, ~/.m2/repository's or an
+// allowed repository's (verified).
+pom_text_(b: *Broker, g: string, a: string, v: string) -> (string, string) {
+    key = "${g}:${a}:${v}"
+    if map.map_has(b.locals, key) == 1 {
+        t, _e = map.get_string(b.locals, key)
+        return t, ""
+    }
+    b.poms_read = b.poms_read + 1
+    if b.poms_read > MAX_POMS { return "", "the dependency graph is larger than naeb walks (${MAX_POMS} POMs)" }
+    s, err = locate_(b, pom_rel_(g, a, v))
+    if s == null { return "", err }
+    return s.data, ""
+}
+
+// The effective model of g:a:v: (eff, "") or (null, why).
+eff_(b: *Broker, g: string, a: string, v: string, depth: int) -> (*Eff, string) {
+    key = "${g}:${a}:${v}"
+    got = map.lookup(b.effs, key)
+    if got != null { return got as *Eff, "" }
+    if depth > 24 { return null, "${key}: parents or BOM imports nest too deep" }
+    text, err = pom_text_(b, g, a, v)
+    if err != "" { return null, err }
+    return eff_of_text_(b, text, key, depth)
+}
+
+eff_of_text_(b: *Broker, text: string, key: string, depth: int) -> (*Eff, string) {
+    p = pom.parse(text)
+    if p.error != "" { return null, "${key}: not a POM (${p.error})" }
+    e = heap.new(Eff)
+    e.props = list.list_new()
+    e.managed = list.list_new()
+    e.deps = list.list_new()
+    e.plugins = list.list_new()
+    e.extensions = list.list_new()
+    e.lineage = list.list_new()
+    e.boms = list.list_new()
+    e.repos = list.list_new()
+    parent = null as *Eff
+    pgroup = ""
+    pversion = ""
+    if p.parent != null {
+        pd = p.parent as *pom.Dep
+        pgroup = pd.group
+        pversion = pd.version
+        pe, perr = eff_(b, pd.group, pd.artifact, pd.version, depth + 1)
+        if pe == null { return null, "${key}: parent ${pd.group}:${pd.artifact}:${pd.version}: ${perr}" }
+        parent = pe
+        append_strings_(e.props, pe.props)
+        list.list_add(e.lineage, "${pd.group}:${pd.artifact}:${pd.version}")
+        append_strings_(e.lineage, pe.lineage)
+        append_strings_(e.repos, pe.repos)
+    }
+    e.group = if p.group != "" { p.group } else { pgroup }
+    e.artifact = p.artifact
+    e.version = if p.version != "" { p.version } else { pversion }
+    e.packaging = p.packaging
+    append_strings_(e.props, p.props)
+    list.list_add(e.props, "project.groupId=${e.group}")
+    list.list_add(e.props, "project.artifactId=${e.artifact}")
+    list.list_add(e.props, "project.version=${e.version}")
+    list.list_add(e.props, "pom.version=${e.version}")
+    list.list_add(e.props, "version=${e.version}")
+    list.list_add(e.props, "project.parent.version=${pversion}")
+    list.list_add(e.props, "project.parent.groupId=${pgroup}")
+    e.version = pom.interpolate(e.version, e.props)
+    e.group = pom.interpolate(e.group, e.props)
+    append_strings_(e.repos, p.repos)
+    // Own declarations first, then what imported BOMs manage, then the parent's.
+    imports = list.list_new()
+    i = 0
+    while i < list.list_size(p.managed) {
+        d = copy_dep_(list.list_get_raw(p.managed, i) as *pom.Dep, e.props)
+        if d.scope == "import" {
+            list.list_add(imports, d as ptr)
+        } else {
+            list.list_add(e.managed, d as ptr)
+        }
+        i = i + 1
+    }
+    i = 0
+    while i < list.list_size(imports) {
+        d2 = list.list_get_raw(imports, i) as *pom.Dep
+        be, berr = eff_(b, d2.group, d2.artifact, d2.version, depth + 1)
+        if be == null { return null, "${key}: imported BOM ${d2.group}:${d2.artifact}:${d2.version}: ${berr}" }
+        list.list_add(e.boms, "${d2.group}:${d2.artifact}:${d2.version}")
+        append_strings_(e.boms, be.lineage)
+        append_strings_(e.boms, be.boms)
+        append_all_(e.managed, be.managed)
+        i = i + 1
+    }
+    if parent != null {
+        append_all_(e.managed, parent.managed)
+        append_strings_(e.boms, parent.boms)
+    }
+    i = 0
+    while i < list.list_size(p.deps) {
+        list.list_add(e.deps, copy_dep_(list.list_get_raw(p.deps, i) as *pom.Dep, e.props) as ptr)
+        i = i + 1
+    }
+    if parent != null { append_all_(e.deps, parent.deps) }
+    i = 0
+    while i < list.list_size(e.deps) {
+        d3 = list.list_get_raw(e.deps, i) as *pom.Dep
+        m = managed_of_(e.managed, d3.group, d3.artifact)
+        if m != null {
+            if d3.version == "" { d3.version = m.version }
+            if d3.scope == "" { d3.scope = m.scope }
+        }
+        i = i + 1
+    }
+    i = 0
+    while i < list.list_size(p.plugins) {
+        list.list_add(e.plugins, copy_dep_(list.list_get_raw(p.plugins, i) as *pom.Dep, e.props) as ptr)
+        i = i + 1
+    }
+    if parent != null { append_all_(e.plugins, parent.plugins) }
+    i = 0
+    while i < list.list_size(p.extensions) {
+        list.list_add(e.extensions, copy_dep_(list.list_get_raw(p.extensions, i) as *pom.Dep, e.props) as ptr)
+        i = i + 1
+    }
+    if parent != null { append_all_(e.extensions, parent.extensions) }
+    map.map_put(b.effs, key, e as ptr)
+    return e, ""
+}
+
+// ---- reachability ----------------------------------------------------
+
+add_reach_(b: *Broker, group: string, artifact: string, version: string) {
+    if group == "" || artifact == "" { return }
+    ga = "${group}:${artifact}"
+    l = map.lookup(b.reach, ga)
+    if l == null {
+        l = list.list_new()
+        map.map_put(b.reach, ga, l)
+    }
+    v = if version == "" { "*" } else { version }
+    i = 0
+    while i < list.list_size(l) {
+        s, _e = list.get_string(l, i)
+        if s == v { return }
+        i = i + 1
+    }
+    list.list_add(l, v)
+}
+
+add_gav_text_(b: *Broker, text: string) {
+    parts = string.split(text, ":")
+    if string.array_size(parts) == 3 { add_reach_(b, string.array_get(parts, 0), string.array_get(parts, 1), string.array_get(parts, 2)) }
+    string.array_free(parts)
+}
+
+// A concrete version for walking a declared one: itself, or a range's newest.
+concrete_(b: *Broker, group: string, artifact: string, version: string) -> string {
+    if gav.is_range(version) == 0 { return version }
+    vs, _e = versions_(b, group, artifact)
+    best = ""
+    i = 0
+    while i < list.list_size(vs) {
+        v, _g = list.get_string(vs, i)
+        if gav.range_contains(version, v) == 1 && (best == "" || gav.compare(v, best) > 0) { best = v }
+        i = i + 1
+    }
+    return best
+}
+
+project_managed_(b: *Broker, group: string, artifact: string) -> string {
+    i = 0
+    while i < list.list_size(b.project_effs) {
+        pe = list.list_get_raw(b.project_effs, i) as *Eff
+        m = managed_of_(pe.managed, group, artifact)
+        if m != null && m.version != "" { return m.version }
+        i = i + 1
+    }
+    return ""
+}
+
+// Reads the project's POMs: pom.xml at the root and its modules', each
+// registered as a local POM so a module's parent resolves to it.
+read_project_(b: *Broker) -> string {
+    queue = list.list_new()
+    list.list_add(queue, b.project)
+    texts = list.list_new()
+    keys = list.list_new()
+    i = 0
+    while i < list.list_size(queue) && i < 500 {
+        dir, _e = list.get_string(queue, i)
+        path = atomic_file.join(dir, "pom.xml")
+        text, err = fs.read(path)
+        if err != "" {
+            if i == 0 { return "no pom.xml in the project (${b.project})" }
+        } else {
+            p = pom.parse(text)
+            if p.error != "" { return "${path}: not a POM (${p.error})" }
+            pd = p.parent as *pom.Dep
+            g = p.group
+            v = p.version
+            if p.parent != null && g == "" { g = pd.group }
+            if p.parent != null && v == "" { v = pd.version }
+            key = "${g}:${p.artifact}:${v}"
+            map.map_put(b.locals, key, text)
+            list.list_add(texts, text)
+            list.list_add(keys, key)
+            k = 0
+            while k < list.list_size(p.modules) {
+                m, _em = list.get_string(p.modules, k)
+                if string.contains(m, "..") == 0 && string.starts_with(m, "/") == 0 { list.list_add(queue, atomic_file.join(dir, m)) }
+                k = k + 1
+            }
+        }
+        i = i + 1
+    }
+    j = 0
+    while j < list.list_size(keys) {
+        key2, _ek = list.get_string(keys, j)
+        text2, _et = list.get_string(texts, j)
+        e, eerr = eff_of_text_(b, text2, key2, 0)
+        if e == null { return eerr }
+        list.list_add(b.project_effs, e as ptr)
+        append_strings_(b.project_repos, e.repos)
+        j = j + 1
+    }
+    return ""
+}
+
+queue_dep_(b: *Broker, queue: ptr, d: *pom.Dep) {
+    add_reach_(b, d.group, d.artifact, d.version)
+    pm = project_managed_(b, d.group, d.artifact)
+    if pm != "" { add_reach_(b, d.group, d.artifact, pm) }
+    v = if pm != "" { pm } else { d.version }
+    if v != "" { list.list_add(queue, "${d.group}:${d.artifact}:${v}") }
+}
+
+// Walks everything the project's POMs reach (see the module comment);
+// "" or why it could not.
+walk_(b: *Broker) -> string {
+    b.reach = map.map_new()
+    err = read_project_(b)
+    if err != "" { return err }
+    queue = list.list_new()
+    for k in 0..DEFAULT_PLUGIN_COUNT {
+        add_reach_(b, "org.apache.maven.plugins", DEFAULT_PLUGINS[k], "")
+    }
+    i = 0
+    while i < list.list_size(b.project_effs) {
+        e = list.list_get_raw(b.project_effs, i) as *Eff
+        k2 = 0
+        while k2 < list.list_size(e.lineage) {
+            l, _el = list.get_string(e.lineage, k2)
+            add_gav_text_(b, l)
+            k2 = k2 + 1
+        }
+        k2 = 0
+        while k2 < list.list_size(e.boms) {
+            bm, _eb = list.get_string(e.boms, k2)
+            add_gav_text_(b, bm)
+            k2 = k2 + 1
+        }
+        k2 = 0
+        while k2 < list.list_size(e.managed) {
+            m = list.list_get_raw(e.managed, k2) as *pom.Dep
+            add_reach_(b, m.group, m.artifact, m.version)
+            k2 = k2 + 1
+        }
+        k2 = 0
+        while k2 < list.list_size(e.deps) {
+            queue_dep_(b, queue, list.list_get_raw(e.deps, k2) as *pom.Dep)
+            k2 = k2 + 1
+        }
+        k2 = 0
+        while k2 < list.list_size(e.plugins) {
+            pl = list.list_get_raw(e.plugins, k2) as *pom.Dep
+            if pl.version == "" {
+                // pluginManagement may name the version elsewhere in the list
+                add_reach_(b, pl.group, pl.artifact, "")
+            } else {
+                queue_dep_(b, queue, pl)
+            }
+            if pl.deps != null {
+                k3 = 0
+                while k3 < list.list_size(pl.deps) {
+                    queue_dep_(b, queue, list.list_get_raw(pl.deps, k3) as *pom.Dep)
+                    k3 = k3 + 1
+                }
+            }
+            k2 = k2 + 1
+        }
+        k2 = 0
+        while k2 < list.list_size(e.extensions) {
+            queue_dep_(b, queue, list.list_get_raw(e.extensions, k2) as *pom.Dep)
+            k2 = k2 + 1
+        }
+        i = i + 1
+    }
+    seen = map.map_new()
+    q = 0
+    while q < list.list_size(queue) {
+        item, _eq = list.get_string(queue, q)
+        q = q + 1
+        if map.map_has(seen, item) == 1 { continue }
+        map.map_put(seen, item, "1")
+        parts = string.split(item, ":")
+        g = string.copy(string.array_get(parts, 0))
+        a = string.copy(string.array_get(parts, 1))
+        v = string.copy(string.array_get(parts, 2))
+        string.array_free(parts)
+        cv = concrete_(b, g, a, v)
+        if cv == "" { continue }
+        e2, werr = eff_(b, g, a, cv, 0)
+        if e2 == null {
+            if b.poms_read > MAX_POMS { return werr }
+            continue
+        }
+        k4 = 0
+        while k4 < list.list_size(e2.lineage) {
+            l2, _el2 = list.get_string(e2.lineage, k4)
+            add_gav_text_(b, l2)
+            k4 = k4 + 1
+        }
+        k4 = 0
+        while k4 < list.list_size(e2.boms) {
+            bm2, _eb2 = list.get_string(e2.boms, k4)
+            add_gav_text_(b, bm2)
+            k4 = k4 + 1
+        }
+        k4 = 0
+        while k4 < list.list_size(e2.deps) {
+            d = list.list_get_raw(e2.deps, k4) as *pom.Dep
+            if (d.scope == "" || d.scope == "compile" || d.scope == "runtime") && d.optional != "true" { queue_dep_(b, queue, d) }
+            k4 = k4 + 1
+        }
+    }
+    return ""
+}
+
+// 1 when g:a:v (v a version or a range) is reachable from the project's
+// POMs; walks them on first use. err: why the walk failed.
+reachable(b: *Broker, g: string, a: string, v: string) -> (int, string) {
+    if b.reach == null { b.reach_err = walk_(b) }
+    if b.reach_err != "" { return 0, b.reach_err }
+    l = map.lookup(b.reach, "${g}:${a}")
+    if l == null { return 0, "" }
+    if gav.is_range(v) == 1 { return 1, "" }
+    i = 0
+    while i < list.list_size(l) {
+        s, _e = list.get_string(l, i)
+        if s == "*" { return 1, "" }
+        if gav.range_contains(s, v) == 1 { return 1, "" }
+        i = i + 1
+    }
+    return 0, ""
+}
+
+// ---- versions and the closure ----------------------------------------
+
+// The versions maven-metadata.xml lists across the allowed repositories.
+versions_(b: *Broker, g: string, a: string) -> (ptr, string) {
+    out = list.list_new()
+    rel = "${string.replace_all(g, ".", "/")}/${a}/maven-metadata.xml"
+    i = 0
+    while i < list.list_size(b.repos) {
+        r, _e = list.get_string(b.repos, i)
+        got, err = repo.get("${r}/${rel}")
+        if err == "" && got.status == 200 {
+            vs = pom.metadata_versions(got.body)
+            k = 0
+            while k < list.list_size(vs) {
+                v, _ev = list.get_string(vs, k)
+                dup = 0
+                j = 0
+                while j < list.list_size(out) {
+                    o, _eo = list.get_string(out, j)
+                    if o == v { dup = 1 }
+                    j = j + 1
+                }
+                if dup == 0 { list.list_add(out, v) }
+                k = k + 1
+            }
+        }
+        i = i + 1
+    }
+    if list.list_size(out) == 0 { return out, "no maven-metadata.xml lists ${g}:${a} in the allowed repositories" }
+    return out, ""
+}
+
+has_(l: ptr, s: string) -> int {
+    i = 0
+    while i < list.list_size(l) {
+        v, _e = list.get_string(l, i)
+        if v == s { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+age_of_(b: *Broker, s: *Src) -> int {
+    if s.present == 1 { return 0 }
+    return gav.age_days(s.published, now_(b))
+}
+
+// The version a range resolves to: (version, young newest or "", why).
+pick_(b: *Broker, g: string, a: string, range: string, overrides: ptr) -> (string, string, string) {
+    vs, err = versions_(b, g, a)
+    if err != "" { return "", "", err }
+    ages = list.list_new()
+    i = 0
+    while i < list.list_size(vs) {
+        v, _e = list.get_string(vs, i)
+        age = -1
+        if gav.range_contains(range, v) == 1 {
+            s, serr = locate_(b, pom_rel_(g, a, v))
+            if s != null { age = age_of_(b, s) }
+            if s == null && serr == "" { age = -1 }
+            if has_(overrides, "${g}:${a}:${v}") == 1 { age = 1000000 }
+        }
+        list.list_add(ages, "${age}")
+        i = i + 1
+    }
+    best, newest, why = gav.newest_old_enough(vs, ages, range, b.min_age)
+    if best == "" { return "", newest, why }
+    return best, "", ""
+}
+
+// Adds g:a:v (and its parents, BOMs and compile/runtime dependencies) to
+// `arts`: "" or why it cannot be fetched. young: "g:a:v age" of each
+// version younger than min_age and not overridden.
+closure_(b: *Broker, g: string, a: string, v: string, ext: string, cls: string, arts: ptr, seen: ptr, young: ptr, overrides: ptr, depth: int) -> string {
+    key = "${g}:${a}:${v}"
+    if map.map_has(seen, "${key}:${ext}:${cls}") == 1 { return "" }
+    map.map_put(seen, "${key}:${ext}:${cls}", "1")
+    if depth > 64 { return "${key}: the dependency chain is too deep" }
+    art = heap.new(Art)
+    art.group = g
+    art.artifact = a
+    art.version = v
+    art.files = list.list_new()
+    art.present = 1
+    ps, perr = locate_(b, pom_rel_(g, a, v))
+    if ps == null { return "${key}: ${perr}" }
+    list.list_add(art.files, ps as ptr)
+    if ps.present == 0 { art.present = 0 }
+    art.age = age_of_(b, ps)
+    e, eerr = eff_(b, g, a, v, 0)
+    if e == null { return eerr }
+    want = ext
+    if want == "" {
+        if e.packaging == "pom" { want = "pom" } else { want = gav.ext_of_type(e.packaging) }
+    }
+    if want != "pom" {
+        rel = "${gav.dir_of(g, a, v)}/${gav.file_of(a, v, cls, want)}"
+        fs2, ferr = locate_(b, rel)
+        if fs2 == null { return "${key}: ${ferr}" }
+        list.list_add(art.files, fs2 as ptr)
+        if fs2.present == 0 { art.present = 0 }
+    }
+    if art.present == 0 && art.age >= 0 && art.age < b.min_age && has_(overrides, key) == 0 { list.list_add(young, "${key} ${art.age}") }
+    if art.present == 0 && art.age < 0 && b.min_age > 0 && has_(overrides, key) == 0 { return "${key}: the repository gives no publish date (Last-Modified) for its POM" }
+    list.list_add(arts, art as ptr)
+    k = 0
+    while k < list.list_size(e.lineage) {
+        l, _el = list.get_string(e.lineage, k)
+        r1 = closure_text_(b, l, arts, seen, young, overrides, depth)
+        if r1 != "" { return r1 }
+        k = k + 1
+    }
+    k = 0
+    while k < list.list_size(e.boms) {
+        bm, _eb = list.get_string(e.boms, k)
+        r2 = closure_text_(b, bm, arts, seen, young, overrides, depth)
+        if r2 != "" { return r2 }
+        k = k + 1
+    }
+    if want != "pom" || ext == "" {
+        k = 0
+        while k < list.list_size(e.deps) {
+            d = list.list_get_raw(e.deps, k) as *pom.Dep
+            if (d.scope == "" || d.scope == "compile" || d.scope == "runtime") && d.optional != "true" {
+                dv = project_managed_(b, d.group, d.artifact)
+                if dv == "" { dv = d.version }
+                if dv == "" { return "${key}: dependency ${d.group}:${d.artifact} has no version" }
+                if gav.is_range(dv) == 1 {
+                    pv, newest, why = pick_(b, d.group, d.artifact, dv, overrides)
+                    if pv == "" {
+                        if newest != "" {
+                            list.list_add(young, "${d.group}:${d.artifact}:${newest} -1")
+                            k = k + 1
+                            continue
+                        }
+                        return "${d.group}:${d.artifact}:${dv}: ${why}"
+                    }
+                    dv = pv
+                }
+                dext = gav.ext_of_type(d.type)
+                dcls = d.classifier
+                if d.type == "test-jar" && dcls == "" { dcls = "tests" }
+                r3 = closure_(b, d.group, d.artifact, dv, dext, dcls, arts, seen, young, overrides, depth + 1)
+                if r3 != "" { return r3 }
+            }
+            k = k + 1
+        }
+    }
+    return ""
+}
+
+closure_text_(b: *Broker, text: string, arts: ptr, seen: ptr, young: ptr, overrides: ptr, depth: int) -> string {
+    parts = string.split(text, ":")
+    if string.array_size(parts) != 3 {
+        string.array_free(parts)
+        return ""
+    }
+    g = string.copy(string.array_get(parts, 0))
+    a = string.copy(string.array_get(parts, 1))
+    v = string.copy(string.array_get(parts, 2))
+    string.array_free(parts)
+    return closure_(b, g, a, v, "pom", "", arts, seen, young, overrides, depth + 1)
+}
+
+// ---- writing ----------------------------------------------------------
+
+under_(base: string, path: string, fold: int) -> int {
+    bb = base
+    pp = path
+    if fold == 1 {
+        bb = string.to_lower(base)
+        pp = string.to_lower(path)
+    }
+    return pp == bb || string.starts_with(pp, "${bb}/") == 1
+}
+
+// Writes one verified file under the repository root: "" or why not.
+write_(b: *Broker, root: string, s: *Src) -> string {
+    target = atomic_file.join(root, s.rel)
+    dir = atomic_file.dirname(target)
+    leaf = atomic_file.basename(target)
+    fd, opened, _fold, err = atomic_file.open_dir(dir, 1, |d: string, f: int| {
+        if under_(root, d, f) == 0 { return "${d} lies outside ${root}" }
+        return ""
+    })
+    if err != "" { return "${s.rel}: ${err}" }
+    _st, werr = atomic_file.replace_at(fd, opened, leaf, s.data, 420, 1, 1)
+    atomic_file.close_fd(fd)
+    if werr == "NotFile" { return "${s.rel}: refused to write over something that is not a regular file (a symlink?)" }
+    if werr != "" { return "${s.rel}: ${werr}" }
+    return ""
+}
+
+// ---- the tool ---------------------------------------------------------
+
+file_json_(s: *Src) -> string {
+    return "{\"file\":${jsonx.quote(atomic_file.basename(s.rel))},\"sha256\":${jsonx.quote(s.sha256)},\"checksum\":${jsonx.quote(s.checksum)},\"signature\":${jsonx.quote(s.sig)}}"
+}
+
+// The signature result of an artifact: its files' worst.
+sig_of_(art: *Art) -> string {
+    out = ""
+    i = 0
+    while i < list.list_size(art.files) {
+        s = list.list_get_raw(art.files, i) as *Src
+        if s.present == 0 {
+            if out == "" || string.starts_with(s.sig, "good") == 0 { out = s.sig }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+repo_of_(art: *Art) -> string {
+    i = 0
+    while i < list.list_size(art.files) {
+        s = list.list_get_raw(art.files, i) as *Src
+        if s.repo != "" { return s.repo }
+        i = i + 1
+    }
+    return ""
+}
+
+art_json_(art: *Art, requested: string, overrides: ptr) -> string {
+    files = "["
+    first = 1
+    i = 0
+    while i < list.list_size(art.files) {
+        s = list.list_get_raw(art.files, i) as *Src
+        if s.present == 0 {
+            if first == 0 { files = "${files}," }
+            files = "${files}${file_json_(s)}"
+            first = 0
+        }
+        i = i + 1
+    }
+    key = "${art.group}:${art.artifact}:${art.version}"
+    ov = if has_(overrides, key) == 1 { "true" } else { "false" }
+    return "{\"gav\":${jsonx.quote(key)},\"requested\":${jsonx.quote(requested)},\"repo\":${jsonx.quote(repo_of_(art))},\"files\":${files}],\"signature\":${jsonx.quote(sig_of_(art))},\"age_days\":${art.age},\"override\":${ov}}"
+}
+
+refusal_json_(requested: string, reason: string) -> string {
+    return "{\"gav\":${jsonx.quote(requested)},\"reason\":${jsonx.quote(reason)}}"
+}
+
+young_json_(young: ptr) -> string {
+    out = "["
+    i = 0
+    while i < list.list_size(young) {
+        y, _e = list.get_string(young, i)
+        sp = string.index_of(y, " ")
+        if i > 0 { out = "${out}," }
+        out = "${out}{\"gav\":${jsonx.quote(string.substring(y, 0, sp))},\"age_days\":${string.substring(y, sp + 1, string.length(y))}}"
+        i = i + 1
+    }
+    return "${out}]"
+}
+
+young_text_(young: ptr, min_age: int) -> string {
+    out = ""
+    i = 0
+    while i < list.list_size(young) {
+        y, _e = list.get_string(young, i)
+        sp = string.index_of(y, " ")
+        age = string.substring(y, sp + 1, string.length(y))
+        if i > 0 { out = "${out}, " }
+        said = if age == "-1" { "no version old enough" } else if age == "1" { "published 1 day ago" } else { "published ${age} days ago" }
+        out = "${out}${string.substring(y, 0, sp)} (${said})"
+        i = i + 1
+    }
+    return "too young: ${out}; naeb.ae asks for ${min_age} days"
+}
+
+repos_hint_(b: *Broker) -> string {
+    out = ""
+    i = 0
+    while i < list.list_size(b.project_repos) {
+        r, _e = list.get_string(b.project_repos, i)
+        r2 = trim_slash_(r)
+        if has_(b.repos, r2) == 0 && string.contains(out, r2) == 0 {
+            if out != "" { out = "${out}, " }
+            out = "${out}${r2}"
+        }
+        i = i + 1
+    }
+    if out == "" { return "" }
+    return "; the project's POMs also name ${out}, which naeb.ae does not allow (policy.maven_repository(p, \"<url>\") would)"
+}
+
+// One requested coordinate: appends to fetched/refused (JSON texts) and
+// denied (fence_denied records for the TUI's y/N), records to b.records.
+one_(b: *Broker, req: string, overrides: ptr, fetched: ptr, present: ptr, refused: ptr, denied: ptr) {
+    x, perr = gav.parse(req)
+    if x == null {
+        list.list_add(refused, refusal_json_(req, perr))
+        list.list_add(b.records, "{\"requested\":${jsonx.quote(req)},\"ok\":false,\"reason\":${jsonx.quote(perr)}}")
+        return
+    }
+    shown = gav.text_of(x)
+    ok, rerr = reachable(b, x.group, x.artifact, x.version)
+    if rerr != "" {
+        reason = "the project's POMs could not be read: ${rerr}"
+        list.list_add(refused, refusal_json_(shown, reason))
+        list.list_add(b.records, "{\"requested\":${jsonx.quote(shown)},\"ok\":false,\"reason\":${jsonx.quote(reason)}}")
+        return
+    }
+    if ok == 0 {
+        reason = "not reachable from the project's POMs (pom.xml, its modules, parents, imported BOMs, plugins, extensions and their compile/runtime dependencies)"
+        list.list_add(refused, refusal_json_(shown, reason))
+        list.list_add(b.records, "{\"requested\":${jsonx.quote(shown)},\"ok\":false,\"reason\":${jsonx.quote(reason)}}")
+        return
+    }
+    young = list.list_new()
+    v = x.version
+    why = ""
+    if gav.is_range(v) == 1 {
+        pv, newest, pwhy = pick_(b, x.group, x.artifact, v, overrides)
+        if pv == "" {
+            if newest != "" { list.list_add(young, "${x.group}:${x.artifact}:${newest} -1") } else { why = "${shown}: ${pwhy}" }
+        }
+        v = pv
+    }
+    arts = list.list_new()
+    if why == "" && v != "" {
+        why = closure_(b, x.group, x.artifact, v, x.ext, x.classifier, arts, map.map_new(), young, overrides, 0)
+    }
+    if why != "" && string.contains(why, "not found in the allowed repositories") == 1 { why = "${why}${repos_hint_(b)}" }
+    if why == "" && list.list_size(young) > 0 {
+        why = young_text_(young, b.min_age)
+        yj = young_json_(young)
+        list.list_add(refused, "{\"gav\":${jsonx.quote(shown)},\"reason\":${jsonx.quote(why)},\"young\":${yj}}")
+        list.list_add(denied, "{\"op\":\"maven_age\",\"resource\":${jsonx.quote(shown)},\"layer\":\"tool\",\"reason\":${jsonx.quote(why)},\"young\":${yj},\"min_age_days\":${b.min_age}}")
+        list.list_add(b.records, "{\"requested\":${jsonx.quote(shown)},\"ok\":false,\"reason\":${jsonx.quote(why)},\"young\":${yj}}")
+        return
+    }
+    if why != "" {
+        list.list_add(refused, refusal_json_(shown, why))
+        list.list_add(b.records, "{\"requested\":${jsonx.quote(shown)},\"ok\":false,\"reason\":${jsonx.quote(why)}}")
+        return
+    }
+    root = repo_root(b)
+    if fs.exists(b.m2) == 0 {
+        fs.mkdir_p(b.m2)
+        root = repo_root(b)
+    }
+    i = 0
+    while i < list.list_size(arts) {
+        art = list.list_get_raw(arts, i) as *Art
+        k = 0
+        while k < list.list_size(art.files) {
+            s = list.list_get_raw(art.files, k) as *Src
+            if s.present == 0 {
+                werr = write_(b, root, s)
+                if werr != "" {
+                    reason = "not written: ${werr}"
+                    list.list_add(refused, refusal_json_(shown, reason))
+                    list.list_add(b.records, "{\"requested\":${jsonx.quote(shown)},\"ok\":false,\"reason\":${jsonx.quote(reason)}}")
+                    return
+                }
+            }
+            k = k + 1
+        }
+        i = i + 1
+    }
+    i = 0
+    while i < list.list_size(arts) {
+        art2 = list.list_get_raw(arts, i) as *Art
+        if art2.present == 1 {
+            list.list_add(present, jsonx.quote("${art2.group}:${art2.artifact}:${art2.version}"))
+        } else {
+            j = art_json_(art2, shown, overrides)
+            list.list_add(fetched, j)
+            list.list_add(b.records, j)
+            k2 = 0
+            while k2 < list.list_size(art2.files) {
+                s2 = list.list_get_raw(art2.files, k2) as *Src
+                if s2.present == 0 {
+                    s2.present = 1
+                    s2.repo = ""
+                }
+                k2 = k2 + 1
+            }
+        }
+        i = i + 1
+    }
+}
+
+joined_(l: ptr) -> string {
+    out = "["
+    i = 0
+    while i < list.list_size(l) {
+        s, _e = list.get_string(l, i)
+        if i > 0 { out = "${out}," }
+        out = "${out}${s}"
+        i = i + 1
+    }
+    return "${out}]"
+}
+
+// tools.maven_fetch({ gavs }): (1, result JSON, fence_denied records JSON
+// or "", the session-log records added) or (0, error, "", ""). overrides:
+// "g:a:v" the user approved younger than min_age (naeb's TUI).
+fetch(b: *Broker, args: string, overrides: ptr) -> (int, string, string, ptr) {
+    v = jsonx.parse(args)
+    usage = "expected { gavs: [\"group:artifact:version\", ...] }"
+    if v == null { return 0, usage, "", null }
+    arr = jsonx.field(v, "gavs")
+    if arr == null || jsonx.array_size(arr) < 1 {
+        jsonx.free(v)
+        return 0, usage, "", null
+    }
+    reqs = list.list_new()
+    i = 0
+    while i < jsonx.array_size(arr) {
+        list.list_add(reqs, string.copy(jsonx.str_field(jsonx.array_at(arr, i))))
+        i = i + 1
+    }
+    jsonx.free(v)
+    if b.ring_err != "" { return 0, b.ring_err, "", null }
+    lock.acquire(b.guard)
+    before = list.list_size(b.records)
+    fetched = list.list_new()
+    present = list.list_new()
+    refused = list.list_new()
+    denied = list.list_new()
+    i = 0
+    while i < list.list_size(reqs) {
+        r, _e = list.get_string(reqs, i)
+        one_(b, r, overrides, fetched, present, refused, denied)
+        i = i + 1
+    }
+    added = list.list_new()
+    i = before
+    while i < list.list_size(b.records) {
+        rec, _er = list.get_string(b.records, i)
+        list.list_add(added, rec)
+        i = i + 1
+    }
+    lock.release(b.guard)
+    ok = if list.list_size(refused) == 0 { "true" } else { "false" }
+    out = "{\"ok\":${ok},\"fetched\":${joined_(fetched)},\"present\":${joined_(present)},\"refused\":${joined_(refused)}}"
+    d = ""
+    if list.list_size(denied) > 0 { d = joined_(denied) }
+    return 1, out, d, added
+}
+
+// What this Session fetched and refused, as a JSON array.
+records_json(b: *Broker) -> string {
+    lock.acquire(b.guard)
+    out = joined_(b.records)
+    lock.release(b.guard)
+    return out
+}

@@ -88,7 +88,15 @@ expect_imports ae/nib/session/fork_history/module.ae "nib.msg|nib.provider.types
 expect_imports $T/web/module.ae "nib.jsonx|nib.tools.html|std.http.client|std.json|std.string|std.sync|std.worker"
 expect_imports $T/llm_call/module.ae "nib.jsonx|nib.lock|nib.msg|nib.provider|nib.provider.sink|nib.provider.types|std.json|std.list|std.strbuilder|std.string|std.sync"
 expect_imports $T/web_search/module.ae "nib.jsonx|nib.lock|nib.provider.sse|nib.provider.types|std.http.client|std.json|std.list|std.string|std.sync|std.time|std.worker"
-expect_imports $T/module.ae "nib.fence|nib.image|nib.jsonx|nib.lock|nib.provider.types|nib.sandbox|nib.sysenv|nib.tools.agent|nib.tools.agent_input|nib.tools.agent_sessions|nib.tools.atomic_file|nib.tools.background|nib.tools.bash|nib.tools.changes|nib.tools.denials|nib.tools.egress|nib.tools.file_state|nib.tools.files|nib.tools.jail|nib.tools.llm_call|nib.tools.mcp_tool|nib.tools.progress|nib.tools.registry|nib.tools.search|nib.tools.undo|nib.tools.view|nib.tools.web|nib.tools.web_search|std.list|std.os|std.strbuilder|std.string|std.sync"
+# naeb's Maven broker (experimental; docs/naeb/adr/0001, "The Maven broker"):
+# coordinates, POMs and OpenPGP are pure logic; repo is its one GET; the
+# broker writes only into ~/.m2/repository (atomic_file) and starts no process.
+expect_imports ae/nib/maven/gav/module.ae "std.list|std.string|std.time"
+expect_imports ae/nib/maven/pom/module.ae "std.list|std.string|std.xml"
+expect_imports ae/nib/maven/pgp/module.ae "std.bytes|std.cryptography|std.cryptography.ed25519|std.cryptography.rsa|std.encoding|std.list|std.string"
+expect_imports ae/nib/maven/repo/module.ae "std.http.client|std.string"
+expect_imports ae/nib/maven/broker/module.ae "nib.jsonx|nib.lock|nib.maven.gav|nib.maven.pgp|nib.maven.pom|nib.maven.repo|nib.tools.atomic_file|std.cryptography|std.fs|std.list|std.map|std.string|std.time"
+expect_imports $T/module.ae "nib.fence|nib.image|nib.jsonx|nib.lock|nib.maven.broker|nib.provider.types|nib.sandbox|nib.sysenv|nib.tools.agent|nib.tools.agent_input|nib.tools.agent_sessions|nib.tools.atomic_file|nib.tools.background|nib.tools.bash|nib.tools.changes|nib.tools.denials|nib.tools.egress|nib.tools.file_state|nib.tools.files|nib.tools.jail|nib.tools.llm_call|nib.tools.mcp_tool|nib.tools.progress|nib.tools.registry|nib.tools.search|nib.tools.undo|nib.tools.view|nib.tools.web|nib.tools.web_search|std.list|std.os|std.strbuilder|std.string|std.sync"
 
 # The Session + provider slice.
 expect_imports ae/nib/auth/module.ae "nib.auth.store|nib.config|nib.config.env|nib.provider.types|std.list|std.string"
@@ -246,13 +254,20 @@ rule "QuickJS is embedded only by the sandbox and grep's private matcher" \
     '^import contrib\.quickjs' "ae/nib/sandbox/module.ae|$T/grep/"
 # - auth/models lists the provider's models for `/model` (upstream
 #   auth/models.zig): one GET, with the key the Session would send.
-rule "only provider/http (the model request), auth/models (the /model listing), mcp_transport (Streamable HTTP MCP servers) tools/web_search (the search request), tools/web (tools.fetch) and tools/egress (a fence's proxy) reach the network" \
-    '^import std\.(http|net|tcp|udp)' "ae/nib/provider/http/|ae/nib/auth/models/|ae/nib/mcp/mcp_transport/|$T/web/|$T/web_search/|$T/egress/"
+rule "only provider/http (the model request), auth/models (the /model listing), mcp_transport (Streamable HTTP MCP servers) tools/web_search (the search request), tools/web (tools.fetch), tools/egress (a fence's proxy) and maven/repo (the Maven broker's GET, naeb's own) reach the network" \
+    '^import std\.(http|net|tcp|udp)' "ae/nib/provider/http/|ae/nib/auth/models/|ae/nib/mcp/mcp_transport/|$T/web/|$T/web_search/|$T/egress/|ae/nib/maven/repo/"
 if grep -nE 'client\.request\(' ae/nib/auth/models/module.ae | grep -vqE 'client\.request\("GET", '; then
     echo "FAIL ae/nib/auth/models sends something other than a GET"; fail=1
 else
     echo "ok   ae/nib/auth/models only GETs"
 fi
+if grep -nE 'client\.request\(' ae/nib/maven/repo/module.ae | grep -vqE 'client\.request\("GET", '; then
+    echo "FAIL ae/nib/maven/repo sends something other than a GET"; fail=1
+else
+    echo "ok   ae/nib/maven/repo only GETs"
+fi
+rule "the Maven broker is reached only from the tools" \
+    '^import nib\.maven\.broker' "$T/module.ae"
 rule "the /model listing is reached only from the TUI's app and its provider flow" \
     '^import nib\.auth\.models' "$U/module.ae|$U/provider_flow/"
 rule "the TUI reaches the Session only through its live port" \

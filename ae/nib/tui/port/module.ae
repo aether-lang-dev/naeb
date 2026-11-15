@@ -59,6 +59,9 @@ exports(Port, Script, scripted, script_of, emit, end_turn, fail_turn, play_next,
 //                                     records (a JSON array): nib.fence.policy.propose's JSON, "" none
 //   fence_apply(ctx, proposal, q)     naeb: the user approved `proposal`; applies it off the app's
 //                                     thread and posts {"fence_applied":{"ok":..,"error"?,"output"?}} to q
+//   maven_override(ctx, record, q)    naeb: the user approved a too-young Maven version (a
+//                                     fence_denied record, op maven_age); fetches it off the app's
+//                                     thread and posts {"maven_fetched":<tools.maven_fetch result>} to q
 //   drain_progress(ctx) -> ptr        std.list of progress JSON objects due while idle
 //   predict(ctx, instruction, input, cancel) -> string   the model's reply, "" on failure
 //   skills_summary(ctx) -> string     {"count","found","skipped","missing"} of the Session's start
@@ -92,6 +95,7 @@ struct Port {
     fence: fn
     fence_propose: fn
     fence_apply: fn
+    maven_override: fn
     drain_progress: fn
     predict: fn
     skills_summary: fn
@@ -131,6 +135,7 @@ struct Script {
     proposal: string        // fence_propose's answer
     proposed: string[]      // the records fence_propose was asked about
     applied: string[]       // the proposals fence_apply was given
+    overridden: string[]    // the records maven_override was given
 }
 
 struct Events {
@@ -225,6 +230,10 @@ scripted(cfg: @keep ptr, home: string) -> *Port {
     p.fence_apply = |ctx: ptr, prop: string, q: ptr| {
         sc = ctx as *Script
         sc.applied.push(string.copy(prop))
+    }
+    p.maven_override = |ctx: ptr, record: string, q: ptr| {
+        sc = ctx as *Script
+        sc.overridden.push(string.copy(record))
     }
     p.drain_progress = |ctx: ptr| {
         sc = ctx as *Script
