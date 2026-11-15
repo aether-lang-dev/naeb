@@ -13,6 +13,7 @@ import nib.fserr
 import nib.tools.atomic_file
 import nib.tools.file_state
 import nib.tools.jail
+import nib.tools.rules
 import nib.tools.undo
 
 exports(Ctx, new_ctx, read, edit, write, FILE_LIMIT, count_occurrences, replace_all)
@@ -25,6 +26,8 @@ struct Ctx {
     state: ptr         // *file_state.State
     roots: ptr         // canonical writable roots, or null when the sandbox is off
     creds: ptr         // canonical credential paths
+    reads: ptr         // a project fence's read rules (tools.rules), or null
+    wdeny: ptr         // a fence's read-only paths inside the roots, or null
     // |path: string, has_before: int, before: string, after: string, tracked: int|
     // called after a successful edit/write (tracked 0: the before was unreadable)
     on_change: fn
@@ -39,6 +42,8 @@ new_ctx(nib_home: string, cancel: @keep ptr, state: @keep ptr, roots: @keep ptr,
     c.state = state
     c.roots = roots
     c.creds = creds
+    c.reads = null
+    c.wdeny = null
     c.has_on_change = 0
     c.undo = null
     return c as ptr
@@ -67,10 +72,12 @@ resolve_(c: *Ctx, raw: string) -> (string, string) {
     path, err = atomic_file.canonical_path(raw)
     if err != "" { return "", err }
     if credential_(c, path) == 1 { return "", "CredentialAccessDenied" }
+    if rules.allows(c.reads, path) == 0 { return "", "denied by the project fence: read ${path}" }
     return path, ""
 }
 
 blocked_(c: *Ctx, path: string) -> string {
+    if c.wdeny != null && rules.inside(c.wdeny, path) == 1 { return "denied by the project fence: write ${path}" }
     if c.roots == null { return "" }
     if jail.allows(c.roots, path) == 1 { return "" }
     return "outside the project; the sandbox only allows writes inside the project and its writable roots"

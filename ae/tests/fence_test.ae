@@ -1,0 +1,241 @@
+// naeb's project fence (docs/naeb/adr/0001): the read rules both layers
+// share, a Fence's resolution into a jail.Spec, the in-process checks of
+// grep/glob/read/write, the egress proxy, and the child environment. No
+// upstream counterpart: this is naeb's own.
+
+import std.spec
+import std.fs
+import std.list
+import std.string
+import std.tcp
+import nib.jsonx
+import nib.fence
+import nib.tools.rules
+import nib.tools.jail
+import nib.tools.search
+import nib.tools.files
+import nib.tools.file_state
+import nib.tools.egress
+
+tmp_() -> string {
+    d, _e = fs.make_temp_dir("", "naeb-fence")
+    real, _k, _m = fs.realpath(d)
+    return real
+}
+
+put_(path: string, text: string) { fs.write(path, text) }
+
+has_(l: ptr, s: string) -> int {
+    n = list.list_size(l)
+    i = 0
+    while i < n {
+        v, _e = list.get_string(l, i)
+        if v == s { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+contains_(s: string, part: string) -> int { return string.contains(s, part) }
+
+// A home with a secret, a project inside it and a file beside the project.
+fixture_() -> string {
+    base = tmp_()
+    fs.mkdir_p("${base}/home/.ssh")
+    fs.mkdir_p("${base}/home/work/proj/.git/hooks")
+    fs.mkdir_p("${base}/home/other")
+    put_("${base}/home/.ssh/id", "KEY-canary")
+    put_("${base}/home/other/notes", "KEY-canary elsewhere")
+    put_("${base}/home/work/proj/a.txt", "KEY-canary in the project")
+    put_("${base}/home/.gitconfig", "[user]\n")
+    return base
+}
+
+request_(port: int, text: string) -> string {
+    c, err = tcp.connect("127.0.0.1", port)
+    if err != "" { return "connect: ${err}" }
+    tcp.write_all(c, string.bytes(text)[0..string.length(text)])
+    out = ""
+    while true {
+        data, n, rerr = tcp.read_n(c, 4096)
+        if rerr == "timeout" { continue }
+        if rerr != "" || n <= 0 { break }
+        out = "${out}${data}"
+        if string.contains(out, "\r\n\r\n") == 1 { break }
+    }
+    tcp.tcp_close(c)
+    return out
+}
+
+main() {
+    fw = spec.init()
+    spec.describe(fw, "tools.rules") {
+        spec.it("the deepest rule decides; no rule allows") callback {
+            r = list.list_new()
+            list.list_add(r, "-/h")
+            list.list_add(r, "+/h/p")
+            list.list_add(r, "-/h/p/.env")
+            spec.assert_eq(rules.allows(r, "/etc/passwd"), 1, "uncovered")
+            spec.assert_eq(rules.allows(r, "/h"), 0, "home")
+            spec.assert_eq(rules.allows(r, "/h/x"), 0, "below home")
+            spec.assert_eq(rules.allows(r, "/h/p/src/a"), 1, "project")
+            spec.assert_eq(rules.allows(r, "/h/p/.env"), 0, "deny inside allow")
+            spec.assert_eq(rules.allows(r, "/h/pp"), 0, "prefix is not a component")
+            spec.assert_eq(rules.allows(null, "/h"), 1, "no rules")
+        }
+        spec.it("a closed directory is visible to a walk only on the way to an allowed one") callback {
+            r = list.list_new()
+            list.list_add(r, "-/h")
+            list.list_add(r, "+/h/work/p")
+            spec.assert_eq(rules.visible(r, "/h", 1), 1, "home on the way")
+            spec.assert_eq(rules.visible(r, "/h/work", 1), 1, "parent on the way")
+            spec.assert_eq(rules.visible(r, "/h/other", 1), 0, "other dir")
+            spec.assert_eq(rules.visible(r, "/h/file", 0), 0, "file in home")
+        }
+        spec.it("sorted puts rules shallow to deep, a deny after an allow of the same length") callback {
+            r = list.list_new()
+            list.list_add(r, "-/h/.ssh")
+            list.list_add(r, "+/h/p")
+            list.list_add(r, "-/h")
+            list.list_add(r, "+/hh")
+            s = rules.sorted(r)
+            a, _e = list.get_string(s, 0)
+            b, _e2 = list.get_string(s, 1)
+            c, _e3 = list.get_string(s, 2)
+            d, _e4 = list.get_string(s, 3)
+            spec.assert_str_eq("${a} ${b} ${c} ${d}", "-/h +/hh +/h/p -/h/.ssh", "order")
+        }
+    }
+    spec.describe(fw, "fence") {
+        spec.it("resolves to a closed home, the project and the secrets denied") callback {
+            base = fixture_()
+            f = fence.new("${base}/home")
+            sp = fence.resolve(f, "${base}/home/work/proj", "${base}/home/.nib", null) as *jail.Spec
+            spec.assert_eq(rules.allows(sp.reads, "${base}/home/work/proj/a.txt"), 1, "project")
+            spec.assert_eq(rules.allows(sp.reads, "${base}/home/other/notes"), 0, "home")
+            spec.assert_eq(rules.allows(sp.reads, "${base}/home/.ssh/id"), 0, "secret")
+            spec.assert_eq(rules.allows(sp.reads, "${base}/home/.gitconfig"), 1, "gitconfig")
+            spec.assert_eq(rules.allows(sp.reads, "${base}/home/.nib/auth.json"), 0, "nib home")
+            spec.assert_eq(rules.allows(sp.reads, "/usr/bin/env"), 1, "system")
+            spec.assert_eq(has_(sp.writes, "${base}/home/work/proj"), 1, "project writable")
+            spec.assert_eq(has_(sp.write_deny, "${base}/home/work/proj/.git/hooks"), 1, "hooks read-only")
+            spec.assert_eq(has_(sp.write_deny, "${base}/home/work/proj/.git/config"), 1, "git config read-only")
+            fs.remove_tree(base)
+        }
+        spec.it("allow_read of a secret's exact path lifts it; open_home keeps only the secrets") callback {
+            base = fixture_()
+            f = fence.new("${base}/home")
+            fence.allow_read(f, "~/.ssh")
+            fence.open_home(f)
+            fence.deny_read(f, "~/other")
+            sp = fence.resolve(f, "${base}/home/work/proj", "", null) as *jail.Spec
+            spec.assert_eq(rules.allows(sp.reads, "${base}/home/.ssh/id"), 1, "lifted")
+            spec.assert_eq(rules.allows(sp.reads, "${base}/home/x"), 1, "open home")
+            spec.assert_eq(rules.allows(sp.reads, "${base}/home/other/notes"), 0, "deny_read")
+            spec.assert_eq(rules.allows(sp.reads, "${base}/home/.aws/credentials"), 0, "a missing secret")
+            fs.remove_tree(base)
+        }
+        spec.it("hosts match by name and port, a *. pattern below its domain") callback {
+            f = fence.new("/h")
+            fence.allow_host(f, "Repo.Maven.Apache.org", 443)
+            fence.allow_host(f, "*.npmjs.org", 443)
+            spec.assert_eq(fence.host_allowed(f, "repo.maven.apache.org", 443), 1, "exact")
+            spec.assert_eq(fence.host_allowed(f, "repo.maven.apache.org", 80), 0, "other port")
+            spec.assert_eq(fence.host_allowed(f, "registry.npmjs.org", 443), 1, "wildcard")
+            spec.assert_eq(fence.host_allowed(f, "npmjs.org.evil.com", 443), 0, "suffix only")
+            spec.assert_eq(fence.host_allowed(f, "evilnpmjs.org", 443), 0, "dot boundary")
+        }
+        spec.it("a child keeps only the allow-listed environment, plus the proxy") callback {
+            f = fence.new("/h")
+            fence.pass_env(f, "JAVA_OPTS")
+            base = list.list_new()
+            list.list_add(base, "PATH=/bin")
+            list.list_add(base, "SERVICE_PASSWORD=secret")
+            list.list_add(base, "JAVA_OPTS=-Xmx1g")
+            list.list_add(base, "LC_ALL=C")
+            env = fence.child_env(f, base, "http://127.0.0.1:3128")
+            spec.assert_eq(has_(env, "PATH=/bin"), 1, "PATH")
+            spec.assert_eq(has_(env, "SERVICE_PASSWORD=secret"), 0, "secret dropped")
+            spec.assert_eq(has_(env, "JAVA_OPTS=-Xmx1g"), 1, "pass_env")
+            spec.assert_eq(has_(env, "LC_ALL=C"), 1, "locale")
+            spec.assert_eq(has_(env, "HTTPS_PROXY=http://127.0.0.1:3128"), 1, "proxy")
+            spec.assert_eq(has_(env, "JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=3128 -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=3128 -Dhttp.nonProxyHosts="), 1, "jvm")
+        }
+    }
+    spec.describe(fw, "fence, in-process tools") {
+        spec.it("grep and glob skip what the rules close, and refuse a closed root") callback {
+            base = fixture_()
+            f = fence.new("${base}/home")
+            sp = fence.resolve(f, "${base}/home/work/proj", "", null) as *jail.Spec
+            home = jsonx.quote("${base}/home")
+            ok, found = search.grep("{\"pattern\":\"KEY-canary\",\"literal\":true,\"path\":${home}}", null, sp.reads, null)
+            spec.assert_eq(ok, 1, "grep ok")
+            spec.assert_true(contains_(found, "in the project"), "project file found")
+            spec.assert_false(contains_(found, "elsewhere"), "home file skipped")
+            spec.assert_false(contains_(found, ".ssh"), "secret skipped")
+            ok2, listed = search.glob("{\"pattern\":\"**/*\",\"path\":${home}}", null, sp.reads, null)
+            spec.assert_eq(ok2, 1, "glob ok")
+            spec.assert_false(contains_(listed, "id"), "secret not listed")
+            ok3, refused = search.grep("{\"pattern\":\"x\",\"path\":${jsonx.quote("${base}/home/.ssh")}}", null, sp.reads, null)
+            spec.assert_eq(ok3, 0, "closed root refused")
+            spec.assert_true(contains_(refused, "denied by the project fence"), "named")
+            fs.remove_tree(base)
+        }
+        spec.it("read names the closed path; write refuses read-only paths in the project") callback {
+            base = fixture_()
+            f = fence.new("${base}/home")
+            sp = fence.resolve(f, "${base}/home/work/proj", "${base}/home/.nib", null) as *jail.Spec
+            fs.mkdir_p("${base}/home/.nib")
+            c = files.new_ctx("${base}/home/.nib", null, file_state.new(), sp.writes, list.list_new()) as *files.Ctx
+            c.reads = sp.reads
+            c.wdeny = sp.write_deny
+            ok, text = files.read(c as ptr, "{\"path\":${jsonx.quote("${base}/home/.ssh/id")}}")
+            spec.assert_eq(ok, 0, "read refused")
+            spec.assert_true(contains_(text, "denied by the project fence: read ${base}/home/.ssh/id"), "path named")
+            ok2, text2 = files.write(c as ptr, "{\"path\":${jsonx.quote("${base}/home/work/proj/.git/hooks/pre-commit")},\"content\":\"x\"}")
+            spec.assert_eq(ok2, 0, "hook refused")
+            spec.assert_true(contains_(text2, "denied by the project fence: write"), "write named")
+            spec.assert_eq(fs.exists("${base}/home/work/proj/.git/hooks/pre-commit"), 0, "no hook")
+            ok3, _t3 = files.write(c as ptr, "{\"path\":${jsonx.quote("${base}/home/work/proj/b.txt")},\"content\":\"x\"}")
+            spec.assert_eq(ok3, 1, "project write")
+            fs.remove_tree(base)
+        }
+    }
+    spec.describe(fw, "tools.egress") {
+        spec.it("allows a fence's host:port, refuses others with the pair named and remembered") callback {
+            up, uerr = tcp.listen_on("127.0.0.1", 0)
+            spec.assert_str_eq(uerr, "", "upstream listener")
+            uport = tcp.server_port(up)
+            f = fence.new("/h")
+            fence.allow_host(f, "127.0.0.1", uport)
+            p, err = egress.start(f, "")
+            spec.assert_str_eq(err, "", "started")
+            port = egress.port(p)
+            denied = request_(port, "CONNECT 127.0.0.1:1 HTTP/1.1\r\nHost: 127.0.0.1:1\r\n\r\n")
+            spec.assert_true(string.starts_with(denied, "HTTP/1.1 403"), "403")
+            spec.assert_true(contains_(denied, "X-Naeb-Denied: 127.0.0.1:1"), "pair named")
+            plain = request_(port, "GET http://evil.example:8080/x HTTP/1.1\r\nHost: evil.example\r\n\r\n")
+            spec.assert_true(contains_(plain, "egress to evil.example:8080"), "absolute form refused")
+            ok = request_(port, "CONNECT 127.0.0.1:${uport} HTTP/1.1\r\nHost: x\r\n\r\n")
+            spec.assert_true(string.starts_with(ok, "HTTP/1.1 200"), "tunnel opened")
+            d = egress.take_denied(p)
+            spec.assert_eq(list.list_size(d), 2, "two denials")
+            first, _e = list.get_string(d, 0)
+            spec.assert_str_eq(first, "127.0.0.1:1", "first denial")
+            spec.assert_eq(list.list_size(egress.take_denied(p)), 0, "emptied")
+            egress.close(p)
+            tcp.tcp_server_close(up)
+        }
+        spec.it("parses authorities with ports, defaults and IPv6") callback {
+            h, port = egress.parse_target("example.com:8443", 443)
+            spec.assert_str_eq("${h}:${port}", "example.com:8443", "port")
+            h2, p2 = egress.parse_target("example.com", 80)
+            spec.assert_str_eq("${h2}:${p2}", "example.com:80", "default")
+            h3, p3 = egress.parse_target("[::1]:9", 443)
+            spec.assert_str_eq("${h3}:${p3}", "::1:9", "ipv6")
+            _h4, p4 = egress.parse_target("x:notaport", 443)
+            spec.assert_eq(p4, 0, "bad port")
+        }
+    }
+    return spec.run_summary(fw)
+}

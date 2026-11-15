@@ -38,7 +38,7 @@ main() {
             spec.assert_str_eq(web.cap("short"), "short", "short")
         }
         spec.it("unsupported schemes are refused before any request") callback {
-            _p, err, _ct = web.get("file:///etc/passwd", 0, 30000 as long, null)
+            _p, err, _ct = web.get("file:///etc/passwd", 0, 30000 as long, null, "")
             spec.assert_str_eq(err, "UnsupportedUrlScheme", "refused")
         }
     }

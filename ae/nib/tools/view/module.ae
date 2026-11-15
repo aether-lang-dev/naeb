@@ -4,7 +4,7 @@
 // content-hash name and its reference (not its bytes) is what the Run keeps.
 // What a call needs comes in its Target (nib.image: the model's vision, the
 // data home, the Session id, the Run's Attached) and the credential paths
-// the file tools refuse. No module state.
+// the file tools refuse, and a project fence's read rules. No module state.
 
 import std.fs
 import std.list
@@ -13,6 +13,7 @@ import nib.image
 import nib.jsonx
 import nib.fserr
 import nib.tools.atomic_file
+import nib.tools.rules
 
 exports(view)
 
@@ -36,7 +37,7 @@ limit_text_() -> string { return "at most ${image.MAX_PER_RUN} images per Run" }
 
 // (1, JSON text) is the call's result, data even when refused; (0, text)
 // rejects the call.
-view(tp: ptr, creds: ptr, args: string) -> (int, string) {
+view(tp: ptr, creds: ptr, reads: ptr, args: string) -> (int, string) {
     t = tp as *image.Target
     a = jsonx.parse(args)
     if a == null || jsonx.kind(a, "path") != 3 {
@@ -50,6 +51,7 @@ view(tp: ptr, creds: ptr, args: string) -> (int, string) {
     path, perr = atomic_file.canonical_path(raw)
     if perr != "" { return 0, perr }
     if credential_(creds, path) == 1 { return 0, "CredentialAccessDenied" }
+    if rules.allows(reads, path) == 0 { return 0, "denied by the project fence: read ${path}" }
     if image.attached_count(t.attached) >= image.MAX_PER_RUN { return refuse_(limit_text_()) }
     s, rk, _rm = fs.stat(path, 1)
     if rk != fs.KIND_OK { return refuse_(image.rejection(fserr.errname(rk))) }

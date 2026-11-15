@@ -1,0 +1,260 @@
+// tools.egress: naeb's egress proxy for a project fence (docs/naeb/adr/0001).
+// The only way out for a fenced child and for tools.fetch: `CONNECT
+// host:port` (TLS is tunnelled, never intercepted) and absolute-form
+// `GET http://host/...`, allowed only for the fence's host:port pairs; any
+// other is answered 403 with the pair named, and remembered until
+// take_denied. Names are resolved here: children have no DNS. It listens on
+// 127.0.0.1 (tools.fetch, macOS children) and, on Linux, on a Unix socket
+// the namespace relay of tools/jail reaches. One Proxy per Tools, its own
+// threads; nothing here is module state.
+
+import std.tcp
+import std.fs
+import std.list
+import std.string
+import std.sync
+import std.worker
+import nib.lock
+import nib.fence
+
+exports(Proxy, start, url, sock_path, port, take_denied, close, parse_target)
+
+const HEADER_LIMIT = 16384
+const IDLE_MS = 300000
+
+struct Proxy {
+    fence: ptr
+    server: ptr        // 127.0.0.1 listener
+    port: int
+    unix_server: ptr   // Linux: the Unix listener, or null
+    sock: string
+    guard: ptr
+    denied: ptr        // "host:port" refused since the last take
+    stopped: ptr       // std.sync cell
+}
+
+// (proxy, "") or (null, why). sock: a Unix socket path to listen on too, or
+// ""; its directory is made, owner-only.
+start(fence_p: @keep ptr, sock: string) -> (ptr, string) {
+    server, err = tcp.listen_on("127.0.0.1", 0)
+    if err != "" { return null, "egress proxy: ${err}" }
+    p = heap.new(Proxy)
+    p.fence = fence_p
+    p.server = server
+    p.port = tcp.server_port(server)
+    p.unix_server = null
+    p.sock = ""
+    p.guard = lock.new()
+    p.denied = list.list_new()
+    p.stopped = sync.atomic_new(0)
+    pp = p as ptr
+    if sock != "" {
+        fs.mkdir_p(fs.path_dirname(sock))
+        if fs.exists(sock) == 1 { fs.delete(sock) }
+        us, uerr = tcp.listen_unix(sock)
+        if uerr != "" {
+            tcp.tcp_server_close(server)
+            return null, "egress proxy: ${uerr}"
+        }
+        p.unix_server = us
+        p.sock = sock
+        worker.run_detached(|| {
+            accept_loop_(pp, us)
+            return null
+        })
+    }
+    worker.run_detached(|| {
+        accept_loop_(pp, server)
+        return null
+    })
+    return pp, ""
+}
+
+url(pp: ptr) -> string { return "http://127.0.0.1:${(pp as *Proxy).port}" }
+sock_path(pp: ptr) -> string { return (pp as *Proxy).sock }
+port(pp: ptr) -> int { return (pp as *Proxy).port }
+
+// The pairs refused since the last call, oldest first; emptied.
+take_denied(pp: ptr) -> ptr {
+    p = pp as *Proxy
+    lock.acquire(p.guard)
+    out = p.denied
+    p.denied = list.list_new()
+    lock.release(p.guard)
+    return out
+}
+
+close(pp: ptr) {
+    p = pp as *Proxy
+    if sync.atomic_cas(p.stopped, 0, 1) == 0 { return }
+    tcp.tcp_server_close(p.server)
+    if p.unix_server != null { tcp.tcp_server_close(p.unix_server) }
+}
+
+accept_loop_(pp: @keep ptr, server: @keep ptr) {
+    p = pp as *Proxy
+    while sync.atomic_load(p.stopped) == 0 {
+        if tcp.server_poll(server, 200) <= 0 { continue }
+        c, err = tcp.accept(server)
+        if err != "" { continue }
+        worker.run_detached(|| {
+            handle_(pp, c)
+            return null
+        })
+    }
+}
+
+deny_(p: *Proxy, pair: string) {
+    lock.acquire(p.guard)
+    list.list_add(p.denied, pair)
+    lock.release(p.guard)
+}
+
+send_text_(sock: ptr, text: string) {
+    tcp.write_all(sock, string.bytes(text)[0..string.length(text)])
+}
+
+// host, port and the rest of an authority ("h:1", "[::1]:2", "h" with dflt).
+parse_target(authority: string, dflt: int) -> (string, int) {
+    a = authority
+    if string.starts_with(a, "[") == 1 {
+        close_b = string.index_of(a, "]")
+        if close_b < 0 { return "", 0 }
+        host = string.substring(a, 1, close_b)
+        rest = string.substring(a, close_b + 1, string.length(a))
+        if string.starts_with(rest, ":") == 1 { return host, port_of_(string.substring(rest, 1, string.length(rest))) }
+        return host, dflt
+    }
+    colon = string.index_of(a, ":")
+    if colon < 0 { return a, dflt }
+    return string.substring(a, 0, colon), port_of_(string.substring(a, colon + 1, string.length(a)))
+}
+
+// A decimal port, or 0.
+port_of_(s: string) -> int {
+    n = string.length(s)
+    if n == 0 || n > 5 { return 0 }
+    v = 0
+    i = 0
+    while i < n {
+        c = string.char_at(s, i)
+        if c < 48 || c > 57 { return 0 }
+        v = v * 10 + (c - 48)
+        i = i + 1
+    }
+    if v > 65535 { return 0 }
+    return v
+}
+
+handle_(pp: @keep ptr, c: @keep ptr) {
+    p = pp as *Proxy
+    head = ""
+    end = -1
+    while end < 0 && string.length(head) < HEADER_LIMIT {
+        ready, _perr = tcp.poll(c, 10000)
+        if !ready {
+            tcp.tcp_close(c)
+            return
+        }
+        chunk, n, rerr = tcp.read_n(c, 8192)
+        if rerr == "timeout" { continue }
+        if rerr != "" || n <= 0 {
+            tcp.tcp_close(c)
+            return
+        }
+        head = "${head}${chunk}"
+        end = string.index_of(head, "\r\n\r\n")
+    }
+    if end < 0 {
+        send_text_(c, "HTTP/1.1 431 Request Header Fields Too Large\r\nConnection: close\r\n\r\n")
+        tcp.tcp_close(c)
+        return
+    }
+    line_end = string.index_of(head, "\r\n")
+    line = string.substring(head, 0, line_end)
+    sp1 = string.index_of(line, " ")
+    sp2 = -1
+    if sp1 > 0 { sp2 = string.index_of_from(line, " ", sp1 + 1) }
+    if sp1 <= 0 || sp2 <= sp1 {
+        send_text_(c, "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
+        tcp.tcp_close(c)
+        return
+    }
+    method = string.substring(line, 0, sp1)
+    target = string.substring(line, sp1 + 1, sp2)
+    version = string.substring(line, sp2 + 1, string.length(line))
+    rest = string.substring(head, end + 4, string.length(head))
+    host = ""
+    port = 0
+    forward = ""
+    if method == "CONNECT" {
+        host, port = parse_target(target, 443)
+    } else if string.starts_with(string.to_lower(target), "http://") == 1 {
+        after = string.substring(target, 7, string.length(target))
+        slash = string.index_of(after, "/")
+        authority = after
+        path = "/"
+        if slash >= 0 {
+            authority = string.substring(after, 0, slash)
+            path = string.substring(after, slash, string.length(after))
+        }
+        host, port = parse_target(authority, 80)
+        forward = "${method} ${path} ${version}${string.substring(head, line_end, end + 4)}"
+    } else {
+        send_text_(c, "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nnaeb: only CONNECT and absolute http:// requests go through this proxy\n")
+        tcp.tcp_close(c)
+        return
+    }
+    pair = "${host}:${port}"
+    if host == "" || port <= 0 || fence.host_allowed(p.fence, host, port) == 0 {
+        deny_(p, pair)
+        body = "naeb: egress to ${pair} is not in the project fence\n"
+        send_text_(c, "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: ${string.length(body)}\r\nConnection: close\r\nX-Naeb-Denied: ${pair}\r\n\r\n${body}")
+        tcp.tcp_close(c)
+        return
+    }
+    up, uerr = tcp.connect_timeout(host, port, 10000)
+    if uerr != "" {
+        send_text_(c, "HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\nnaeb: ${pair}: ${uerr}\n")
+        tcp.tcp_close(c)
+        return
+    }
+    if method == "CONNECT" {
+        send_text_(c, "HTTP/1.1 200 Connection established\r\n\r\n")
+    } else {
+        send_text_(up, forward)
+    }
+    if string.length(rest) > 0 { tcp.write_all(up, string.bytes(rest)[0..string.length(rest)]) }
+    splice_(c, up)
+    tcp.tcp_close(up)
+    tcp.tcp_close(c)
+}
+
+// Copies bytes both ways until either side closes or both idle IDLE_MS.
+splice_(a: ptr, b: ptr) {
+    idle = 0
+    while idle < IDLE_MS {
+        r = tcp.tcp_poll2_raw(a, b, 1000)
+        if r < 0 { return }
+        if r == 0 {
+            idle = idle + 1000
+            continue
+        }
+        idle = 0
+        if (r & 1) != 0 {
+            if relay_(a, b) == 0 { return }
+        }
+        if (r & 2) != 0 {
+            if relay_(b, a) == 0 { return }
+        }
+    }
+}
+
+relay_(from: ptr, to: ptr) -> int {
+    data, n, err = tcp.read_n(from, 65536)
+    if err == "timeout" { return 1 }
+    if err != "" || n <= 0 { return 0 }
+    _w, werr = tcp.write_all(to, string.bytes(data)[0..n])
+    if werr != "" { return 0 }
+    return 1
+}

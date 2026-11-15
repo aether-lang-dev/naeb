@@ -1,0 +1,285 @@
+// fence: a project's fence against supply-chain attacks
+// (docs/naeb/adr/0001). A project's launcher builds one in Aether code and
+// hands it to nib.app.run; nothing here is module state. One Fence drives
+// both layers: the in-process tools check paths and hosts against it, and
+// every child naeb starts runs inside the jail.Spec it resolves to.
+//
+//     f = fence.new(home)
+//     fence.allow_read(f, "~/.m2/repository")
+//     fence.allow_write(f, "~/.m2/repository")
+//     fence.allow_host(f, "repo.maven.apache.org", 443)
+//     fence.pass_env(f, "JAVA_HOME")
+//
+// Reads: $HOME is closed except the project, the writable roots, the
+// allowed paths and ~/.gitconfig; a built-in secrets list stays denied even
+// inside them unless allow_read names exactly that path. Writes: the project,
+// temp dirs and devices, plus allow_write; .git/hooks, .git/config and
+// deny_write paths stay read-only. Egress: only allow_host pairs, through
+// naeb's proxy.
+
+import std.fs
+import std.list
+import std.string
+import nib.tools.atomic_file
+import nib.tools.jail
+import nib.tools.rules
+
+exports(Fence, new, open_home, allow_read, deny_read, allow_write, deny_write, allow_host, pass_env,
+        allow_loopback, host_allowed, resolve, child_env, proxy_env, read_rules, write_denied, SECRETS)
+
+// Relative to $HOME: denied to every fenced reader unless allowed exactly.
+const SECRETS[] = [".ssh", ".aws", ".gnupg", ".config/gh", ".config/gcloud", ".azure", ".kube", ".docker",
+                   ".netrc", ".git-credentials", ".config/git/credentials", ".npmrc", ".yarnrc", ".pypirc",
+                   ".gem/credentials", ".m2/settings.xml", ".m2/settings-security.xml",
+                   ".gradle/gradle.properties", ".cargo/credentials", ".cargo/credentials.toml",
+                   ".config/hub", ".password-store", ".local/share/keyrings", ".mozilla",
+                   ".config/google-chrome", ".config/chromium", ".config/BraveSoftware",
+                   "Library/Keychains", "Library/Application Support/Google/Chrome",
+                   "Library/Application Support/Firefox", "Library/Application Support/BraveSoftware",
+                   "Library/Cookies", ".codex", ".naeb", ".zsh_history", ".bash_history"]
+const SECRET_COUNT = 36
+
+// Readable under a closed $HOME without asking: git needs them to run at all.
+const HOME_READS[] = [".gitconfig", ".config/git"]
+const HOME_READ_COUNT = 2
+
+// Names a fenced child keeps from naeb's environment (plus pass_env names).
+const ENV_KEEP[] = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "COLORTERM", "NO_COLOR", "LANG",
+                    "LANGUAGE", "TZ", "TMPDIR", "PWD", "JAVA_HOME", "GOPATH", "GOROOT", "CARGO_HOME",
+                    "RUSTUP_HOME", "GRADLE_USER_HOME", "MAVEN_HOME", "M2_HOME", "NVM_DIR", "PYENV_ROOT",
+                    "VIRTUAL_ENV", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"]
+const ENV_KEEP_COUNT = 27
+
+struct Fence {
+    home: string
+    home_open: int     // 1: $HOME stays readable except the secrets
+    read_allow: ptr    // absolute paths
+    read_deny: ptr
+    write_allow: ptr
+    write_deny: ptr    // absolute, or relative to the project
+    hosts: ptr         // "host:port"; a host "*.example.com" matches below it
+    env_pass: ptr
+    loopback: int      // macOS: localhost reachable by children
+}
+
+new(home: string) -> ptr {
+    f = heap.new(Fence)
+    f.home = home
+    f.home_open = 0
+    f.read_allow = list.list_new()
+    f.read_deny = list.list_new()
+    f.write_allow = list.list_new()
+    f.write_deny = list.list_new()
+    f.hosts = list.list_new()
+    f.env_pass = list.list_new()
+    f.loopback = 0
+    return f as ptr
+}
+
+expand_(f: *Fence, path: string) -> string { return jail.expand_home(f.home, path) }
+
+open_home(fp: ptr) { (fp as *Fence).home_open = 1 }
+allow_read(fp: ptr, path: string) { list.list_add((fp as *Fence).read_allow, expand_(fp as *Fence, path)) }
+deny_read(fp: ptr, path: string) { list.list_add((fp as *Fence).read_deny, expand_(fp as *Fence, path)) }
+allow_write(fp: ptr, path: string) { list.list_add((fp as *Fence).write_allow, expand_(fp as *Fence, path)) }
+deny_write(fp: ptr, path: string) { list.list_add((fp as *Fence).write_deny, expand_(fp as *Fence, path)) }
+allow_host(fp: ptr, host: string, port: int) { list.list_add((fp as *Fence).hosts, "${string.to_lower(host)}:${port}") }
+pass_env(fp: ptr, name: string) { list.list_add((fp as *Fence).env_pass, name) }
+allow_loopback(fp: ptr) { (fp as *Fence).loopback = 1 }
+
+host_allowed(fp: ptr, host: string, port: int) -> int {
+    f = fp as *Fence
+    h = string.to_lower(host)
+    if string.starts_with(h, "[") == 1 && string.ends_with(h, "]") == 1 { h = string.substring(h, 1, string.length(h) - 1) }
+    want = "${h}:${port}"
+    n = list.list_size(f.hosts)
+    i = 0
+    while i < n {
+        e, _e = list.get_string(f.hosts, i)
+        if e == want { return 1 }
+        if string.starts_with(e, "*.") == 1 {
+            suffix = string.substring(e, 1, string.length(e))
+            if string.ends_with(want, suffix) == 1 { return 1 }
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// The canonical form of a path that may not exist yet.
+canon_(path: string) -> string {
+    c, err = atomic_file.canonical_path(path)
+    if err != "" { return path }
+    return c
+}
+
+has_(l: ptr, s: string) -> int {
+    n = list.list_size(l)
+    i = 0
+    while i < n {
+        v, _e = list.get_string(l, i)
+        if v == s { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+add_rule_(out: ptr, kind: string, path: string) {
+    r = "${kind}${path}"
+    if has_(out, r) == 0 { list.list_add(out, r) }
+}
+
+// The read rules (tools.rules) for a project at `cwd`, given the writable
+// roots and naeb's own data directory.
+read_rules(fp: ptr, cwd: string, nib_home: string, writes: ptr) -> ptr {
+    f = fp as *Fence
+    out = list.list_new()
+    allowed = list.list_new()
+    i = 0
+    while i < list.list_size(f.read_allow) {
+        a, _e = list.get_string(f.read_allow, i)
+        list.list_add(allowed, canon_(a))
+        i = i + 1
+    }
+    if f.home_open == 0 && string.length(f.home) > 0 {
+        add_rule_(out, "-", canon_(f.home))
+        k = 0
+        while k < HOME_READ_COUNT {
+            add_rule_(out, "+", canon_(atomic_file.join(f.home, HOME_READS[k])))
+            k = k + 1
+        }
+    }
+    add_rule_(out, "+", canon_(jail.project_root(cwd)))
+    i = 0
+    while i < list.list_size(writes) {
+        w, _e2 = list.get_string(writes, i)
+        add_rule_(out, "+", w)
+        i = i + 1
+    }
+    i = 0
+    while i < list.list_size(allowed) {
+        a2, _e3 = list.get_string(allowed, i)
+        add_rule_(out, "+", a2)
+        i = i + 1
+    }
+    if string.length(f.home) > 0 {
+        k = 0
+        while k < SECRET_COUNT {
+            s = canon_(atomic_file.join(f.home, SECRETS[k]))
+            if has_(allowed, s) == 0 { add_rule_(out, "-", s) }
+            k = k + 1
+        }
+    }
+    if nib_home != "" {
+        nh = canon_(nib_home)
+        if has_(allowed, nh) == 0 { add_rule_(out, "-", nh) }
+    }
+    i = 0
+    while i < list.list_size(f.read_deny) {
+        d, _e4 = list.get_string(f.read_deny, i)
+        add_rule_(out, "-", canon_(d))
+        i = i + 1
+    }
+    return out
+}
+
+// Canonical read-only paths inside the writable roots.
+write_denied(fp: ptr, cwd: string) -> ptr {
+    f = fp as *Fence
+    out = list.list_new()
+    project = jail.project_root(cwd)
+    git = atomic_file.join(project, ".git")
+    s, k, _m = fs.stat(git, 1)
+    if k == fs.KIND_OK && s.kind == fs.STAT_KIND_DIR {
+        hooks = atomic_file.join(git, "hooks")
+        if fs.exists(hooks) == 0 { fs.mkdir_p(hooks) }
+        list.list_add(out, canon_(hooks))
+        list.list_add(out, canon_(atomic_file.join(git, "config")))
+    }
+    i = 0
+    while i < list.list_size(f.write_deny) {
+        d, _e = list.get_string(f.write_deny, i)
+        p = d
+        if string.starts_with(d, "/") == 0 { p = atomic_file.join(project, d) }
+        list.list_add(out, canon_(p))
+        i = i + 1
+    }
+    return out
+}
+
+// The jail.Spec for a fenced child of a project at `cwd`: writes, read-only
+// paths and read rules. The caller fills in the network (the proxy).
+// env: the child environment as "NAME=value" (null: this process's).
+resolve(fp: ptr, cwd: string, nib_home: string, env: ptr) -> ptr {
+    f = fp as *Fence
+    extra = list.list_new()
+    i = 0
+    while i < list.list_size(f.write_allow) {
+        w, _e = list.get_string(f.write_allow, i)
+        list.list_add(extra, w)
+        i = i + 1
+    }
+    writes = jail.base_roots(cwd, env, extra)
+    sp = jail.new_spec(writes)
+    s = sp as *jail.Spec
+    s.write_deny = write_denied(fp, cwd)
+    s.reads = read_rules(fp, cwd, nib_home, writes)
+    s.loopback = f.loopback
+    return sp
+}
+
+keep_(f: *Fence, name: string) -> int {
+    k = 0
+    while k < ENV_KEEP_COUNT {
+        if ENV_KEEP[k] == name { return 1 }
+        k = k + 1
+    }
+    if string.starts_with(name, "LC_") == 1 { return 1 }
+    return has_(f.env_pass, name)
+}
+
+// A fenced child's environment: only the kept names of `base` ("NAME=value"
+// list), then the proxy's variables when proxy_url is not "".
+child_env(fp: ptr, base: ptr, proxy_url: string) -> ptr {
+    f = fp as *Fence
+    out = list.list_new()
+    n = list.list_size(base)
+    i = 0
+    while i < n {
+        e, _e = list.get_string(base, i)
+        eq = string.index_of(e, "=")
+        if eq > 0 && keep_(f, string.substring(e, 0, eq)) == 1 { list.list_add(out, e) }
+        i = i + 1
+    }
+    if proxy_url != "" {
+        pe = proxy_env(proxy_url)
+        i = 0
+        while i < list.list_size(pe) {
+            v, _e2 = list.get_string(pe, i)
+            list.list_add(out, v)
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// What tells curl, git, pip, gem, npm, Node and the JVM about the proxy
+// ("http://127.0.0.1:<port>").
+proxy_env(proxy_url: string) -> ptr {
+    out = list.list_new()
+    names = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "npm_config_proxy", "npm_config_https_proxy"]
+    k = 0
+    while k < 8 {
+        list.list_add(out, "${names[k]}=${proxy_url}")
+        k = k + 1
+    }
+    list.list_add(out, "NO_PROXY=")
+    list.list_add(out, "no_proxy=")
+    list.list_add(out, "NODE_USE_ENV_PROXY=1")
+    hostport = string.substring(proxy_url, 7, string.length(proxy_url))
+    colon = string.index_of(hostport, ":")
+    host = string.substring(hostport, 0, colon)
+    port = string.substring(hostport, colon + 1, string.length(hostport))
+    list.list_add(out, "JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=${host} -Dhttp.proxyPort=${port} -Dhttps.proxyHost=${host} -Dhttps.proxyPort=${port} -Dhttp.nonProxyHosts=")
+    return out
+}

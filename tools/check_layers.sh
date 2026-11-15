@@ -52,9 +52,9 @@ expect_imports $T/background/module.ae "nib.jsonx|nib.lock|std.list|std.string|s
 # File system, no process.
 expect_imports $T/atomic_file/module.ae "nib.fserr|std.cryptography|std.fs|std.io|std.list|std.os|std.string"
 expect_imports $T/file_state/module.ae "nib.fserr|nib.lock|std.cryptography|std.fs|std.io|std.list|std.map|std.string|std.sync"
-expect_imports $T/files/module.ae "nib.fserr|nib.jsonx|nib.tools.atomic_file|nib.tools.file_state|nib.tools.jail|nib.tools.undo|std.fs|std.list|std.strbuilder|std.string|std.sync"
+expect_imports $T/files/module.ae "nib.fserr|nib.jsonx|nib.tools.atomic_file|nib.tools.file_state|nib.tools.jail|nib.tools.rules|nib.tools.undo|std.fs|std.list|std.strbuilder|std.string|std.sync"
 expect_imports $T/undo/module.ae "nib.fserr|nib.jsonx|nib.tools.atomic_file|nib.tools.file_state|nib.tools.registry|std.cryptography|std.dir|std.fs|std.list|std.string|std.strbuilder|std.sync"
-expect_imports $T/walk/module.ae "std.dir|std.fs|std.list|std.strbuilder|std.string|std.sync"
+expect_imports $T/walk/module.ae "nib.tools.rules|std.dir|std.fs|std.list|std.strbuilder|std.string|std.sync"
 expect_imports $T/grep/module.ae "contrib.quickjs|nib.tools.walk|std.fs|std.list|std.strbuilder|std.string|std.sync"
 expect_imports $T/search/module.ae "nib.jsonx|nib.tools.grep|nib.tools.walk|std.json|std.list|std.strbuilder|std.string"
 # Processes.
@@ -62,8 +62,14 @@ expect_imports $T/process/module.ae "nib.sysenv|std.cryptography|std.fs|std.io|s
 expect_imports $T/bash/module.ae "nib.jsonx|nib.tools.jail|nib.tools.policy|nib.tools.process|nib.tools.progress|nib.tools.registry|nib.tools.secrets|std.list|std.os|std.string|std.sync"
 # Images: file system only (store, read, hash, base64), no network or process.
 expect_imports ae/nib/image/module.ae "nib.fserr|nib.jsonx|nib.lock|nib.tools.atomic_file|std.bytes|std.cryptography|std.encoding|std.fs|std.list|std.strbuilder|std.string"
-expect_imports $T/view/module.ae "nib.fserr|nib.image|nib.jsonx|nib.tools.atomic_file|std.fs|std.list|std.string"
-expect_imports $T/jail/module.ae "nib.tools.atomic_file|std.fs|std.list|std.os|std.string"
+expect_imports $T/view/module.ae "nib.fserr|nib.image|nib.jsonx|nib.tools.atomic_file|nib.tools.rules|std.fs|std.list|std.string"
+expect_imports $T/jail/module.ae "nib.tools.atomic_file|nib.tools.rules|std.dir|std.fs|std.list|std.os|std.string"
+# The project fence (docs/naeb/adr/0001): its read rules are pure logic; the
+# Fence resolves paths (file system) into a jail.Spec; the egress proxy is
+# the fenced children's and tools.fetch's only way out.
+expect_imports $T/rules/module.ae "std.list|std.string"
+expect_imports ae/nib/fence/module.ae "nib.tools.atomic_file|nib.tools.jail|nib.tools.rules|std.fs|std.list|std.string"
+expect_imports $T/egress/module.ae "nib.fence|nib.lock|std.fs|std.list|std.string|std.sync|std.tcp|std.worker"
 expect_imports $T/agent_sessions/module.ae "nib.lock|std.list|std.string"
 expect_imports $T/agent_input/module.ae "nib.jsonx|nib.provider.types|std.json|std.list|std.strbuilder|std.string"
 # A subagent is a child nib started through tools/process.
@@ -74,7 +80,7 @@ expect_imports ae/nib/session/fork_history/module.ae "nib.msg|nib.provider.types
 expect_imports $T/web/module.ae "nib.jsonx|nib.tools.html|std.http.client|std.json|std.string|std.sync|std.worker"
 expect_imports $T/llm_call/module.ae "nib.jsonx|nib.lock|nib.msg|nib.provider|nib.provider.sink|nib.provider.types|std.json|std.list|std.strbuilder|std.string|std.sync"
 expect_imports $T/web_search/module.ae "nib.jsonx|nib.lock|nib.provider.sse|nib.provider.types|std.http.client|std.json|std.list|std.string|std.sync|std.time|std.worker"
-expect_imports $T/module.ae "nib.image|nib.jsonx|nib.lock|nib.provider.types|nib.sandbox|nib.tools.agent|nib.tools.agent_input|nib.tools.agent_sessions|nib.tools.atomic_file|nib.tools.background|nib.tools.bash|nib.tools.changes|nib.tools.file_state|nib.tools.files|nib.tools.jail|nib.tools.llm_call|nib.tools.mcp_tool|nib.tools.progress|nib.tools.registry|nib.tools.search|nib.tools.undo|nib.tools.view|nib.tools.web|nib.tools.web_search|std.list|std.os|std.strbuilder|std.string|std.sync"
+expect_imports $T/module.ae "nib.fence|nib.image|nib.jsonx|nib.lock|nib.provider.types|nib.sandbox|nib.tools.agent|nib.tools.agent_input|nib.tools.agent_sessions|nib.tools.atomic_file|nib.tools.background|nib.tools.bash|nib.tools.changes|nib.tools.egress|nib.tools.file_state|nib.tools.files|nib.tools.jail|nib.tools.llm_call|nib.tools.mcp_tool|nib.tools.progress|nib.tools.registry|nib.tools.search|nib.tools.undo|nib.tools.view|nib.tools.web|nib.tools.web_search|std.list|std.os|std.strbuilder|std.string|std.sync"
 
 # The Session + provider slice.
 expect_imports ae/nib/auth/module.ae "nib.auth.store|nib.config|nib.config.env|nib.provider.types|std.list|std.string"
@@ -113,7 +119,9 @@ expect_imports $T/mcp_tool/module.ae "nib.image|nib.jsonx|nib.mcp|std.encoding|s
 # The TUI (ae/term underneath; no network, no process of its own except the
 # exceptions named in the rules below).
 U=ae/nib/tui
-expect_imports ae/main.ae "nib.auth|nib.config|nib.config.env|nib.jsonx|nib.provider.types|nib.run_replay|nib.sandbox|nib.session|nib.tools|nib.tools.agent_input|nib.tools.background|nib.tools.jail|nib.tui|nib.tui.clock|nib.tui.live|std.fs|std.io|std.list|std.os|std.signal|std.string|std.sync|std.worker|term|term.input"
+expect_imports ae/main.ae "nib.app"
+# The binary's body: ae/main.ae runs it with no fence, a project's launcher with its own.
+expect_imports ae/nib/app/module.ae "nib.auth|nib.config|nib.config.env|nib.jsonx|nib.provider.types|nib.run_replay|nib.sandbox|nib.session|nib.tools|nib.tools.agent_input|nib.tools.background|nib.tools.jail|nib.tui|nib.tui.clock|nib.tui.live|std.fs|std.io|std.list|std.os|std.signal|std.string|std.sync|std.worker|term|term.input"
 # `/model`'s listing (src/auth/models.zig): one GET of the provider's /models.
 expect_imports ae/nib/auth/models/module.ae "nib.jsonx|std.http.client|std.json|std.list|std.string|std.time"
 expect_imports $U/module.ae "nib.auth|nib.auth.models|nib.config|nib.config.env|nib.image|nib.jsonx|nib.provider.types|nib.session.skills|nib.session.tool_summary|nib.tools.changes|nib.tools.diff|nib.tui.agent_tree|nib.tui.app_queue|nib.tui.bill|nib.tui.clipboard|nib.tui.clock|nib.tui.commands|nib.tui.editor|nib.tui.entry|nib.tui.format|nib.tui.frames|nib.tui.long_text|nib.tui.menu|nib.tui.mode|nib.tui.open|nib.tui.paths|nib.tui.port|nib.tui.prediction|nib.tui.provider_flow|nib.tui.reflect|nib.tui.sel_history|nib.tui.selection|nib.tui.status|nib.tui.tasks|nib.tui.title|nib.tui.transcript|nib.tui.tui_view|nib.tui.turn|nib.tui.turn_changes|nib.tui.turn_summary|nib.tui.viewport|std.fs|std.json|std.list|std.os|std.strbuilder|std.string|std.sync|term|term.input|term.screen"
@@ -228,8 +236,8 @@ rule "QuickJS is embedded only by the sandbox and grep's private matcher" \
     '^import contrib\.quickjs' "ae/nib/sandbox/module.ae|$T/grep/"
 # - auth/models lists the provider's models for `/model` (upstream
 #   auth/models.zig): one GET, with the key the Session would send.
-rule "only provider/http (the model request), auth/models (the /model listing), mcp_transport (Streamable HTTP MCP servers) tools/web_search (the search request) and tools/web (tools.fetch) reach the network" \
-    '^import std\.(http|net|tcp|udp)' "ae/nib/provider/http/|ae/nib/auth/models/|ae/nib/mcp/mcp_transport/|$T/web/|$T/web_search/"
+rule "only provider/http (the model request), auth/models (the /model listing), mcp_transport (Streamable HTTP MCP servers) tools/web_search (the search request), tools/web (tools.fetch) and tools/egress (a fence's proxy) reach the network" \
+    '^import std\.(http|net|tcp|udp)' "ae/nib/provider/http/|ae/nib/auth/models/|ae/nib/mcp/mcp_transport/|$T/web/|$T/web_search/|$T/egress/"
 if grep -nE 'client\.request\(' ae/nib/auth/models/module.ae | grep -vqE 'client\.request\("GET", '; then
     echo "FAIL ae/nib/auth/models sends something other than a GET"; fail=1
 else
@@ -238,7 +246,7 @@ fi
 rule "the /model listing is reached only from the TUI's app and its provider flow" \
     '^import nib\.auth\.models' "$U/module.ae|$U/provider_flow/"
 rule "the TUI reaches the Session only through its live port" \
-    '^import nib\.session$' "$U/live/|ae/main.ae|ae/nib/tools/agent/|ae/nib/session/"
+    '^import nib\.session$' "$U/live/|ae/nib/app/|ae/nib/tools/agent/|ae/nib/session/"
 
 # ae/term stands alone: nothing of nib.
 if grep -rnE '^import nib\.' ae/term >/dev/null 2>&1; then echo "FAIL ae/term imports nib"; fail=1; else echo "ok   ae/term imports nothing of nib"; fi

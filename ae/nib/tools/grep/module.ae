@@ -43,6 +43,7 @@ struct Options {
     literal: int
     context: int
     limit: int
+    rules: ptr        // a project fence's read rules, or null
 }
 
 struct Match {
@@ -85,6 +86,7 @@ options(pattern: string) -> *Options {
     o.literal = 0
     o.context = 0
     o.limit = 100
+    o.rules = null
     return o
 }
 
@@ -457,6 +459,7 @@ search(o: *Options, deny: @keep ptr, cancel: @keep ptr) -> (ptr, string, string)
 
     wo = walk.options()
     walk.set_deny(wo, deny)
+    walk.set_rules(wo, o.rules)
     walk.set_cancel(wo, cancel)
     if o.has_glob != 0 { walk.set_filter(wo, o.glob) }
     found_files, werr = walk.files(o.path, wo)

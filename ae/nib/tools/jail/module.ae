@@ -3,25 +3,60 @@
 // ancestor of cwd with .git), a linked worktree's git dirs, temp dirs, a few
 // devices, the cache allowlist, user extras; reads and network stay open.
 // macOS: sandbox-exec with a per-command profile. Linux: `nib __jail
-// <root>... -- <command>...`, which restricts itself with Landlock and execs
-// the command. No module state: a probe result is cached by the caller.
+// [-w <root>]... -- <command>...`, which restricts itself with Landlock and
+// execs the command. No module state: a probe result is cached by the caller.
+//
+// A project fence (docs/naeb/adr/0001, nib.fence) arrives as a *Spec: write
+// roots, read-only paths inside them, read rules (tools.rules) and egress
+// through naeb's proxy. Linux: the helper's -W/-r/-R/--net options (a user,
+// mount and network namespace, Landlock reads, a relay to the proxy's Unix
+// socket); macOS: the same Spec as one SBPL profile.
 
 import std.fs
+import std.dir
 import std.os
 import std.string
 import std.list
 import nib.tools.atomic_file
+import nib.tools.rules
 
 @source("landlock.c")
 
-exports(HELPER_COMMAND, SANDBOX_EXEC, project_root, roots, allows, expand_home, profile,
-        unavailable, unavailable_text, wrap, helper)
+exports(HELPER_COMMAND, SANDBOX_EXEC, RELAY_PORT, Spec, new_spec, project_root, roots, base_roots, allows, expand_home, profile,
+        spec_profile, landlock_reads, unavailable, unavailable_text, fence_unavailable, wrap, wrap_spec, helper)
 
 const HELPER_COMMAND = "__jail"
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec"
+// Inside a fenced Linux child's network namespace: the relay to the proxy.
+const RELAY_PORT = 3128
 
 extern nibjail_probe() -> int
+extern nibjail_abi() -> int
+extern nibjail_probe_userns() -> int
 extern nibjail_restrict(roots: string) -> int
+extern nibjail_fence(writes: string, wdeny: string, reads: string, reads_on: int, sock: string) -> int
+
+struct Spec {
+    writes: ptr        // canonical writable roots
+    write_deny: ptr    // canonical paths inside them that stay read-only
+    reads: ptr         // read rules (tools.rules), or null: reads stay open
+    net: int           // 1: no network but naeb's egress proxy
+    proxy_port: int    // macOS: the proxy's port on 127.0.0.1
+    proxy_sock: string // Linux: the proxy's Unix socket
+    loopback: int      // macOS: localhost stays reachable
+}
+
+new_spec(writes: @keep ptr) -> ptr {
+    s = heap.new(Spec)
+    s.writes = writes
+    s.write_deny = list.list_new()
+    s.reads = null
+    s.net = 0
+    s.proxy_port = 0
+    s.proxy_sock = ""
+    s.loopback = 0
+    return s as ptr
+}
 
 home_caches_() -> ptr {
     l = list.list_new()
@@ -124,10 +159,16 @@ env_(env: ptr, name: string) -> string {
     return ""
 }
 
-// Canonical writable roots; candidates that do not exist are dropped.
-// env: the child environment as "NAME=value" (null: this process's).
-roots(cwd: string, home: string, env: ptr, extra: ptr) -> ptr {
+// The project (and a linked worktree's git dirs), temp dirs and devices,
+// then the extras: a fence's writable roots, without the cache allowlist.
+base_roots(cwd: string, env: ptr, extra: ptr) -> ptr {
     out = list.list_new()
+    add_base_(out, cwd, env)
+    add_extra_(out, extra)
+    return out
+}
+
+add_base_(out: ptr, cwd: string, env: ptr) {
     project = project_root(cwd)
     add_(out, project)
     add_git_dirs_(out, project)
@@ -140,6 +181,23 @@ roots(cwd: string, home: string, env: ptr, extra: ptr) -> ptr {
     }
     tmp = env_(env, "TMPDIR")
     if tmp != "" { add_(out, tmp) }
+}
+
+add_extra_(out: ptr, extra: ptr) {
+    if extra == null { return }
+    i = 0
+    while i < list.list_size(extra) {
+        x, _e3 = list.get_string(extra, i)
+        add_(out, x)
+        i = i + 1
+    }
+}
+
+// Canonical writable roots; candidates that do not exist are dropped.
+// env: the child environment as "NAME=value" (null: this process's).
+roots(cwd: string, home: string, env: ptr, extra: ptr) -> ptr {
+    out = list.list_new()
+    add_base_(out, cwd, env)
     if string.length(home) > 0 {
         hc = home_caches_()
         i = 0
@@ -163,38 +221,30 @@ roots(cwd: string, home: string, env: ptr, extra: ptr) -> ptr {
     }
     gopath = env_(env, "GOPATH")
     if gopath != "" { add_(out, atomic_file.join(gopath, "pkg")) }
-    if extra != null {
-        i = 0
-        while i < list.list_size(extra) {
-            x, _e3 = list.get_string(extra, i)
-            add_(out, x)
-            i = i + 1
-        }
-    }
+    add_extra_(out, extra)
     return out
 }
 
 // 1 when canonical lies inside one of the roots, by whole components.
-allows(writable: ptr, canonical: string) -> int {
-    n = list.list_size(writable)
-    i = 0
-    while i < n {
-        root, _e = list.get_string(writable, i)
-        rn = string.length(root)
-        if string.starts_with(canonical, root) == 1 {
-            if string.length(canonical) == rn { return 1 }
-            if string.char_at(root, rn - 1) == 47 { return 1 }
-            if string.char_at(canonical, rn) == 47 { return 1 }
-        }
-        i = i + 1
-    }
-    return 0
-}
+allows(writable: ptr, canonical: string) -> int { return rules.inside(writable, canonical) }
 
 expand_home(home: string, path: string) -> string {
     if path == "~" { return home }
     if string.starts_with(path, "~/") == 1 { return atomic_file.join(home, string.substring(path, 2, string.length(path))) }
     return path
+}
+
+sbpl_str_(path: string) -> string {
+    esc = ""
+    k = 0
+    pn = string.length(path)
+    while k < pn {
+        c = string.char_at(path, k)
+        if c == 34 || c == 92 { esc = "${esc}\\" }
+        if c >= 32 { esc = "${esc}${string.substring(path, k, k + 1)}" }
+        k = k + 1
+    }
+    return "\"${esc}\""
 }
 
 profile(writable: ptr) -> string {
@@ -203,19 +253,118 @@ profile(writable: ptr) -> string {
     i = 0
     while i < n {
         path, _e = list.get_string(writable, i)
-        esc = ""
-        k = 0
-        pn = string.length(path)
-        while k < pn {
-            c = string.char_at(path, k)
-            if c == 34 || c == 92 { esc = "${esc}\\" }
-            if c >= 32 { esc = "${esc}${string.substring(path, k, k + 1)}" }
-            k = k + 1
-        }
-        text = "${text}(subpath \"${esc}\")"
+        text = "${text}(subpath ${sbpl_str_(path)})"
         i = i + 1
     }
     return "${text})"
+}
+
+// The SBPL profile of a fence: workspace writes, read-only paths, read rules
+// shallow to deep (the last matching rule wins), the network only to the
+// proxy, and no handing work to launchd (open) or other apps (Apple events).
+spec_profile(sp: ptr) -> string {
+    s = sp as *Spec
+    text = profile(s.writes)
+    n = list.list_size(s.write_deny)
+    i = 0
+    while i < n {
+        p, _e = list.get_string(s.write_deny, i)
+        text = "${text}(deny file-write* (subpath ${sbpl_str_(p)}))"
+        i = i + 1
+    }
+    if s.reads != null {
+        ordered = rules.sorted(s.reads)
+        i = 0
+        while i < list.list_size(ordered) {
+            r, _e2 = list.get_string(ordered, i)
+            verb = "allow"
+            if rules.kind_of(r) == rules.DENY { verb = "deny" }
+            text = "${text}(${verb} file-read-data (subpath ${sbpl_str_(rules.path_of(r))}))"
+            i = i + 1
+        }
+    }
+    if s.net == 1 {
+        text = "${text}(deny network*)(allow network-outbound (remote ip \"localhost:${s.proxy_port}\"))"
+        if s.loopback == 1 {
+            text = "${text}(allow network-bind (local ip \"localhost:*\"))(allow network-inbound (local ip \"localhost:*\"))(allow network-outbound (remote ip \"localhost:*\"))"
+        }
+    }
+    return "${text}(deny lsopen)(deny appleevent-send)"
+}
+
+// Landlock read grants for `rules`: Landlock can only add, so a directory
+// with a deny below it is granted entry by entry around it (a snapshot:
+// entries made in it later stay unreadable). Paths that do not exist are
+// skipped.
+landlock_reads(rs: ptr) -> ptr {
+    out = list.list_new()
+    grant_(rs, "/", rules.allows(rs, "/"), out)
+    return out
+}
+
+below_(rs: ptr, path: string) -> int {
+    n = list.list_size(rs)
+    i = 0
+    while i < n {
+        r, _e = list.get_string(rs, i)
+        p = rules.path_of(r)
+        if p != path && rules.covers(path, p) == 1 { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+grant_(rs: ptr, path: string, allowed: int, out: ptr) {
+    if below_(rs, path) == 0 {
+        if allowed == 1 && fs.exists(path) == 1 { list.list_add(out, path) }
+        return
+    }
+    if allowed == 0 {
+        // Only the allow rules nearest below a denied directory matter.
+        n = list.list_size(rs)
+        i = 0
+        while i < n {
+            r, _e = list.get_string(rs, i)
+            p = rules.path_of(r)
+            if rules.kind_of(r) == rules.ALLOW && p != path && rules.covers(path, p) == 1 && nearest_(rs, path, p) == 1 {
+                grant_(rs, p, 1, out)
+            }
+            i = i + 1
+        }
+        return
+    }
+    listing, lerr = dir.list(path)
+    if lerr != "" { return }
+    c = dir.list_count(listing)
+    names = list.list_new()
+    j = 0
+    while j < c {
+        list.list_add(names, string.copy(dir.list_get(listing, j)))
+        j = j + 1
+    }
+    dir.dir_list_free(listing)
+    j = 0
+    while j < list.list_size(names) {
+        name, _e2 = list.get_string(names, j)
+        if name != "." && name != ".." {
+            child = atomic_file.join(path, name)
+            grant_(rs, child, rules.allows(rs, child), out)
+        }
+        j = j + 1
+    }
+}
+
+// 1 when no rule lies strictly between `top` and `p`.
+nearest_(rs: ptr, top: string, p: string) -> int {
+    n = list.list_size(rs)
+    i = 0
+    while i < n {
+        r, _e = list.get_string(rs, i)
+        q = rules.path_of(r)
+        if q != top && q != p && rules.covers(top, q) == 1 && rules.covers(q, p) == 1 { return 0 }
+        i = i + 1
+    }
+    return 1
 }
 
 // "" when the OS sandbox can be applied here, else why not (upstream's
@@ -245,6 +394,40 @@ unavailable_text(code: int) -> string {
     }
 }
 
+// "" when a fence's Spec can be applied here, else why not. A fence fails
+// closed: the caller refuses the command rather than run it unconfined.
+fence_unavailable(sp: ptr) -> string {
+    s = sp as *Spec
+    if is_mac_() == 1 { return unavailable() }
+    if os.platform() != "linux" { return "no project fence on this OS" }
+    abi = nibjail_abi()
+    if abi == 0 { return "kernel has no Landlock" }
+    if abi < 0 { return "Landlock is disabled" }
+    if (s.net == 1 || list.list_size(s.write_deny) > 0) && nibjail_probe_userns() == 0 {
+        return "unprivileged user namespaces are unavailable"
+    }
+    return ""
+}
+
+add_all_(argv: ptr, items: ptr) {
+    i = 0
+    while i < list.list_size(items) {
+        a, _e = list.get_string(items, i)
+        list.list_add(argv, a)
+        i = i + 1
+    }
+}
+
+add_flagged_(argv: ptr, flag: string, items: ptr) {
+    i = 0
+    while i < list.list_size(items) {
+        a, _e = list.get_string(items, i)
+        list.list_add(argv, flag)
+        list.list_add(argv, a)
+        i = i + 1
+    }
+}
+
 // argv (program first) running `inner` (program first) so that writes
 // outside `writable` fail. self_exe is this nib binary (the Linux helper).
 wrap(writable: ptr, inner: ptr, self_exe: string) -> ptr {
@@ -256,28 +439,64 @@ wrap(writable: ptr, inner: ptr, self_exe: string) -> ptr {
     } else {
         list.list_add(argv, self_exe)
         list.list_add(argv, HELPER_COMMAND)
-        i = 0
-        while i < list.list_size(writable) {
-            r, _e = list.get_string(writable, i)
-            list.list_add(argv, r)
-            i = i + 1
-        }
+        add_flagged_(argv, "-w", writable)
         list.list_add(argv, "--")
     }
-    i = 0
-    while i < list.list_size(inner) {
-        a, _e2 = list.get_string(inner, i)
-        list.list_add(argv, a)
-        i = i + 1
-    }
+    add_all_(argv, inner)
     return argv
 }
 
-// `nib __jail <root>... -- <command>...` (args after __jail): restrict this
-// process, then become the command. Returns only on failure, with the reason.
+// wrap for a fence's Spec.
+wrap_spec(sp: ptr, inner: ptr, self_exe: string) -> ptr {
+    s = sp as *Spec
+    argv = list.list_new()
+    if is_mac_() == 1 {
+        list.list_add(argv, SANDBOX_EXEC)
+        list.list_add(argv, "-p")
+        list.list_add(argv, spec_profile(sp))
+    } else {
+        list.list_add(argv, self_exe)
+        list.list_add(argv, HELPER_COMMAND)
+        add_flagged_(argv, "-w", s.writes)
+        add_flagged_(argv, "-W", s.write_deny)
+        if s.reads != null {
+            list.list_add(argv, "-R")
+            add_flagged_(argv, "-r", landlock_reads(s.reads))
+        }
+        if s.net == 1 {
+            list.list_add(argv, "--net")
+            list.list_add(argv, s.proxy_sock)
+        }
+        list.list_add(argv, "--")
+    }
+    add_all_(argv, inner)
+    return argv
+}
+
+fence_error_(code: int) -> string {
+    match code {
+        -1 -> { return "LandlockUnavailable" }
+        -2 -> { return "NamespaceUnavailable" }
+        -3 -> { return "MountFailed" }
+        -4 -> { return "LoopbackFailed" }
+        -5 -> { return "RelayFailed" }
+        -6 -> { return "SeccompFailed" }
+        _ -> { return "FenceFailed" }
+    }
+}
+
+// `nib __jail [-w root]... [-W path]... [-R [-r path]...] [--net sock] --
+// <command>...` (args after __jail): restrict this process, then become the
+// command. Returns only on failure, with the reason.
 helper(args: ptr) -> string {
     if os.platform() != "linux" { return "UnsupportedOs" }
     n = list.list_size(args)
+    writes = ""
+    wdeny = ""
+    reads = ""
+    reads_on = 0
+    sock = ""
+    fenced = 0
     split = -1
     i = 0
     while i < n {
@@ -286,17 +505,36 @@ helper(args: ptr) -> string {
             split = i
             break
         }
-        i = i + 1
+        if a == "-R" {
+            reads_on = 1
+            fenced = 1
+            i = i + 1
+            continue
+        }
+        if i + 1 >= n { return "InvalidArguments" }
+        v, _e2 = list.get_string(args, i + 1)
+        if a == "-w" {
+            writes = "${writes}${v}\n"
+        } else if a == "-W" {
+            wdeny = "${wdeny}${v}\n"
+            fenced = 1
+        } else if a == "-r" {
+            reads = "${reads}${v}\n"
+        } else if a == "--net" {
+            sock = v
+            fenced = 1
+        } else {
+            return "InvalidArguments"
+        }
+        i = i + 2
     }
     if split < 0 || split + 1 >= n { return "InvalidArguments" }
-    joined = ""
-    i = 0
-    while i < split {
-        r, _e2 = list.get_string(args, i)
-        joined = "${joined}${r}\n"
-        i = i + 1
+    if fenced == 0 {
+        if nibjail_restrict(writes) != 0 { return "LandlockUnavailable" }
+    } else {
+        rc = nibjail_fence(writes, wdeny, reads, reads_on, sock)
+        if rc != 0 { return fence_error_(rc) }
     }
-    if nibjail_restrict(joined) != 0 { return "LandlockUnavailable" }
     command = list.list_new()
     i = split + 1
     while i < n {

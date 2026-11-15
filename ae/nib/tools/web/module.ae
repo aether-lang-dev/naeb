@@ -1,7 +1,9 @@
 // tools.web: tools.fetch, an http(s) GET following up to 5 redirects, HTML
 // as Markdown unless raw, other text as is (upstream src/tools/web.zig).
 // The request runs on its own thread; the caller watches cancel and the
-// deadline every 50 ms, as upstream's Select of request and watch.
+// deadline every 50 ms, as upstream's Select of request and watch. Under a
+// project fence the request, and every redirect, goes through naeb's egress
+// proxy (tools/egress), which refuses hosts outside the fence.
 
 import std.http.client
 import std.string
@@ -30,6 +32,7 @@ struct Page {
 struct Job {
     url: string
     raw: int
+    proxy: string      // "http://127.0.0.1:<port>", or "" (direct)
     done: ptr
     page: ptr
     err: string
@@ -122,6 +125,7 @@ request_(jp: ptr) {
         return
     }
     client.set_follow_redirects(req, MAX_REDIRECTS)
+    if j.proxy != "" { client.use_http_proxy(req, j.proxy) }
     client.set_header(req, "user-agent", "Mozilla/5.0 (compatible; nib)")
     client.set_header(req, "accept", ACCEPT)
     resp, err = client.send_stream(req)
@@ -134,6 +138,15 @@ request_(jp: ptr) {
     rerr = client.response_redirect_error(resp)
     if rerr != "" {
         j.err = rerr
+        client.response_free(resp)
+        client.request_free(req)
+        sync.atomic_store(j.done, 1)
+        return
+    }
+    denied = ""
+    if j.proxy != "" { denied = client.response_header(resp, "x-naeb-denied") }
+    if string.length(denied) > 0 {
+        j.err = "denied by the project fence: egress to ${denied}"
         client.response_free(resp)
         client.request_free(req)
         sync.atomic_store(j.done, 1)
@@ -181,11 +194,12 @@ request_(jp: ptr) {
 // (page, "", content_type) or (null, error name, content_type). Errors:
 // UnsupportedUrlScheme, Canceled, Timeout, BinaryContent, ResponseTooLarge,
 // or the client's transport error.
-get(url: string, raw: int, timeout_ms: long, cancel: ptr) -> (ptr, string, string) {
+get(url: string, raw: int, timeout_ms: long, cancel: ptr, proxy: string) -> (ptr, string, string) {
     if string.starts_with(url, "http://") == 0 && string.starts_with(url, "https://") == 0 { return null, "UnsupportedUrlScheme", "" }
     j = heap.new(Job)
     j.url = url
     j.raw = raw
+    j.proxy = proxy
     j.done = sync.atomic_new(0)
     j.page = null
     j.err = ""
@@ -208,7 +222,8 @@ get(url: string, raw: int, timeout_ms: long, cancel: ptr) -> (ptr, string, strin
 }
 
 // tools.fetch. (1, page JSON) or (0, rejection message).
-fetch(args: string, cancel: ptr) -> (int, string) {
+// proxy: the fence's egress proxy URL, or "".
+fetch(args: string, cancel: ptr, proxy: string) -> (int, string) {
     v = jsonx.parse(args)
     if v == null || json.json_type(v) != json.JSON_OBJECT || jsonx.kind(v, "url") != json.JSON_STRING {
         jsonx.free(v)
@@ -224,7 +239,7 @@ fetch(args: string, cancel: ptr) -> (int, string) {
     raw = jsonx.bool_or(v, "raw", 0)
     timeout_ms = jsonx.long_or(v, "timeout_ms", 30000 as long)
     jsonx.free(v)
-    pp, err, content_type = get(url, raw, timeout_ms, cancel)
+    pp, err, content_type = get(url, raw, timeout_ms, cancel, proxy)
     if err != "" {
         match err {
             "Canceled" -> { return 0, "canceled" }

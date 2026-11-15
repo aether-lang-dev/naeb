@@ -78,17 +78,17 @@ main() {
             creds = list.list_new()
             list.list_add(creds, "${home}/.codex/auth.json")
 
-            ok, found = search.grep("{\"pattern\":\"token\",\"path\":${jsonx.quote(root)}}", creds, null)
+            ok, found = search.grep("{\"pattern\":\"token\",\"path\":${jsonx.quote(root)}}", creds, null, null)
             spec.assert_eq(ok, 1, "grep ok")
             spec.assert_true(contains_(found, "public"), "public found")
             spec.assert_false(contains_(found, "fake-secret"), "secret never surfaces")
 
-            ok2, listed = search.glob("{\"pattern\":\"*.json\",\"path\":${jsonx.quote(root)}}", creds, null)
+            ok2, listed = search.glob("{\"pattern\":\"*.json\",\"path\":${jsonx.quote(root)}}", creds, null, null)
             spec.assert_eq(ok2, 1, "glob ok")
             spec.assert_true(contains_(listed, "notes.json"), "notes listed")
             spec.assert_false(contains_(listed, "auth.json"), "credential not listed")
 
-            ok3, direct = search.grep("{\"pattern\":\"token\",\"path\":${jsonx.quote("${root}/.codex/auth.json")}}", creds, null)
+            ok3, direct = search.grep("{\"pattern\":\"token\",\"path\":${jsonx.quote("${root}/.codex/auth.json")}}", creds, null, null)
             spec.assert_eq(ok3, 0, "direct grep fails")
             spec.assert_str_eq(direct, "CredentialAccessDenied", "direct credential grep is denied")
             list.list_free(creds)
@@ -98,7 +98,7 @@ main() {
             root = tmp_dir_()
             path = "${root}/long.jsonl"
             put_(path, "${rep_("a", 6000)}中SyntaxError")
-            ok, text = search.grep("{\"pattern\":\"SyntaxError\",\"path\":${jsonx.quote(path)}}", null, null)
+            ok, text = search.grep("{\"pattern\":\"SyntaxError\",\"path\":${jsonx.quote(path)}}", null, null, null)
             spec.assert_eq(ok, 1, "ok")
             doc = jsonx.parse(text)
             matches = jsonx.field(doc, "matches")
@@ -121,19 +121,19 @@ main() {
             path = "${root}/f"
             put_(path, "x.reserve(\nX.RESERVE(\nareserve(\n")
             q = jsonx.quote(path)
-            ok, literal = search.grep("{\"pattern\":\"\\\\.reserve\\\\(\",\"path\":${q}}", null, null)
+            ok, literal = search.grep("{\"pattern\":\"\\\\.reserve\\\\(\",\"path\":${q}}", null, null, null)
             spec.assert_eq(ok, 1, "ok")
             spec.assert_eq(json.json_array_size(jsonx.field(jsonx.parse(literal), "matches")), 1, "escaped dot matches only x.reserve(")
-            ok2, folded = search.grep("{\"pattern\":\"X\",\"ignore_case\":true,\"path\":${q}}", null, null)
+            ok2, folded = search.grep("{\"pattern\":\"X\",\"ignore_case\":true,\"path\":${q}}", null, null, null)
             spec.assert_eq(ok2, 1, "ok2")
             spec.assert_eq(json.json_array_size(jsonx.field(jsonx.parse(folded), "matches")), 2, "ignore_case folds")
-            ok3, exact = search.grep("{\"pattern\":\"X\",\"ignore_case\":false,\"path\":${q}}", null, null)
+            ok3, exact = search.grep("{\"pattern\":\"X\",\"ignore_case\":false,\"path\":${q}}", null, null, null)
             spec.assert_eq(ok3, 1, "ok3")
             spec.assert_eq(json.json_array_size(jsonx.field(jsonx.parse(exact), "matches")), 1, "case sensitive")
             fs.remove_tree(root)
         }
         spec.it("grep invalid JS string pattern reports what the host received") callback {
-            ok, text = search.grep("{\"pattern\":\".a(\"}", null, null)
+            ok, text = search.grep("{\"pattern\":\".a(\"}", null, null, null)
             spec.assert_eq(ok, 0, "fails")
             spec.assert_true(contains_(text, "invalid pattern \".a(\": expecting ')'"), "message: ${text}")
         }
@@ -143,7 +143,7 @@ main() {
             while ui < 2 {
                 unit = units[ui]
                 pattern = "${rep_(unit, 201)}("
-                ok, text = search.grep("{\"pattern\":${jsonx.quote(pattern)}}", null, null)
+                ok, text = search.grep("{\"pattern\":${jsonx.quote(pattern)}}", null, null, null)
                 spec.assert_eq(ok, 0, "fails")
                 end = 200
                 if ui == 1 { end = 198 }
@@ -152,20 +152,20 @@ main() {
                 spec.assert_true(utf8_valid_(text), "valid utf-8 ${ui}")
                 ui = ui + 1
             }
-            ok2, quoted = search.grep("{\"pattern\":\"\\\"\\n(\"}", null, null)
+            ok2, quoted = search.grep("{\"pattern\":\"\\\"\\n(\"}", null, null, null)
             spec.assert_eq(ok2, 0, "fails")
             spec.assert_true(string.starts_with(quoted, "invalid pattern \"\\\"\\n(\":"), "quoted preview: ${quoted}")
         }
         spec.it("argument validation and defaults use the upstream texts") callback {
-            ok, t = search.grep("{\"path\":\".\"}", null, null)
+            ok, t = search.grep("{\"path\":\".\"}", null, null, null)
             spec.assert_eq(ok, 0, "no pattern")
             spec.assert_str_eq(t, "expected { pattern: string, path?: string, glob?: string, ignore_case?: boolean, literal?: boolean, context?: number, limit?: number }", "grep usage")
-            ok2, t2 = search.glob("{\"pattern\":3}", null, null)
+            ok2, t2 = search.glob("{\"pattern\":3}", null, null, null)
             spec.assert_eq(ok2, 0, "bad pattern")
             spec.assert_str_eq(t2, "expected { pattern: string, path?: string, limit?: number }", "glob usage")
-            ok3, t3 = search.grep("{\"pattern\":\"x\",\"limit\":-1}", null, null)
+            ok3, t3 = search.grep("{\"pattern\":\"x\",\"limit\":-1}", null, null, null)
             spec.assert_eq(ok3, 0, "negative limit")
-            ok4, t4 = search.grep("{\"pattern\":\"x\",\"path\":\"/nonexistent-nib-dir\"}", null, null)
+            ok4, t4 = search.grep("{\"pattern\":\"x\",\"path\":\"/nonexistent-nib-dir\"}", null, null, null)
             spec.assert_eq(ok4, 0, "missing path")
             spec.assert_str_eq(t4, "/nonexistent-nib-dir: FileNotFound", "path error text")
         }
@@ -175,10 +175,10 @@ main() {
             put_("${root}/b.txt", "")
             put_("${root}/c.md", "")
             q = jsonx.quote(root)
-            ok, t = search.glob("{\"pattern\":\"./*.txt\",\"path\":${q},\"limit\":1}", null, null)
+            ok, t = search.glob("{\"pattern\":\"./*.txt\",\"path\":${q},\"limit\":1}", null, null, null)
             spec.assert_eq(ok, 1, "ok")
             spec.assert_str_eq(t, "{\"paths\":[${jsonx.quote("${root}/a.txt")}],\"truncated\":true}", "limited")
-            ok2, t2 = search.glob("{\"pattern\":\"*.txt\",\"path\":${q}}", null, null)
+            ok2, t2 = search.glob("{\"pattern\":\"*.txt\",\"path\":${q}}", null, null, null)
             spec.assert_str_eq(t2, "{\"paths\":[${jsonx.quote("${root}/a.txt")},${jsonx.quote("${root}/b.txt")}],\"truncated\":false}", "all")
             fs.remove_tree(root)
         }

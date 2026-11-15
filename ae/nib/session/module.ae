@@ -82,6 +82,7 @@ struct Options {
     undo_enabled: int        // the TUI's /undo (nib ask has none, as upstream)
     fork: ptr                // *agent_input.Fork: a forked subagent's inherited history, or null
     undo_dir: string         // a subagent's: the parent Turn's undo directory
+    fence: ptr               // the launcher's *fence.Fence, or null (docs/naeb/adr/0001)
 }
 
 struct Sink {
@@ -148,6 +149,7 @@ new_options(home: string, user_home: string) -> ptr {
     o.undo_enabled = 0
     o.fork = null
     o.undo_dir = ""
+    o.fence = null
     return o as ptr
 }
 
@@ -268,6 +270,7 @@ new_tools_(cp: @keep ptr, op: ptr) -> ptr {
     tt.self_exe = o.self_exe
     tools.set_config(t, cp, "")
     if c.sandbox_workspace == 1 { tools.set_workspace(t, 1) }
+    if o.fence != null { tools.set_fence(t, o.fence) }
     i = 0
     while i < list.list_size(c.sandbox_writable) {
         w, _g = list.get_string(c.sandbox_writable, i)

@@ -14,7 +14,9 @@
 //
 // Options is a heap struct from walk.options(). `deny` is a std.list of
 // canonical absolute paths never listed or entered (Tools.credentialPaths);
-// `cancel` is a std.sync cell (nonzero cancels; null for none).
+// `cancel` is a std.sync cell (nonzero cancels; null for none). `rules` are
+// a project fence's read rules (tools.rules) or null: a file they do not
+// allow is skipped, a directory entered only on the way to an allowed one.
 
 import std.fs
 import std.dir
@@ -22,8 +24,9 @@ import std.string
 import std.list
 import std.strbuilder
 import std.sync
+import nib.tools.rules
 
-exports(matches, match_path, options, set_deny, set_cancel, set_filter, set_max, set_dirs, free_options,
+exports(matches, match_path, options, set_deny, set_rules, set_cancel, set_filter, set_max, set_dirs, free_options,
         files, release, rules_new, rules_free, parse_ignore, ignored,
         Options, File, Rule, UNLIMITED)
 
@@ -46,6 +49,7 @@ const CR = 13
 
 struct Options {
     deny: ptr       // std.list of strings, or null
+    rules: ptr      // a fence's read rules, or null
     cancel: ptr     // std.sync cell, or null
     has_filter: int
     filter: string  // glob over paths relative to root, see match_path
@@ -77,6 +81,7 @@ struct Walk {
 options() -> *Options {
     o = heap.new(Options)
     o.deny = null
+    o.rules = null
     o.cancel = null
     o.has_filter = 0
     o.filter = ""
@@ -87,6 +92,7 @@ options() -> *Options {
 
 // The list is borrowed: the caller keeps it alive and frees it.
 set_deny(o: *Options, deny: @keep ptr) { o.deny = deny }
+set_rules(o: *Options, rs: @keep ptr) { o.rules = rs }
 set_cancel(o: *Options, cancel: @keep ptr) { o.cancel = cancel }
 set_filter(o: *Options, f: string) {
     o.filter = f
@@ -503,6 +509,7 @@ files(root: string, o: *Options) -> (ptr, string) {
     if serr != "" { return null, "FileNotFound" }
     if skind != 2 {
         if denied_(o.deny, absolute_root) != 0 { return null, "CredentialAccessDenied" }
+        if rules.allows(o.rules, absolute_root) == 0 { return null, "denied by the project fence: read ${absolute_root}" }
         f = heap.new(File)
         f.path = root
         f.absolute = absolute_root
@@ -510,6 +517,7 @@ files(root: string, o: *Options) -> (ptr, string) {
         list.list_add(out, f)
         return out, ""
     }
+    if o.rules != null && rules.visible(o.rules, absolute_root, 1) == 0 { return null, "denied by the project fence: read ${absolute_root}" }
 
     top = absolute_root
     probe = absolute_root
@@ -640,6 +648,7 @@ visit_inner_(w: *Walk, absolute: string, top_rel: string, rel: string, is_root: 
         if ignored(w.rules, entry_top, is_dir) != 0 { continue }
         entry_abs = join_(absolute, e.name)
         if denied_(o.deny, entry_abs) != 0 { continue }
+        if o.rules != null && rules.visible(o.rules, entry_abs, is_dir) == 0 { continue }
         entry_rel = join_(rel, e.name)
         if is_dir != 0 {
             if o.dirs != 0 { add_(w, entry_abs, entry_rel, 1) }

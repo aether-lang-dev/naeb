@@ -1,10 +1,11 @@
 // tools.search: the grep and glob tool entries (upstream src/tools/search.zig).
 //
-//   grep(args_json, cred_paths, cancel) -> (1, result JSON) | (0, error text)
-//   glob(args_json, cred_paths, cancel) -> (1, result JSON) | (0, error text)
+//   grep(args_json, cred_paths, rules, cancel) -> (1, result JSON) | (0, error text)
+//   glob(args_json, cred_paths, rules, cancel) -> (1, result JSON) | (0, error text)
 //
 // `cred_paths` is a std.list of canonical absolute credential paths that are
 // never listed, entered or searched (upstream Tools.credentialPaths), or null.
+// `rules` are a project fence's read rules (tools.rules), or null.
 // `cancel` is a std.sync cell (nonzero cancels), or null.
 //
 // grep -> { "matches": [{ "path", "line", "column", "text", "before"?, "after"? }], "truncated" }
@@ -70,7 +71,7 @@ strings_json_(sb: ptr, items: ptr) {
     strbuilder.append(sb, "]")
 }
 
-grep(args: string, cred_paths: @keep ptr, cancel: @keep ptr) -> (int, string) {
+grep(args: string, cred_paths: @keep ptr, rules: @keep ptr, cancel: @keep ptr) -> (int, string) {
     a = jsonx.parse(args)
     if a == null { return fail_(GREP_USAGE) }
     defer jsonx.free(a)
@@ -92,6 +93,7 @@ grep(args: string, cred_paths: @keep ptr, cancel: @keep ptr) -> (int, string) {
     o.literal = jsonx.bool_or(a, "literal", 0)
     o.context = context
     o.limit = limit
+    o.rules = rules
     r, err, reason = grep.search(o, cred_paths, cancel)
     path = o.path
     grep.free_options(o)
@@ -137,7 +139,7 @@ grep(args: string, cred_paths: @keep ptr, cancel: @keep ptr) -> (int, string) {
     return 1, strbuilder.finish(sb)
 }
 
-glob(args: string, cred_paths: @keep ptr, cancel: @keep ptr) -> (int, string) {
+glob(args: string, cred_paths: @keep ptr, rules: @keep ptr, cancel: @keep ptr) -> (int, string) {
     a = jsonx.parse(args)
     if a == null { return fail_(GLOB_USAGE) }
     defer jsonx.free(a)
@@ -152,6 +154,7 @@ glob(args: string, cred_paths: @keep ptr, cancel: @keep ptr) -> (int, string) {
 
     wo = walk.options()
     walk.set_deny(wo, cred_paths)
+    walk.set_rules(wo, rules)
     walk.set_cancel(wo, cancel)
     walk.set_filter(wo, pattern)
     walk.set_max(wo, limit as long)

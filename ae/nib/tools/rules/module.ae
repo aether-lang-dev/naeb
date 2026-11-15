@@ -1,0 +1,111 @@
+// tools.rules: the read rules of a project fence (docs/naeb/adr/0001), as
+// plain data both layers share: a std.list of "+<path>" (readable) and
+// "-<path>" (not) for canonical absolute paths. The deepest rule covering a
+// path decides; a path no rule covers is readable. The in-process tools
+// check paths with it; tools/jail turns the same list into Landlock rules
+// and an SBPL profile. Pure logic: no file system, process or network.
+
+import std.list
+import std.string
+
+exports(ALLOW, DENY, covers, allows, visible, inside, sorted, path_of, kind_of)
+
+const ALLOW = 43
+const DENY = 45
+
+// 1 when `path` is `root` or lies below it, by whole components.
+covers(root: string, path: string) -> int {
+    rn = string.length(root)
+    if string.starts_with(path, root) == 0 { return 0 }
+    if string.length(path) == rn { return 1 }
+    if rn > 0 && string.char_at(root, rn - 1) == 47 { return 1 }
+    if string.char_at(path, rn) == 47 { return 1 }
+    return 0
+}
+
+path_of(rule: string) -> string { return string.substring(rule, 1, string.length(rule)) }
+kind_of(rule: string) -> int { return string.char_at(rule, 0) }
+
+// 1 when `path` lies inside one of `roots` (a list of plain paths).
+inside(roots: ptr, path: string) -> int {
+    if roots == null { return 0 }
+    n = list.list_size(roots)
+    i = 0
+    while i < n {
+        r, _e = list.get_string(roots, i)
+        if covers(r, path) == 1 { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+// 1 when the deepest rule covering `path` allows it (or none covers it).
+allows(rules: ptr, path: string) -> int {
+    if rules == null { return 1 }
+    best = -1
+    verdict = 1
+    n = list.list_size(rules)
+    i = 0
+    while i < n {
+        r, _e = list.get_string(rules, i)
+        p = path_of(r)
+        if covers(p, path) == 1 {
+            pl = string.length(p)
+            if pl > best || (pl == best && kind_of(r) == DENY) {
+                best = pl
+                verdict = 1
+                if kind_of(r) == DENY { verdict = 0 }
+            }
+        }
+        i = i + 1
+    }
+    return verdict
+}
+
+// Whether a walk may list `path`: readable, or a directory with a readable
+// rule below it (a closed $HOME on the way to the project).
+visible(rules: ptr, path: string, is_dir: int) -> int {
+    if allows(rules, path) == 1 { return 1 }
+    if is_dir == 0 { return 0 }
+    n = list.list_size(rules)
+    i = 0
+    while i < n {
+        r, _e = list.get_string(rules, i)
+        p = path_of(r)
+        if kind_of(r) == ALLOW && p != path && covers(path, p) == 1 { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+// The rules shallow to deep (by path length; a deny after an allow of the
+// same length): the order in which the last matching SBPL rule wins.
+sorted(rules: ptr) -> ptr {
+    rest = list.list_new()
+    n = list.list_size(rules)
+    i = 0
+    while i < n {
+        r, _e = list.get_string(rules, i)
+        list.list_add(rest, r)
+        i = i + 1
+    }
+    out = list.list_new()
+    while list.list_size(rest) > 0 {
+        best = 0
+        b, _e2 = list.get_string(rest, 0)
+        j = 1
+        while j < list.list_size(rest) {
+            r2, _e3 = list.get_string(rest, j)
+            l = string.length(r2)
+            bl = string.length(b)
+            if l < bl || (l == bl && kind_of(r2) == ALLOW && kind_of(b) == DENY) {
+                best = j
+                b = r2
+            }
+            j = j + 1
+        }
+        list.list_add(out, b)
+        list.list_remove(rest, best)
+    }
+    return out
+}

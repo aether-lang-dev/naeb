@@ -29,6 +29,8 @@ import nib.tools.bash
 import nib.tools.registry
 import nib.tools.changes
 import nib.tools.jail
+import nib.tools.egress
+import nib.fence
 import nib.tools.background
 import nib.tools.progress
 import nib.tools.undo
@@ -44,7 +46,7 @@ import nib.image
 import nib.provider.types
 
 exports(Tools, RunScope, new, new_scope, host, call_tool, active_tool, names_json, docs, all_docs, tool_names,
-        is_ported, take_images, credential_paths, writable_roots, nib_home, take_changes, set_workspace,
+        is_ported, take_images, credential_paths, writable_roots, nib_home, take_changes, set_workspace, set_fence, fence_spec, fence_proxy,
         cancel_cell, set_log, sandbox_roots, change_paths, export_versions, import_versions, set_config, take_usage, take_jail_notice, enable_undo, begin_turn_undo, finish_turn_undo, run_undo, turn_undo_dir, attach_turn_undo_dir, close_undo)
 
 const DOC_MCP = "  // Call an enabled MCP server tool. Server/transport failures are data; argument errors reject. Full results stay in JS; images share the Run image limit.\n  async mcp(name, args = {}) {}, // → { ok, content, structured?, error? }\n"
@@ -159,6 +161,9 @@ struct Tools {
     undo_dir: string       // a sub-agent's: the parent Turn's snapshot directory
     mcp_client: ptr        // *mcp.Client of the Session, or null
     mcp_enabled: int       // 1: an enabled server puts tools.mcp in the API
+    fence: ptr             // *fence.Fence the launcher gave, or null (upstream behaviour)
+    proxy: ptr             // *egress.Proxy, started on first use under a fence
+    proxy_guard: ptr
 }
 
 struct RunScope {
@@ -210,7 +215,51 @@ new(home: string) -> ptr {
     t.undo_dir = ""
     t.mcp_client = null
     t.mcp_enabled = 0
+    t.fence = null
+    t.proxy = null
+    t.proxy_guard = lock.new()
     return t as ptr
+}
+
+// A project fence (docs/naeb/adr/0001): from here on every tool and child
+// is held to it. The Fence is the launcher's, kept, not copied.
+set_fence(tp: ptr, f: @keep ptr) { (tp as *Tools).fence = f }
+
+// The jail.Spec of the fence for the current directory (no network part),
+// or null without a fence.
+fence_spec(tp: ptr) -> ptr {
+    t = tp as *Tools
+    if t.fence == null { return null }
+    return fence.resolve(t.fence, os.getcwd(), nib_home(tp), t.env)
+}
+
+// The fence's egress proxy, started on first use: (proxy, "") or (null, why).
+fence_proxy(tp: ptr) -> (ptr, string) {
+    t = tp as *Tools
+    if t.fence == null { return null, "no project fence" }
+    lock.acquire(t.proxy_guard)
+    if t.proxy == null {
+        sock = ""
+        if os.platform() == "linux" {
+            sock = atomic_file.join(atomic_file.join(nib_home(tp), "run"), "egress-${os.getpid()}.sock")
+        }
+        p, err = egress.start(t.fence, sock)
+        if err != "" {
+            lock.release(t.proxy_guard)
+            return null, err
+        }
+        t.proxy = p
+    }
+    p2 = t.proxy
+    lock.release(t.proxy_guard)
+    return p2, ""
+}
+
+fetch_proxy_(t: *Tools) -> (string, string) {
+    if t.fence == null { return "", "" }
+    p, err = fence_proxy(t as ptr)
+    if err != "" { return "", err }
+    return egress.url(p), ""
 }
 
 set_workspace(tp: ptr, on: int) { (tp as *Tools).workspace = on }
@@ -454,6 +503,7 @@ credential_paths(tp: ptr) -> ptr {
 // Canonical writable roots, or null when the sandbox is off.
 writable_roots(tp: ptr) -> ptr {
     t = tp as *Tools
+    if t.fence != null { return (fence_spec(tp) as *jail.Spec).writes }
     if t.workspace == 0 { return null }
     extra = list.list_new()
     i = 0
@@ -515,6 +565,12 @@ file_ctx_(s: *RunScope) -> ptr {
     }
     c.has_on_change = 1
     c.undo = t.undo
+    if t.fence != null {
+        spec = fence_spec(s.tools) as *jail.Spec
+        c.roots = spec.writes
+        c.reads = spec.reads
+        c.wdeny = spec.write_deny
+    }
     return c as ptr
 }
 
@@ -740,10 +796,10 @@ run_tool_(s: *RunScope, t: *Tools, name: string, args: string, out: ptr) {
             ok, text = files.write(file_ctx_(s), args)
         }
         "grep" -> {
-            ok, text = search.grep(args, credential_paths(s.tools), s.cancel)
+            ok, text = search.grep(args, credential_paths(s.tools), fence_reads_(t), s.cancel)
         }
         "glob" -> {
-            ok, text = search.glob(args, credential_paths(s.tools), s.cancel)
+            ok, text = search.glob(args, credential_paths(s.tools), fence_reads_(t), s.cancel)
         }
         "bash" -> {
             bash_(s, args, out)
@@ -761,7 +817,12 @@ run_tool_(s: *RunScope, t: *Tools, name: string, args: string, out: ptr) {
             return
         }
         "fetch" -> {
-            ok, text = web.fetch(args, s.cancel)
+            purl, perr = fetch_proxy_(t)
+            if perr != "" {
+                text = "denied by the project fence: ${perr}"
+            } else {
+                ok, text = web.fetch(args, s.cancel, purl)
+            }
         }
         "search" -> {
             ok, text = web_search.search(t.cfg, args, s.cancel)
@@ -776,7 +837,7 @@ run_tool_(s: *RunScope, t: *Tools, name: string, args: string, out: ptr) {
         }
         "view" -> {
             tg = image_target_(s)
-            ok, text = view.view(tg, credential_paths(s.tools), args)
+            ok, text = view.view(tg, credential_paths(s.tools), fence_reads_(t), args)
             heap.free(tg)
         }
         _ -> {
@@ -784,6 +845,12 @@ run_tool_(s: *RunScope, t: *Tools, name: string, args: string, out: ptr) {
         }
     }
     if ok == 1 { sandbox.result_set_ok(out, text) } else { sandbox.result_set_err(out, text) }
+}
+
+// The fence's read rules, or null.
+fence_reads_(t: *Tools) -> ptr {
+    if t.fence == null { return null }
+    return (fence_spec(t as ptr) as *jail.Spec).reads
 }
 
 // Admission: tools.llm calls are limited per Run (llm_calls_per_run).
