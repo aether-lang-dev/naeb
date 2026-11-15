@@ -23,7 +23,7 @@ import nib.tools.rules
 @source("landlock.c")
 
 exports(HELPER_COMMAND, SANDBOX_EXEC, RELAY_PORT, Spec, new_spec, project_root, roots, base_roots, allows, expand_home, profile,
-        spec_profile, landlock_reads, scrub_environ, account_home, unavailable, unavailable_text, fence_unavailable, proxy_url, wrap, wrap_spec, helper, os_name)
+        spec_profile, landlock_reads, scrub_environ, cloexec_inherited, account_home, unavailable, unavailable_text, fence_unavailable, proxy_url, wrap, wrap_spec, helper, os_name)
 
 const HELPER_COMMAND = "__jail"
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec"
@@ -422,6 +422,11 @@ unavailable_text(code: int) -> string {
 // heap: a fenced child could otherwise read naeb's environment (secrets
 // included) through KERN_PROCARGS2 on macOS. Called once, at start-up.
 scrub_environ() -> int { return nibjail_scrub_environ() }
+
+// Marks every descriptor above 2 this process inherited close-on-exec: one
+// open on a fenced file would otherwise reach every child, past Landlock
+// and SBPL, which check opens. How many it marked.
+cloexec_inherited() -> int { return atomic_file.cloexec_inherited() }
 
 // The account's home from the user database ("" unknown): a fence closes it
 // as well as $HOME, since a child without $HOME falls back to it.

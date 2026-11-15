@@ -377,6 +377,9 @@ run_nib() {
 // The naeb binary: the project's fence, always.
 run_naeb() {
     jail_helper_()
+    // A descriptor naeb inherited would reach every fenced child, past
+    // Landlock and SBPL, which check opens (docs/naeb/adr/0001).
+    jail.cloexec_inherited()
     if os.args_count() >= 2 && os.args_get(1) == "build" {
         code = build_(env.from_process())
         if code != 0 { exit(code) }
