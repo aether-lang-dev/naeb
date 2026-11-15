@@ -18,14 +18,25 @@
 //  - The image check is nib.image's probe and MAX_BYTES, as upstream.
 //  - read_script(script, env, timeout_ms) is the part below read_image, exposed
 //    so the shell/exit-code/timeout handling can be tested with other scripts.
+//  - Writing text (upstream selection.zig localCopy) lives here too, since this
+//    module already runs the clipboard tools: copier() picks the program and
+//    write_text() feeds it the text on stdin on a thread of its own, killed
+//    after 1 s (upstream waits up to 1 s for it). Ours, not upstream's: on
+//    macOS the copier is /usr/bin/pbcopy, run directly with LC_ALL=en_US.UTF-8
+//    (pbcopy reads its input in the locale's encoding and mangles UTF-8
+//    without one); upstream copies only through OSC 52 there, which macOS
+//    Terminal.app ignores. Elsewhere it is upstream's script, only under
+//    Wayland or X.
 
 import std.string
 import std.list
 import nib.image
 import nib.tools.process
+import std.worker
 
 exports(Result, Clipboard, KIND_PNG, KIND_NO_TOOL, KIND_NO_IMAGE, KIND_TOO_LARGE,
-        TIMEOUT_MS, SCRIPT, new, free, read_image, read_script)
+        TIMEOUT_MS, SCRIPT, new, free, read_image, read_script, COPY_SCRIPT, COPY_TIMEOUT_MS, PBCOPY,
+        copier, write_text)
 
 const KIND_PNG = 0
 const KIND_NO_TOOL = 1
@@ -102,4 +113,66 @@ free(c: *Clipboard) { heap.free(c) }
 read_image(c: *Clipboard, env: ptr) -> ptr {
     ptr r = call(c.reader, env)
     return r
+}
+
+// The script upstream's localCopy runs under /bin/sh with the text on stdin.
+const COPY_SCRIPT = "if [ -n \"$WAYLAND_DISPLAY\" ] && command -v wl-copy >/dev/null 2>&1; then exec wl-copy\nelif [ -n \"$DISPLAY\" ]; then\n  if command -v xsel >/dev/null 2>&1; then exec xsel --clipboard --input\n  elif command -v xclip >/dev/null 2>&1; then exec xclip -selection clipboard; fi\nfi\nexit 1"
+const COPY_TIMEOUT_MS = 1000
+const PBCOPY = "/usr/bin/pbcopy"
+
+// The program (argv, a std.list) that puts text on the system clipboard, or
+// null for none: pbcopy on macOS; upstream's script when the environment
+// ("NAME=value" list, null: this process's) names WAYLAND_DISPLAY or
+// DISPLAY, as upstream checks.
+copier(platform: string, env: ptr) -> ptr {
+    argv = list.list_new()
+    if platform == "darwin" || platform == "macos" {
+        list.list_add(argv, PBCOPY)
+        return argv
+    }
+    e = env_or_own_(env)
+    if has_name_(e, "WAYLAND_DISPLAY") == 0 && has_name_(e, "DISPLAY") == 0 { return null }
+    list.list_add(argv, "/bin/sh")
+    list.list_add(argv, "-c")
+    list.list_add(argv, COPY_SCRIPT)
+    return argv
+}
+
+env_or_own_(env: @into ptr) -> ptr {
+    if env == null { return process.environ() }
+    return env
+}
+
+has_name_(env: ptr, name: string) -> int {
+    prefix = "${name}="
+    i = 0
+    while i < list.list_size(env) {
+        e, _x = list.get_string(env, i)
+        if string.starts_with(e, prefix) == 1 { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+// Starts `argv` (from copier) with `text` on its stdin and returns at once;
+// the child is waited for on its own thread and killed after
+// COPY_TIMEOUT_MS. A failure is swallowed (upstream `catch {}`). env:
+// "NAME=value" list or null (this process's).
+write_text(argv: @keep ptr, env: ptr, text: string) {
+    base = env_or_own_(env)
+    p0, _z = list.get_string(argv, 0)
+    e = list.list_new()
+    i = 0
+    while i < list.list_size(base) {
+        v, _x = list.get_string(base, i)
+        if p0 != PBCOPY || string.starts_with(v, "LC_ALL=") == 0 { list.list_add(e, v) }
+        i = i + 1
+    }
+    if p0 == PBCOPY { list.list_add(e, "LC_ALL=en_US.UTF-8") }
+    input = string.copy(text)
+    worker.run_detached(|| {
+        r = process.run_lines(argv, e, input, null, COPY_TIMEOUT_MS as long, 100 as long, 4096 as long, null, |ctx: ptr, line: string| {})
+        heap.free(r)
+        return null
+    })
 }

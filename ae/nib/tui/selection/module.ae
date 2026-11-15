@@ -15,15 +15,12 @@
 //    columns and rows are ints.
 //  - text() / text_in_history() take no allocator and return a string.
 //  - copy(t, text, local): upstream writes OSC 52 through vaxis and then runs
-//    localCopy, which (only when WAYLAND_DISPLAY or DISPLAY is set) spawns
-//    wl-copy / xsel / xclip through /bin/sh with a one second wait. Here the
-//    OSC 52 goes through `term.copy_to_clipboard(t, text)` and the local
-//    copier is the `local` closure, `|text: string| { ... }`, called after
-//    it and expected to swallow its own failures (upstream `catch {}`).
-//    Nothing is spawned in this module: pass a no-op closure in specs. The
-//    sh script upstream runs is LOCAL_COPY_SCRIPT and the environment test
-//    is local_copy_wanted(has_wayland, has_display), for whoever wires a real
-//    spawner (feed `text` on stdin of `/bin/sh -c LOCAL_COPY_SCRIPT`).
+//    localCopy. Here the OSC 52 goes through `term.copy_to_clipboard(t, text)`
+//    and the local copier is the `local` closure, `|text: string| { ... }`,
+//    called after it and expected to swallow its own failures (upstream
+//    `catch {}`). Nothing is spawned in this module: the app's closure runs
+//    tui.clipboard's copier (pbcopy on macOS, upstream's wl-copy/xsel/xclip
+//    script under Wayland or X); specs pass their own.
 
 import std.string
 import std.strbuilder
@@ -34,8 +31,7 @@ import nib.tui.entry
 import nib.tui.sel_history
 
 exports(Point, Selection, new, take_click, clear, mouse, mouse_in_history, update_history,
-        highlight_history, text_in_history, highlight, text, copy, local_copy_wanted,
-        LOCAL_COPY_SCRIPT)
+        highlight_history, text_in_history, highlight, text, copy)
 
 struct Point {
     col: int
@@ -240,14 +236,6 @@ text(s: *Selection, surf: *screen.Surface) -> string {
         }
     }
     return strbuilder.finish(out)
-}
-
-// The script upstream's localCopy runs under /bin/sh with the text on stdin.
-const LOCAL_COPY_SCRIPT = "if [ -n \"$WAYLAND_DISPLAY\" ] && command -v wl-copy >/dev/null 2>&1; then exec wl-copy\nelif [ -n \"$DISPLAY\" ]; then\n  if command -v xsel >/dev/null 2>&1; then exec xsel --clipboard --input\n  elif command -v xclip >/dev/null 2>&1; then exec xclip -selection clipboard; fi\nfi\nexit 1"
-
-// Upstream localCopy does nothing without WAYLAND_DISPLAY or DISPLAY.
-local_copy_wanted(has_wayland: bool, has_display: bool) -> bool {
-    return has_wayland || has_display
 }
 
 // OSC 52 through the terminal, then the `local` copier (see the header).

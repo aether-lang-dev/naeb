@@ -162,8 +162,8 @@ expect_imports $U/title/module.ae "std.fs|std.strbuilder|std.string"
 # The model calls are closures the app passes in (prediction) or the /model listing (provider_flow).
 expect_imports $U/prediction/module.ae "nib.msg|nib.tui.editor|std.list|std.strbuilder|std.string|std.sync|std.worker"
 expect_imports $U/provider_flow/module.ae "nib.auth.models|nib.config|std.list|std.strbuilder|std.string|std.sync|std.worker"
-# Processes through tools/process: pbcopy/xclip and friends (clipboard), gh (reflect).
-expect_imports $U/clipboard/module.ae "nib.image|nib.tools.process|std.list|std.string"
+# Processes through tools/process: pbcopy/osascript/xclip and friends (clipboard read and write), gh (reflect).
+expect_imports $U/clipboard/module.ae "nib.image|nib.tools.process|std.list|std.string|std.worker"
 expect_imports $U/reflect/module.ae "nib.fserr|nib.jsonx|nib.tools.process|std.cryptography|std.fs|std.io|std.json|std.list|std.os|std.strbuilder|std.string|std.sync|std.worker"
 # A clicked path's `open` command, detached (see the exception below).
 expect_imports $U/open/module.ae "std.fs|std.list|std.map|std.os|std.strbuilder|std.string|std.worker"

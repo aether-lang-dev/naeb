@@ -2,9 +2,12 @@
 // These tests are added: the reader field is replaceable per instance, and
 // the shell machinery (read_script: PNG check, exit 127, other failure,
 // deadline, size limit) is exercised with stand-in scripts, never the real
-// clipboard. The image check is nib.image's probe, as upstream.
+// clipboard. The image check is nib.image's probe, as upstream. Writing text:
+// which copier each OS gets, and the text reaching a stand-in copier's stdin.
 import std.spec
 import std.string
+import std.list
+import std.fs
 import nib.tui.clipboard
 
 fake_reader_(env: ptr) -> ptr {
@@ -66,6 +69,42 @@ main() {
             r = clipboard.read_script("head -c 5300000 /dev/zero", null, 5000 as long) as *clipboard.Result
             spec.assert_eq(r.kind, clipboard.KIND_TOO_LARGE, "too large")
             heap.free(r)
+        }
+        spec.it("(extra) the copier is pbcopy on macOS, upstream's script only under Wayland or X") callback {
+            empty_env = list.list_new()
+            mac = clipboard.copier("darwin", empty_env)
+            spec.assert_true(mac != null, "macOS has one")
+            p0, _e = list.get_string(mac, 0)
+            spec.assert_str_eq(p0, "/usr/bin/pbcopy", "pbcopy, no shell")
+            spec.assert_eq(list.list_size(mac), 1, "no arguments")
+            spec.assert_true(clipboard.copier("linux", empty_env) == null, "no display: none")
+            x = list.list_new()
+            list.list_add(x, "DISPLAY=:0")
+            lx = clipboard.copier("linux", x)
+            spec.assert_true(lx != null, "X11")
+            s2, _e2 = list.get_string(lx, 2)
+            spec.assert_str_eq(s2, clipboard.COPY_SCRIPT, "upstream's script")
+            w = list.list_new()
+            list.list_add(w, "WAYLAND_DISPLAY=wayland-0")
+            spec.assert_true(clipboard.copier("linux", w) != null, "Wayland")
+        }
+        spec.it("(extra) write_text returns at once and the copier gets the text on stdin") callback {
+            d, _de = fs.make_temp_dir("", "naeb-copy")
+            out = "${d}/got"
+            argv = list.list_new()
+            list.list_add(argv, "/bin/sh")
+            list.list_add(argv, "-c")
+            list.list_add(argv, "sleep 0.3; cat > '${out}.part' && mv '${out}.part' '${out}'")
+            clipboard.write_text(argv, null, "h\u00e9llo \u2713\nsecond line")
+            spec.assert_eq(fs.exists(out), 0, "not waited for")
+            waited = 0
+            while fs.exists(out) == 0 && waited < 3000 {
+                sleep(20)
+                waited = waited + 20
+            }
+            got, _re = fs.read(out)
+            spec.assert_str_eq(got, "h\u00e9llo \u2713\nsecond line", "text on stdin")
+            fs.remove_tree(d)
         }
     }
     return spec.run_summary(fw)

@@ -135,7 +135,7 @@ pins                     AE_PIN / AEB_REF the port is verified against
 | `src/tui/transcript.zig`, `transcript/entry.zig`, `transcript/changes.zig`, `transcript/intraline.zig`, `transcript/label.zig` | 2634 | `ae/nib/tui/transcript`, `entry`, `turn_changes` (renamed), `intraline`, `label` | 7788541 | replayed tool summaries are read from the messages' `tool_summary` members |
 | `src/tui/editor.zig` | 657 | `ae/nib/tui/editor/module.ae` | 7788541 | image blocks hold nib.image Images (JSON text); sent_images is their JSON array |
 | `src/tui/markdown.zig`, `syntax.zig` | 1472 | `ae/nib/tui/markdown`, `syntax` | 7788541 | |
-| `src/tui/viewport.zig`, `selection.zig`, `selection/history.zig` | 595 | `ae/nib/tui/viewport`, `selection`, `sel_history` (renamed) | 7788541 | the local clipboard tool is a closure the app supplies |
+| `src/tui/viewport.zig`, `selection.zig`, `selection/history.zig` | 595 | `ae/nib/tui/viewport`, `selection`, `sel_history` (renamed) | 7788541 | the local clipboard tool is a closure the app supplies (tui/clipboard's copier: ours adds pbcopy on macOS, see "Ours: pbcopy") |
 | `src/tui/status.zig`, `bill.zig`, `title.zig`, `format.zig`, `frames.zig`, `smooth.zig`, `long_text.zig`, `mode.zig` | 1076 | `ae/nib/tui/<same>`, `turn_summary` | 7788541 | times are ms from the app's clock |
 | `src/tui/commands.zig`, `menu.zig`, `providers.zig` | 1133 | `ae/nib/tui/commands`, `menu`, `module.ae` | 7788541 | execute/select/providers live in the app; `/provider` is key entry only |
 | `src/tui/provider_flow.zig` | 658 | `ae/nib/tui/provider_flow/module.ae` | 7788541 | API keys only: the Codex sign-in steps are not ported |
@@ -628,3 +628,23 @@ Gates after both fixes: `aeb .tests.ae`, `tools/check_layers.sh` and
 `tools/tui_tests.sh` green on macOS arm64, ae-x64 and cachyos; upstream e2e
 macOS 23/30, ae-x64 29/30, cachyos 29/30 (unchanged; the Codex half of
 `test_effort` by policy, and on macOS the `/proc` files).
+
+## Ours: pbcopy for a mouse selection on macOS (2026-11-15)
+
+Upstream copies a mouse selection with OSC 52 and, only when WAYLAND_DISPLAY
+or DISPLAY is set, also through wl-copy/xsel/xclip (selection.zig
+`localCopy`); on macOS it relies on OSC 52 alone. macOS Terminal.app does
+not implement OSC 52 (tmux's and Neovim's clipboard docs list it as
+unsupported; not tried here, since driving Terminal.app on the shared Mac
+was out of bounds), so a selection there reached no clipboard. The port's
+local copier was also still a no-op closure on every OS. Now the app's
+closure runs tui/clipboard's `copier`: `/usr/bin/pbcopy` on macOS (no shell,
+text on stdin, `LC_ALL=en_US.UTF-8`, since pbcopy without a UTF-8 locale
+reads UTF-8 as MacRoman, which was observed), upstream's script under
+Wayland or X elsewhere; `write_text` runs it on its own thread with
+upstream's 1 s limit. OSC 52 is still written first, so terminals that
+support it are unchanged. It is naeb's own unconfined process acting on the
+user's click, which ADR 0001 allows for the clipboard. Specs:
+ae/tests/tui_clipboard_test.ae (the copier per OS, the text reaching a
+stand-in copier's stdin).
+

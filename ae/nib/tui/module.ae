@@ -311,7 +311,11 @@ new(t: @keep ptr, p: @keep ptr, clk: @keep ptr, envp: @keep ptr) -> *App {
         string err = open.launch(argv, ep)
         return err
     }
-    a.local_copy = |text: string| { }
+    a.local_copy = |text: string| {
+        ep = env_pairs_(a)
+        cargv = clipboard.copier(os.platform(), ep)
+        if cargv != null { clipboard.write_text(cargv, ep, text) }
+    }
     a.clip = clipboard.new()
     a.gh = |argv: ptr, input_text: string, out: ptr| {
         int code = reflect.gh_run(argv, input_text, out)

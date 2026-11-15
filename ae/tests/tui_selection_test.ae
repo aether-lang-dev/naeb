@@ -244,10 +244,5 @@ main() {
             spec.assert_eq(got.len, 1, "local called")
             spec.assert_str_eq(got[0], "hello", "local text")
         }
-        spec.it("local copy is wanted only with a display") callback {
-            spec.assert_false(selection.local_copy_wanted(false, false), "none")
-            spec.assert_true(selection.local_copy_wanted(true, false), "wayland")
-            spec.assert_true(selection.local_copy_wanted(false, true), "x11")
-        }
     }
 }
