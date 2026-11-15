@@ -125,6 +125,59 @@ main() {
             spec.assert_str_eq(read_("${d}/victim"), "keep", "victim kept")
             spec.assert_eq(no_temps_(d), 1, "no temps")
         }
+        spec.it("open_verified names the opened file and refuses what is not a file or directory") callback {
+            d = tmp_()
+            fs.write("${d}/real", "data")
+            fs.symlink("real", "${d}/link")
+            fd, p, _fold, err = atomic_file.open_verified("${d}/link", atomic_file.WANT_FILE)
+            spec.assert_str_eq(err, "", "opened through the link")
+            spec.assert_str_eq(p, "${d}/real", "named as the file it opened")
+            data, rerr = atomic_file.read_fd(fd, 1024 as long)
+            spec.assert_str_eq(rerr, "", "read")
+            spec.assert_str_eq(data, "data", "its data")
+            atomic_file.close_fd(fd)
+            _f2, _p2, _o2, e2 = atomic_file.open_verified("/dev/null", atomic_file.WANT_FILE)
+            spec.assert_str_eq(e2, "NotFile", "a device is not a file")
+            _f3, _p3, _o3, e3 = atomic_file.open_verified(d, atomic_file.WANT_FILE)
+            spec.assert_str_eq(e3, "IsDir", "a directory is not a file")
+            fs.write("${d}/big", "0123456789")
+            f4, _p4, _o4, _e4 = atomic_file.open_verified("${d}/big", atomic_file.WANT_FILE)
+            _d4, r4 = atomic_file.read_fd(f4, 4 as long)
+            spec.assert_str_eq(r4, "StreamTooLong", "limit")
+            atomic_file.close_fd(f4)
+        }
+        spec.it("replace_at writes in the opened directory and refuses a symlink leaf") callback {
+            d = tmp_()
+            fs.mkdir_p("${d}/dir")
+            fs.mkdir_p("${d}/elsewhere")
+            fs.write("${d}/elsewhere/target", "keep")
+            fs.symlink("${d}/elsewhere/target", "${d}/dir/leaf")
+            fd, p, _fold, err = atomic_file.open_verified("${d}/dir", atomic_file.WANT_DIR)
+            spec.assert_str_eq(err, "", "dir opened")
+            _s, werr = atomic_file.replace_at(fd, p, "leaf", "new", 420, 0, 0)
+            spec.assert_str_eq(werr, "NotFile", "symlink leaf refused")
+            spec.assert_str_eq(read_("${d}/elsewhere/target"), "keep", "target kept")
+            _s2, werr2 = atomic_file.replace_at(fd, p, "fresh", "new", 420, 0, 0)
+            spec.assert_str_eq(werr2, "", "fresh leaf written")
+            spec.assert_str_eq(read_("${d}/dir/fresh"), "new", "its content")
+            spec.assert_eq(no_temps_("${d}/dir"), 1, "no temps")
+            atomic_file.close_fd(fd)
+        }
+        spec.it("open_dir makes components only where allowed says so") callback {
+            d = tmp_()
+            fs.mkdir_p("${d}/ok")
+            fd, p, _fold, err = atomic_file.open_dir("${d}/ok/a/b", 1, |dir: string, f: int| {
+                if string.contains(dir, "/b") == 1 { return "refused ${dir}" }
+                return ""
+            })
+            spec.assert_eq(fd, -1, "refused")
+            spec.assert_true(string.starts_with(err, "refused "), "allowed's reason")
+            spec.assert_eq(fs.exists("${d}/ok/a"), 1, "the allowed component made")
+            fd2, p2, _f2, e2 = atomic_file.open_dir("${d}/ok/a/c", 1, |dir: string, f: int| { return "" })
+            spec.assert_str_eq(e2, "", "made")
+            spec.assert_str_eq(p2, "${d}/ok/a/c", "named")
+            atomic_file.close_fd(fd2)
+        }
     }
     return spec.run_summary(fw)
 }

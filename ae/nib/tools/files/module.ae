@@ -12,7 +12,6 @@ import nib.jsonx
 import nib.fserr
 import nib.tools.atomic_file
 import nib.tools.file_state
-import nib.tools.jail
 import nib.tools.rules
 import nib.tools.undo
 
@@ -55,13 +54,13 @@ canceled_(c: *Ctx) -> int {
     return 0
 }
 
-credential_(c: *Ctx, path: string) -> int {
+credential_(c: *Ctx, path: string, fold: int) -> int {
     if c.creds == null { return 0 }
     n = list.list_size(c.creds)
     i = 0
     while i < n {
         p, _e = list.get_string(c.creds, i)
-        if p == path { return 1 }
+        if rules.same(p, path, fold) == 1 { return 1 }
         i = i + 1
     }
     return 0
@@ -71,28 +70,42 @@ credential_(c: *Ctx, path: string) -> int {
 resolve_(c: *Ctx, raw: string) -> (string, string) {
     path, err = atomic_file.canonical_path(raw)
     if err != "" { return "", err }
-    if credential_(c, path) == 1 { return "", "CredentialAccessDenied" }
-    if rules.allows(c.reads, path) == 0 { return "", "denied by the project fence: read ${path}" }
+    why = read_refused_(c, path, 0)
+    if why != "" { return "", why }
     return path, ""
 }
 
-blocked_(c: *Ctx, path: string) -> string {
-    if c.wdeny != null && rules.inside(c.wdeny, path) == 1 { return "denied by the project fence: write ${path}" }
+// Why a read of `path` (canonical, or as a descriptor names it, on a volume
+// that folds case when fold is 1) is refused, or "".
+read_refused_(c: *Ctx, path: string, fold: int) -> string {
+    if credential_(c, path, fold) == 1 { return "CredentialAccessDenied" }
+    if rules.allows_in(c.reads, path, fold) == 0 { return "denied by the project fence: read ${path}" }
+    return ""
+}
+
+blocked_(c: *Ctx, path: string, fold: int) -> string {
+    if c.wdeny != null && rules.inside_in(c.wdeny, path, fold) == 1 { return "denied by the project fence: write ${path}" }
     if c.roots == null { return "" }
-    if jail.allows(c.roots, path) == 1 { return "" }
+    if rules.inside_in(c.roots, path, fold) == 1 { return "" }
     return "outside the project; the sandbox only allows writes inside the project and its writable roots"
 }
 
-// (data, "") or ("", Zig's error name).
-read_file_(path: string) -> (string, string) {
-    s, rk, _rm = fs.stat(path, 1)
-    if rk != fs.KIND_OK { return "", fserr.errname(rk) }
-    if s.kind == fs.STAT_KIND_DIR { return "", "IsDir" }
-    if s.size > FILE_LIMIT { return "", "StreamTooLong" }
-    data, err = fs.read(path)
-    if err != "" { return "", "AccessDenied" }
-    if string.length(data) > FILE_LIMIT { return "", "StreamTooLong" }
-    return data, ""
+// Opens `path` (canonical) and decides on the file as opened, by the path
+// its descriptor names: (data, "") or ("", Zig's error name or the fence's
+// refusal). fenced is set to 1 when the refusal is the fence's or a
+// credential's (its text is then the whole error).
+read_file_(c: *Ctx, path: string) -> (string, string, int) {
+    fd, real, fold, oerr = atomic_file.open_verified(path, atomic_file.WANT_FILE)
+    if oerr != "" { return "", oerr, 0 }
+    why = read_refused_(c, real, fold)
+    if why != "" {
+        atomic_file.close_fd(fd)
+        return "", why, 1
+    }
+    data, rerr = atomic_file.read_fd(fd, FILE_LIMIT as long)
+    atomic_file.close_fd(fd)
+    if rerr != "" { return "", rerr, 0 }
+    return data, "", 0
 }
 
 find_nl_(data: string, from: int) -> int {
@@ -118,9 +131,10 @@ read(cp: ptr, args: string) -> (int, string) {
         file_state.unlock(fd)
         return 0, "${raw}: ${fserr.errname(sk)}"
     }
-    data, rerr = read_file_(path)
+    data, rerr, fenced = read_file_(c, path)
     if rerr != "" {
         file_state.unlock(fd)
+        if fenced == 1 { return 0, rerr }
         return 0, "${raw}: ${rerr}"
     }
     n = string.length(data)
@@ -175,23 +189,27 @@ replace_all(hay: string, needle: string, with: string) -> string {
     return strbuilder.finish(b)
 }
 
-parent_dirs_(path: string) -> string {
-    parent = atomic_file.dirname(path)
-    if fs.exists(parent) == 1 { return "" }
-    e = fs.mkdir_p(parent)
-    if e != "" {
-        // the error name of the first component that cannot be made
-        p = parent
-        while p != "/" {
-            st, pk, _pm = fs.stat(p, 1)
-            if pk == fs.KIND_OK {
-                if st.kind != fs.STAT_KIND_DIR { return "${parent}: NotDir" }
-                return "${parent}: AccessDenied"
-            }
-            p = atomic_file.dirname(p)
-        }
-        return "${parent}: AccessDenied"
-    }
+// The directory a write of `path` (canonical) goes through, opened (made
+// first when create is 1) and checked as opened: (fd, its path, fold, "")
+// or (-1, "", 0, error text).
+write_dir_(c: *Ctx, raw: string, path: string, create: int) -> (int, string, int, string) {
+    cp = c as ptr
+    fd, dir, fold, err = atomic_file.open_dir(atomic_file.dirname(path), create, |d: string, f: int| {
+        why = blocked_(cp as *Ctx, d, f)
+        if why != "" { return "${raw}: ${why}" }
+        return ""
+    })
+    return fd, dir, fold, err
+}
+
+// The leaf of a write in the opened directory `dir`, checked as the file it
+// will replace: "" or the error text.
+leaf_refused_(c: *Ctx, raw: string, dir: string, fold: int, leaf: string) -> string {
+    target = atomic_file.join(dir, leaf)
+    why = read_refused_(c, target, fold)
+    if why != "" { return why }
+    why = blocked_(c, target, fold)
+    if why != "" { return "${raw}: ${why}" }
     return ""
 }
 
@@ -207,7 +225,7 @@ edit(cp: ptr, args: string) -> (int, string) {
     all = jsonx.bool_or(a, "all", 0)
     path, perr = resolve_(c, raw)
     if perr != "" { return 0, perr }
-    why = blocked_(c, path)
+    why = blocked_(c, path, 0)
     if why != "" { return 0, "${raw}: ${why}" }
     fd, lerr = file_state.lock(c.nib_home, path, c.cancel)
     if lerr != "" { return 0, lerr }
@@ -219,9 +237,10 @@ edit(cp: ptr, args: string) -> (int, string) {
         file_state.unlock(fd)
         return 0, "old_text is empty; use write to create a file"
     }
-    data, rerr = read_file_(path)
+    data, rerr, fenced = read_file_(c, path)
     if rerr != "" {
         file_state.unlock(fd)
+        if fenced == 1 { return 0, rerr }
         return 0, "${raw}: ${rerr}"
     }
     count = count_occurrences(data, old_text)
@@ -234,9 +253,22 @@ edit(cp: ptr, args: string) -> (int, string) {
         return 0, "old_text matches ${count} times in ${raw}; include more surrounding text or pass all: true"
     }
     out = replace_all(data, old_text, new_text)
+    dfd, dir, fold, derr = write_dir_(c, raw, path, 0)
+    if derr != "" {
+        file_state.unlock(fd)
+        return 0, derr
+    }
+    leaf = atomic_file.basename(path)
+    lwhy = leaf_refused_(c, raw, dir, fold, leaf)
+    if lwhy != "" {
+        atomic_file.close_fd(dfd)
+        file_state.unlock(fd)
+        return 0, lwhy
+    }
     // the file as it is now goes into the Turn's undo record before any change
     snap = undo.prepare(c.undo, c.nib_home, path, 1, data, out)
-    written, werr = atomic_file.replace_stat(path, out, 438, 0, 0)
+    written, werr = atomic_file.replace_at(dfd, dir, leaf, out, 438, 0, 0)
+    atomic_file.close_fd(dfd)
     if werr != "" {
         undo.release(snap)
         file_state.unlock(fd)
@@ -258,7 +290,7 @@ write(cp: ptr, args: string) -> (int, string) {
     content = jsonx.str_or(a, "content", "")
     path, perr = resolve_(c, raw)
     if perr != "" { return 0, perr }
-    why = blocked_(c, path)
+    why = blocked_(c, path, 0)
     if why != "" { return 0, "${raw}: ${why}" }
     fd, lerr = file_state.lock(c.nib_home, path, c.cancel)
     if lerr != "" { return 0, lerr }
@@ -280,7 +312,11 @@ write(cp: ptr, args: string) -> (int, string) {
     has_before = 0
     before = ""
     if rk == fs.KIND_OK {
-        b, berr = read_file_(path)
+        b, berr, bfenced = read_file_(c, path)
+        if bfenced == 1 {
+            file_state.unlock(fd)
+            return 0, berr
+        }
         if berr != "" { tracked = 0 } else {
             before = b
             has_before = 1
@@ -292,13 +328,22 @@ write(cp: ptr, args: string) -> (int, string) {
     if tracked == 0 { undo.mark_incomplete(c.undo, c.nib_home, undo.REASON_UNAVAILABLE) } else {
         snap = undo.prepare(c.undo, c.nib_home, path, has_before, before, content)
     }
-    derr = parent_dirs_(path)
+    dfd, dir, fold, derr = write_dir_(c, raw, path, 1)
     if derr != "" {
         undo.release(snap)
         file_state.unlock(fd)
         return 0, derr
     }
-    written, werr = atomic_file.replace_stat(path, content, 438, 0, 0)
+    leaf = atomic_file.basename(path)
+    lwhy = leaf_refused_(c, raw, dir, fold, leaf)
+    if lwhy != "" {
+        atomic_file.close_fd(dfd)
+        undo.release(snap)
+        file_state.unlock(fd)
+        return 0, lwhy
+    }
+    written, werr = atomic_file.replace_at(dfd, dir, leaf, content, 438, 0, 0)
+    atomic_file.close_fd(dfd)
     if werr != "" {
         undo.release(snap)
         file_state.unlock(fd)

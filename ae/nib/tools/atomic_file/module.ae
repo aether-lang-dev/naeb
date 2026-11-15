@@ -1,6 +1,14 @@
 // tools.atomic_file: canonical paths and atomic same-directory replacement
 // (upstream src/tools/atomic_file.zig). Errors are Zig's names for them
 // ("FileNotFound", "NotDir", "SymLinkLoop", ...), which tool errors show.
+//
+// Descriptor-relative access (docs/naeb/adr/0001, "Path identity"): a
+// checked path is opened first and decided on as opened: open_verified
+// gives the path the descriptor really names (on-disk case, firmlinks and
+// /.vol mapped back, no symlinks) and whether its volume folds case;
+// open_dir opens (and makes) a directory one verified component at a time;
+// replace_at writes beside a leaf of an opened directory and renames over
+// it there, so a symlink swapped in after the check redirects nothing.
 
 import std.fs
 import std.os hiding (exec, run_capture, run_pipe, run_pipe_drain_and_wait, run_socket,
@@ -15,7 +23,35 @@ import std.cryptography
 import std.io
 import nib.fserr
 
-exports(canonical_path, replace, replace_stat, dirname, basename, join, cwd_path)
+@source("pathfd.c")
+
+exports(canonical_path, replace, replace_stat, dirname, basename, join, cwd_path,
+        open_verified, open_dir, open_leaf, open_child, read_fd, close_fd, fd_kind, replace_at, list_fd, kind_at, cloexec_inherited,
+        WANT_FILE, WANT_DIR, WANT_ANY)
+
+extern nibfs_open(path: string, kind: int, nofollow: int) -> int
+extern nibfs_openat(dirfd: int, name: string, kind: int, nofollow: int) -> int
+extern nibfs_close(fd: int) -> int
+extern nibfs_fd_kind(fd: int) -> int
+extern nibfs_kind_at(dirfd: int, name: string) -> int
+extern nibfs_mode_at(dirfd: int, name: string) -> int
+extern nibfs_same(fd: int, path: string) -> int
+extern nibfs_fd_path(fd: int) -> string @heap
+extern nibfs_fd_fold(fd: int) -> int
+extern nibfs_mkdirat(dirfd: int, name: string, mode: int) -> int
+extern nibfs_create_at(dirfd: int, name: string, mode: int) -> int
+extern nibfs_rename_at(dirfd: int, from: string, to: string) -> int
+extern nibfs_unlink_at(dirfd: int, name: string) -> int
+extern nibfs_list(fd: int) -> string @heap
+extern nibfs_errname(neg: int) -> string
+extern nibfs_cloexec_inherited() -> int
+
+const WANT_FILE = 0
+const WANT_DIR = 1
+const WANT_ANY = 2
+const KIND_FILE = 1
+const KIND_DIR = 2
+const KIND_LINK = 3
 
 const MAX_LINKS = 40
 
@@ -202,3 +238,229 @@ replace_stat(path: string, data: string, mode: int, force_mode: int, sync: int) 
     }
     return written, ""
 }
+
+// ---- descriptor-relative access ----
+
+close_fd(fd: int) {
+    if fd >= 0 { nibfs_close(fd) }
+}
+
+errname_(neg: int) -> string { return string.copy(nibfs_errname(neg)) }
+
+// The path `fd` names, or the fallback when the OS cannot say and the
+// fallback is that very file; "" otherwise.
+fd_path_(fd: int, fallback: string) -> string {
+    p = nibfs_fd_path(fd)
+    if string.length(p) > 0 { return p }
+    if fallback != "" && nibfs_same(fd, fallback) == 1 { return fallback }
+    return ""
+}
+
+// Checks an opened descriptor's kind against `want` and names it: (fd,
+// path, fold, "") or (-1, "", 0, error) with fd closed.
+verify_(fd: int, want: int, fallback: string) -> (int, string, int, string) {
+    k = nibfs_fd_kind(fd)
+    bad = ""
+    if k < 0 { bad = errname_(k) } else if want == WANT_FILE && k == KIND_DIR { bad = "IsDir" } else if want == WANT_DIR && k != KIND_DIR {
+        bad = "NotDir"
+    } else if k != KIND_FILE && k != KIND_DIR { bad = "NotFile" }
+    if bad != "" {
+        nibfs_close(fd)
+        return -1, "", 0, bad
+    }
+    p = fd_path_(fd, fallback)
+    if p == "" {
+        nibfs_close(fd)
+        return -1, "", 0, "AccessDenied"
+    }
+    return fd, p, nibfs_fd_fold(fd), ""
+}
+
+// Opens `path` (a regular file, a directory or either: WANT_*) without
+// blocking on a FIFO or device: (fd, the path the descriptor names, 1 when
+// its volume folds case, "") or (-1, "", 0, error name). Anything but a
+// regular file or a directory is "NotFile". Close with close_fd.
+open_verified(path: string, want: int) -> (int, string, int, string) {
+    kind = 0
+    if want == WANT_DIR { kind = 1 }
+    fd = nibfs_open(path, kind, 0)
+    if fd < 0 { return -1, "", 0, errname_(fd) }
+    return verify_(fd, want, path)
+}
+
+// The leaf `name` of the opened directory `dirfd` (whose path is `dir`),
+// opened without following a symlink, as open_verified.
+open_leaf(dirfd: int, dir: string, name: string, want: int) -> (int, string, int, string) {
+    kind = 0
+    if want == WANT_DIR { kind = 1 }
+    fd = nibfs_openat(dirfd, name, kind, 1)
+    if fd < 0 { return -1, "", 0, errname_(fd) }
+    return verify_(fd, want, join(dir, name))
+}
+
+// open_leaf for a walk: the entry `name` of the opened, already verified
+// directory `dirfd` (path `dir`), opened without following a symlink, is
+// `dir`/`name` by construction, so its path is not asked of the OS.
+open_child(dirfd: int, dir: string, name: string, want: int) -> (int, string, int, string) {
+    kind = 0
+    if want == WANT_DIR { kind = 1 }
+    fd = nibfs_openat(dirfd, name, kind, 1)
+    if fd < 0 { return -1, "", 0, errname_(fd) }
+    k = nibfs_fd_kind(fd)
+    if (want == WANT_DIR && k != KIND_DIR) || (want == WANT_FILE && k != KIND_FILE) || k < 0 {
+        nibfs_close(fd)
+        return -1, "", 0, "NotFile"
+    }
+    return fd, join(dir, name), nibfs_fd_fold(fd), ""
+}
+
+// The directory `path` (canonical, absolute) opened, its missing
+// components made first when `create` is 1: (fd, the path it names, fold,
+// "") or (-1, "", 0, error). `allowed(dir: string, fold: int) -> string`
+// ("" or why not) is asked of the deepest existing directory before
+// anything is made in it, and of each directory made, as opened; nothing
+// is made in a directory it refuses. A component is opened from its opened
+// parent without following a symlink.
+open_dir(path: string, create: int, allowed: fn) -> (int, string, int, string) {
+    base = path
+    missing = list.list_new()
+    if create == 1 {
+        while base != "/" {
+            st, k, _m = fs.stat(base, 1)
+            if k == fs.KIND_OK && st.kind == fs.STAT_KIND_DIR { break }
+            if k == fs.KIND_OK { return -1, "", 0, "${base}: NotDir" }
+            if k != fs.KIND_NOT_FOUND { return -1, "", 0, "${base}: ${fserr.errname(k)}" }
+            list.list_add(missing, basename(base))
+            base = dirname(base)
+        }
+    }
+    fd, dir, fold, err = open_verified(base, WANT_DIR)
+    if err != "" { return -1, "", 0, "${base}: ${err}" }
+    string why = call(allowed, dir, fold)
+    if why != "" {
+        nibfs_close(fd)
+        return -1, "", 0, why
+    }
+    i = list.list_size(missing) - 1
+    while i >= 0 {
+        name, _e = list.get_string(missing, i)
+        mk = nibfs_mkdirat(fd, name, 511)
+        if mk < 0 && errname_(mk) != "PathAlreadyExists" {
+            nibfs_close(fd)
+            return -1, "", 0, "${join(dir, name)}: ${errname_(mk)}"
+        }
+        cfd, cdir, cfold, cerr = open_leaf(fd, dir, name, WANT_DIR)
+        nibfs_close(fd)
+        if cerr != "" { return -1, "", 0, "${join(dir, name)}: ${cerr}" }
+        string cwhy = call(allowed, cdir, cfold)
+        if cwhy != "" {
+            nibfs_close(cfd)
+            return -1, "", 0, cwhy
+        }
+        fd = cfd
+        dir = cdir
+        fold = cfold
+        i = i - 1
+    }
+    return fd, dir, fold, ""
+}
+
+// The kind of the open `fd`: 1 file, 2 directory, 4 other; negative on an error.
+fd_kind(fd: int) -> int { return nibfs_fd_kind(fd) }
+
+// The kind of `name` in the opened directory, not followed: 0 absent,
+// 1 file, 2 directory, 3 symlink, 4 other; negative on an error.
+kind_at(dirfd: int, name: string) -> int { return nibfs_kind_at(dirfd, name) }
+
+// Everything `fd` reads up to EOF: (data, "") or ("", "StreamTooLong")
+// past `limit` bytes, or ("", error).
+read_fd(fd: int, limit: long) -> (string, string) {
+    size, sk, _sm = fs.fd_size(fd)
+    chunk = 65536
+    if sk == fs.KIND_OK && size > 0 {
+        if size > limit { return "", "StreamTooLong" }
+        chunk = (size as int) + 1
+    }
+    data = ""
+    total = 0 as long
+    while true {
+        part, n, err = io.fd_read_n(fd, chunk)
+        if err != "" { return "", "AccessDenied" }
+        if n == 0 { break }
+        if total == 0 { data = part } else { data = string.concat(data, part) }
+        total = total + (n as long)
+        if total > limit { return "", "StreamTooLong" }
+        if n < chunk { break }
+        chunk = 65536
+    }
+    return data, ""
+}
+
+// The entries of the opened directory `fd`: a list of "<kind><name>", kind
+// f(ile), d(irectory), l(ink), o(ther) or u(nknown).
+list_fd(fd: int) -> ptr {
+    text = nibfs_list(fd)
+    out = list.list_new()
+    n = string.length(text)
+    i = 0
+    while i < n {
+        j = string.index_of_from(text, "/", i)
+        if j < 0 { break }
+        list.list_add(out, string.substring(text, i, j))
+        i = j + 1
+    }
+    return out
+}
+
+// Writes `data` to a fresh .nib-* file in the opened directory `dirfd`
+// (its path `dir`) and renames it over the leaf `name` there; a symlink or
+// anything but a regular file at the leaf is refused ("NotFile"). Modes as
+// replace_stat. (the written file's Stat, "") or (zeroed, error name).
+replace_at(dirfd: int, dir: string, name: string, data: string, mode: int, force_mode: int, sync: int) -> (fs.Stat, string) {
+    k = nibfs_kind_at(dirfd, name)
+    if k < 0 { return none_(), errname_(k) }
+    if k != 0 && k != KIND_FILE { return none_(), "NotFile" }
+    existing = 0
+    existing_mode = 0
+    if k == KIND_FILE {
+        m = nibfs_mode_at(dirfd, name)
+        if m < 0 { return none_(), errname_(m) }
+        existing = 1
+        existing_mode = m
+    }
+    create_mode = mode
+    if existing == 1 { create_mode = 384 }
+    fd = -1
+    tmp = ""
+    tries = 0
+    while tries < 16 {
+        tmp = random_name_()
+        fd = nibfs_create_at(dirfd, tmp, create_mode)
+        if fd >= 0 { break }
+        if errname_(fd) != "PathAlreadyExists" { return none_(), errname_(fd) }
+        tries = tries + 1
+    }
+    if fd < 0 { return none_(), "PathAlreadyExists" }
+    _w, wk, _wm = fs.fd_pwrite_all(fd, string.bytes(data), 0 as long)
+    if wk == fs.KIND_OK && existing == 1 && force_mode == 0 { _f, wk, _fm = fs.fchmod(fd, existing_mode) }
+    if wk == fs.KIND_OK && force_mode == 1 { _f2, wk, _fm2 = fs.fchmod(fd, mode) }
+    if wk == fs.KIND_OK && sync == 1 { _y, wk, _ym = fs.fd_fsync(fd) }
+    failed = ""
+    if wk != fs.KIND_OK { failed = fserr.errname(wk) }
+    io.fd_close(fd)
+    if failed != "" {
+        nibfs_unlink_at(dirfd, tmp)
+        return none_(), failed
+    }
+    rk = nibfs_rename_at(dirfd, tmp, name)
+    if rk < 0 {
+        nibfs_unlink_at(dirfd, tmp)
+        return none_(), errname_(rk)
+    }
+    written, _ok, _om = fs.stat(join(dir, name), 0)
+    return written, ""
+}
+
+// Marks every inherited descriptor above 2 close-on-exec, so no child ever
+// receives one; how many it marked.
+cloexec_inherited() -> int { return nibfs_cloexec_inherited() }

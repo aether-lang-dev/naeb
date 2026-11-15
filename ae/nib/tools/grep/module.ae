@@ -22,6 +22,8 @@ import std.sync
 import std.strbuilder
 import contrib.quickjs
 import nib.tools.walk
+import nib.tools.atomic_file
+import nib.tools.rules
 
 exports(options, set_glob, free_options, search, release, clip, escape,
         matcher_new, matcher_free, matcher_scan, matcher_set_time_limit,
@@ -331,6 +333,17 @@ special_(c: int) -> int {
     return 0
 }
 
+credential_(deny: ptr, path: string, fold: int) -> int {
+    if deny == null { return 0 }
+    i = 0
+    while i < list.list_size(deny) {
+        d, _e = list.get_string(deny, i)
+        if rules.same(d, path, fold) == 1 { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
 // `literal` as a regex source matching it exactly.
 escape(literal: string) -> string {
     n = string.length(literal)
@@ -348,13 +361,20 @@ escape(literal: string) -> string {
 // ---- searching ----
 
 // The matches of one file; a list of *Match (empty when the file is skipped).
-scan_file_(m: ptr, f: *walk.File, context: int, limit: int) -> (ptr, string) {
+// The file is opened and checked as the path its descriptor names (a
+// symlink swapped in after the walk is not read through).
+scan_file_(m: ptr, f: *walk.File, context: int, limit: int, rs: ptr, deny: ptr) -> (ptr, string) {
     out = list.list_new()
-    _k, size, _mt, serr = fs.file_stat(f.absolute)
-    if serr != "" { return out, "" }
-    if size > MAX_FILE { return out, "" }
-    data, len, rerr = fs.read_binary(f.absolute)
+    fd, real, fold, oerr = atomic_file.open_verified(f.absolute, atomic_file.WANT_FILE)
+    if oerr != "" { return out, "" }
+    if rules.allows_in(rs, real, fold) == 0 || credential_(deny, real, fold) == 1 {
+        atomic_file.close_fd(fd)
+        return out, ""
+    }
+    data, rerr = atomic_file.read_fd(fd, MAX_FILE as long)
+    atomic_file.close_fd(fd)
     if rerr != "" { return out, "" }
+    len = string.length(data)
     probe = len
     if probe > 8192 { probe = 8192 }
     i = 0
@@ -481,7 +501,7 @@ search(o: *Options, deny: @keep ptr, cancel: @keep ptr) -> (ptr, string, string)
             failure = "Canceled"
         } else {
             f = list.list_get_raw(found_files, processed) as *walk.File
-            got, serr = scan_file_(m, f, o.context, limit)
+            got, serr = scan_file_(m, f, o.context, limit, o.rules, deny)
             if serr != "" {
                 failure = serr
             } else {

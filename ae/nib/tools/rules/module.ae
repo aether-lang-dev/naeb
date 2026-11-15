@@ -4,11 +4,15 @@
 // path decides; a path no rule covers is readable. The in-process tools
 // check paths with it; tools/jail turns the same list into Landlock rules
 // and an SBPL profile. Pure logic: no file system, process or network.
+//
+// The *_in forms take `fold`: 1 when the path lies on a volume that
+// compares names case-insensitively (atomic_file.open_verified says), where
+// rules and path are compared with ASCII case folded.
 
 import std.list
 import std.string
 
-exports(ALLOW, DENY, covers, allows, visible, inside, sorted, path_of, kind_of)
+exports(ALLOW, DENY, covers, allows, visible, inside, sorted, path_of, kind_of, same, allows_in, inside_in, visible_in)
 
 const ALLOW = 43
 const DENY = 45
@@ -26,30 +30,47 @@ covers(root: string, path: string) -> int {
 path_of(rule: string) -> string { return string.substring(rule, 1, string.length(rule)) }
 kind_of(rule: string) -> int { return string.char_at(rule, 0) }
 
+fold_(s: string, fold: int) -> string {
+    if fold == 1 { return string.to_lower(s) }
+    return s
+}
+
+// 1 when the two paths name the same entry (case folded when fold is 1).
+same(a: string, b: string, fold: int) -> int {
+    if fold_(a, fold) == fold_(b, fold) { return 1 }
+    return 0
+}
+
 // 1 when `path` lies inside one of `roots` (a list of plain paths).
-inside(roots: ptr, path: string) -> int {
+inside(roots: ptr, path: string) -> int { return inside_in(roots, path, 0) }
+
+inside_in(roots: ptr, path: string, fold: int) -> int {
     if roots == null { return 0 }
+    fp = fold_(path, fold)
     n = list.list_size(roots)
     i = 0
     while i < n {
         r, _e = list.get_string(roots, i)
-        if covers(r, path) == 1 { return 1 }
+        if covers(fold_(r, fold), fp) == 1 { return 1 }
         i = i + 1
     }
     return 0
 }
 
 // 1 when the deepest rule covering `path` allows it (or none covers it).
-allows(rules: ptr, path: string) -> int {
+allows(rules: ptr, path: string) -> int { return allows_in(rules, path, 0) }
+
+allows_in(rules: ptr, path: string, fold: int) -> int {
     if rules == null { return 1 }
+    fp = fold_(path, fold)
     best = -1
     verdict = 1
     n = list.list_size(rules)
     i = 0
     while i < n {
         r, _e = list.get_string(rules, i)
-        p = path_of(r)
-        if covers(p, path) == 1 {
+        p = fold_(path_of(r), fold)
+        if covers(p, fp) == 1 {
             pl = string.length(p)
             if pl > best || (pl == best && kind_of(r) == DENY) {
                 best = pl
@@ -64,15 +85,18 @@ allows(rules: ptr, path: string) -> int {
 
 // Whether a walk may list `path`: readable, or a directory with a readable
 // rule below it (a closed $HOME on the way to the project).
-visible(rules: ptr, path: string, is_dir: int) -> int {
-    if allows(rules, path) == 1 { return 1 }
+visible(rules: ptr, path: string, is_dir: int) -> int { return visible_in(rules, path, is_dir, 0) }
+
+visible_in(rules: ptr, path: string, is_dir: int, fold: int) -> int {
+    if allows_in(rules, path, fold) == 1 { return 1 }
     if is_dir == 0 { return 0 }
+    fp = fold_(path, fold)
     n = list.list_size(rules)
     i = 0
     while i < n {
         r, _e = list.get_string(rules, i)
-        p = path_of(r)
-        if kind_of(r) == ALLOW && p != path && covers(path, p) == 1 { return 1 }
+        p = fold_(path_of(r), fold)
+        if kind_of(r) == ALLOW && p != fp && covers(fp, p) == 1 { return 1 }
         i = i + 1
     }
     return 0

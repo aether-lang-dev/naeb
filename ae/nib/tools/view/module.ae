@@ -6,12 +6,10 @@
 // data home, the Session id, the Run's Attached) and the credential paths
 // the file tools refuse, and a project fence's read rules. No module state.
 
-import std.fs
 import std.list
 import std.string
 import nib.image
 import nib.jsonx
-import nib.fserr
 import nib.tools.atomic_file
 import nib.tools.rules
 
@@ -21,16 +19,18 @@ refuse_(message_text: string) -> (int, string) {
     return 1, "{\"ok\":false,\"error\":${jsonx.quote(message_text)}}"
 }
 
-credential_(creds: ptr, path: string) -> int {
-    if creds == null { return 0 }
-    n = list.list_size(creds)
-    i = 0
-    while i < n {
-        p, _e = list.get_string(creds, i)
-        if p == path { return 1 }
-        i = i + 1
+// Why a read of `path` is refused (a credential, the fence), or "".
+refused_(creds: ptr, reads: ptr, path: string, fold: int) -> string {
+    if creds != null {
+        i = 0
+        while i < list.list_size(creds) {
+            p, _e = list.get_string(creds, i)
+            if rules.same(p, path, fold) == 1 { return "CredentialAccessDenied" }
+            i = i + 1
+        }
     }
-    return 0
+    if rules.allows_in(reads, path, fold) == 0 { return "denied by the project fence: read ${path}" }
+    return ""
 }
 
 limit_text_() -> string { return "at most ${image.MAX_PER_RUN} images per Run" }
@@ -50,15 +50,21 @@ view(tp: ptr, creds: ptr, reads: ptr, args: string) -> (int, string) {
     if t.data_home == "" || t.session_id == "" { return refuse_("image storage is unavailable") }
     path, perr = atomic_file.canonical_path(raw)
     if perr != "" { return 0, perr }
-    if credential_(creds, path) == 1 { return 0, "CredentialAccessDenied" }
-    if rules.allows(reads, path) == 0 { return 0, "denied by the project fence: read ${path}" }
+    why = refused_(creds, reads, path, 0)
+    if why != "" { return 0, why }
     if image.attached_count(t.attached) >= image.MAX_PER_RUN { return refuse_(limit_text_()) }
-    s, rk, _rm = fs.stat(path, 1)
-    if rk != fs.KIND_OK { return refuse_(image.rejection(fserr.errname(rk))) }
-    if s.kind != fs.STAT_KIND_FILE { return refuse_("not a file") }
-    if s.size > (image.MAX_BYTES as long) { return refuse_(image.rejection("ImageTooLarge")) }
-    data, _n, rerr = fs.read_binary(path)
-    if string.length(rerr) > 0 { return refuse_("AccessDenied") }
+    fd, real, fold, oerr = atomic_file.open_verified(path, atomic_file.WANT_FILE)
+    if oerr == "IsDir" || oerr == "NotFile" { return refuse_("not a file") }
+    if oerr != "" { return refuse_(image.rejection(oerr)) }
+    rwhy = refused_(creds, reads, real, fold)
+    if rwhy != "" {
+        atomic_file.close_fd(fd)
+        return 0, rwhy
+    }
+    data, rerr = atomic_file.read_fd(fd, image.MAX_BYTES as long)
+    atomic_file.close_fd(fd)
+    if rerr == "StreamTooLong" { return refuse_(image.rejection("ImageTooLarge")) }
+    if rerr != "" { return refuse_("AccessDenied") }
     stored, serr = image.store(image.image_dir(t.data_home, t.session_id), raw, data)
     if serr != "" { return refuse_(image.rejection(serr)) }
     if image.attach(t.attached, stored) == 0 { return refuse_(limit_text_()) }

@@ -25,6 +25,7 @@ import std.list
 import std.strbuilder
 import std.sync
 import nib.tools.rules
+import nib.tools.atomic_file
 
 exports(matches, match_path, options, set_deny, set_rules, set_cancel, set_filter, set_max, set_dirs, free_options,
         files, release, rules_new, rules_free, parse_ignore, ignored,
@@ -397,13 +398,13 @@ join_(a: string, b: string) -> string {
     return "${a}/${b}"
 }
 
-denied_(deny: ptr, path: string) -> int {
+denied_(deny: ptr, path: string, fold: int) -> int {
     if deny == null { return 0 }
     n = list.list_size(deny)
     i = 0
     while i < n {
         d, _e = list.get_string(deny, i)
-        if d == path { return 1 }
+        if rules.same(d, path, fold) == 1 { return 1 }
         i = i + 1
     }
     return 0
@@ -500,16 +501,30 @@ read_ignore_(path: string) -> string {
     return text
 }
 
+// The .gitignore of the opened directory `dirfd`, not followed if a symlink.
+read_ignore_at_(dirfd: int, dir: string) -> string {
+    fd, _p, _f, err = atomic_file.open_child(dirfd, dir, ".gitignore", atomic_file.WANT_FILE)
+    if err != "" { return "" }
+    text, rerr = atomic_file.read_fd(fd, 1048576 as long)
+    atomic_file.close_fd(fd)
+    if rerr != "" { return "" }
+    return text
+}
+
 // Regular files under `root` in name order. (list of *File, "") or (null, error).
+// The root is opened and checked as the path its descriptor names; each
+// directory below is opened from its opened parent, never through a symlink.
 files(root: string, o: *Options) -> (ptr, string) {
-    absolute_root, kind, _msg = fs.realpath(root)
+    named_root, kind, _msg = fs.realpath(root)
     if kind != 0 { return null, kind_error_(kind) }
+    rfd, absolute_root, fold, oerr = atomic_file.open_verified(named_root, atomic_file.WANT_ANY)
+    if oerr == "NotFile" || oerr == "FileNotFound" { return null, "FileNotFound" }
+    if oerr != "" { return null, oerr }
     out = list.list_new()
-    skind, _sz, _mt, serr = fs.file_stat(absolute_root)
-    if serr != "" { return null, "FileNotFound" }
-    if skind != 2 {
-        if denied_(o.deny, absolute_root) != 0 { return null, "CredentialAccessDenied" }
-        if rules.allows(o.rules, absolute_root) == 0 { return null, "denied by the project fence: read ${absolute_root}" }
+    if atomic_file.fd_kind(rfd) != 2 {
+        atomic_file.close_fd(rfd)
+        if denied_(o.deny, named_root, 0) != 0 || denied_(o.deny, absolute_root, fold) != 0 { return null, "CredentialAccessDenied" }
+        if rules.allows(o.rules, named_root) == 0 || rules.allows_in(o.rules, absolute_root, fold) == 0 { return null, "denied by the project fence: read ${absolute_root}" }
         f = heap.new(File)
         f.path = root
         f.absolute = absolute_root
@@ -517,7 +532,10 @@ files(root: string, o: *Options) -> (ptr, string) {
         list.list_add(out, f)
         return out, ""
     }
-    if o.rules != null && rules.visible(o.rules, absolute_root, 1) == 0 { return null, "denied by the project fence: read ${absolute_root}" }
+    if o.rules != null && (rules.visible(o.rules, named_root, 1) == 0 || rules.visible_in(o.rules, absolute_root, 1, fold) == 0) {
+        atomic_file.close_fd(rfd)
+        return null, "denied by the project fence: read ${absolute_root}"
+    }
 
     top = absolute_root
     probe = absolute_root
@@ -562,7 +580,8 @@ files(root: string, o: *Options) -> (ptr, string) {
     r = root
     while string.length(r) > 0 && ch_(r, string.length(r) - 1) == SLASH { r = string.substring(r, 0, string.length(r) - 1) }
     w.root = r
-    err = visit_(w, absolute_root, below, "", 1)
+    err = visit_(w, absolute_root, below, "", 1, rfd, fold)
+    atomic_file.close_fd(rfd)
     rules_free(rules)
     heap.free(w)
     if err != "" {
@@ -596,33 +615,34 @@ release(files: ptr) {
 }
 
 // `top_rel` locates `absolute` from the walk's top (for ignore rules); `rel` from root (for output).
-visit_(w: *Walk, absolute: string, top_rel: string, rel: string, is_root: int) -> string {
+// `fd` is `absolute` opened; `fold`: its volume folds case.
+visit_(w: *Walk, absolute: string, top_rel: string, rel: string, is_root: int, fd: int, fold: int) -> string {
     o = w.options as *Options
     if canceled_(o.cancel) != 0 { return "Canceled" }
     restore = list.list_size(w.rules)
-    err = visit_inner_(w, absolute, top_rel, rel, is_root)
+    err = visit_inner_(w, absolute, top_rel, rel, is_root, fd, fold)
     shrink_(w.rules, restore)
     return err
 }
 
-visit_inner_(w: *Walk, absolute: string, top_rel: string, rel: string, is_root: int) -> string {
+visit_inner_(w: *Walk, absolute: string, top_rel: string, rel: string, is_root: int, fd: int, fold: int) -> string {
     o = w.options as *Options
-    parse_ignore(top_rel, read_ignore_(join_(absolute, ".gitignore")), w.rules)
+    parse_ignore(top_rel, read_ignore_at_(fd, absolute), w.rules)
 
-    listing, lerr = dir.list(absolute)
-    if lerr != "" {
-        if is_root != 0 { return "AccessDenied" }
-        return ""
-    }
+    listing = atomic_file.list_fd(fd)
     ents = list.list_new()
-    n = dir.list_count(listing)
+    n = list.list_size(listing)
     i = 0
     while i < n {
-        name = string.copy(dir.list_get(listing, i))
-        k = dir.list_kind(listing, i)
-        if k == 0 {
-            sk, _sz, _mt, serr = fs.file_stat(join_(absolute, name))
-            if serr == "" { k = sk }
+        item, _ge = list.get_string(listing, i)
+        kc = string.char_at(item, 0)
+        name = string.substring(item, 1, string.length(item))
+        k = 0
+        if kc == 102 { k = 1 }
+        if kc == 100 { k = 2 }
+        if kc == 117 {
+            ka = atomic_file.kind_at(fd, name)
+            if ka == 1 || ka == 2 { k = ka }
         }
         if (k == 1 || k == 2) && !(k == 2 && name == ".git") {
             e = heap.new(Ent)
@@ -632,7 +652,7 @@ visit_inner_(w: *Walk, absolute: string, top_rel: string, rel: string, is_root: 
         }
         i = i + 1
     }
-    dir.dir_list_free(listing)
+    list.list_free(listing)
     sort_ents_(ents)
 
     result = ""
@@ -647,12 +667,19 @@ visit_inner_(w: *Walk, absolute: string, top_rel: string, rel: string, is_root: 
         entry_top = join_(top_rel, e.name)
         if ignored(w.rules, entry_top, is_dir) != 0 { continue }
         entry_abs = join_(absolute, e.name)
-        if denied_(o.deny, entry_abs) != 0 { continue }
-        if o.rules != null && rules.visible(o.rules, entry_abs, is_dir) == 0 { continue }
+        if denied_(o.deny, entry_abs, fold) != 0 { continue }
+        if o.rules != null && rules.visible_in(o.rules, entry_abs, is_dir, fold) == 0 { continue }
         entry_rel = join_(rel, e.name)
         if is_dir != 0 {
+            cfd, cabs, cfold, cerr = atomic_file.open_child(fd, absolute, e.name, atomic_file.WANT_DIR)
+            if cerr != "" { continue }
+            if denied_(o.deny, cabs, cfold) != 0 || (o.rules != null && rules.visible_in(o.rules, cabs, 1, cfold) == 0) {
+                atomic_file.close_fd(cfd)
+                continue
+            }
             if o.dirs != 0 { add_(w, entry_abs, entry_rel, 1) }
-            result = visit_(w, entry_abs, entry_top, entry_rel, 0)
+            result = visit_(w, cabs, entry_top, entry_rel, 0, cfd, cfold)
+            atomic_file.close_fd(cfd)
         } else {
             if o.has_filter != 0 && match_path(o.filter, entry_rel) == 0 { continue }
             add_(w, entry_abs, entry_rel, 0)

@@ -52,17 +52,17 @@ expect_imports $T/background/module.ae "nib.jsonx|nib.lock|std.list|std.string|s
 # File system, no process.
 expect_imports $T/atomic_file/module.ae "nib.fserr|std.cryptography|std.fs|std.io|std.list|std.os|std.string"
 expect_imports $T/file_state/module.ae "nib.fserr|nib.lock|std.cryptography|std.fs|std.io|std.list|std.map|std.string|std.sync"
-expect_imports $T/files/module.ae "nib.fserr|nib.jsonx|nib.tools.atomic_file|nib.tools.file_state|nib.tools.jail|nib.tools.rules|nib.tools.undo|std.fs|std.list|std.strbuilder|std.string|std.sync"
+expect_imports $T/files/module.ae "nib.fserr|nib.jsonx|nib.tools.atomic_file|nib.tools.file_state|nib.tools.rules|nib.tools.undo|std.fs|std.list|std.strbuilder|std.string|std.sync"
 expect_imports $T/undo/module.ae "nib.fserr|nib.jsonx|nib.tools.atomic_file|nib.tools.file_state|nib.tools.registry|std.cryptography|std.dir|std.fs|std.list|std.string|std.strbuilder|std.sync"
-expect_imports $T/walk/module.ae "nib.tools.rules|std.dir|std.fs|std.list|std.strbuilder|std.string|std.sync"
-expect_imports $T/grep/module.ae "contrib.quickjs|nib.tools.walk|std.fs|std.list|std.strbuilder|std.string|std.sync"
+expect_imports $T/walk/module.ae "nib.tools.atomic_file|nib.tools.rules|std.dir|std.fs|std.list|std.strbuilder|std.string|std.sync"
+expect_imports $T/grep/module.ae "contrib.quickjs|nib.tools.atomic_file|nib.tools.rules|nib.tools.walk|std.fs|std.list|std.strbuilder|std.string|std.sync"
 expect_imports $T/search/module.ae "nib.jsonx|nib.tools.grep|nib.tools.walk|std.json|std.list|std.strbuilder|std.string"
 # Processes.
 expect_imports $T/process/module.ae "nib.sysenv|std.cryptography|std.fs|std.io|std.ipc|std.list|std.os|std.string|std.sync|std.worker"
 expect_imports $T/bash/module.ae "nib.fence|nib.jsonx|nib.tools.denials|nib.tools.egress|nib.tools.jail|nib.tools.policy|nib.tools.process|nib.tools.progress|nib.tools.registry|nib.tools.secrets|std.list|std.os|std.string|std.sync"
 # Images: file system only (store, read, hash, base64), no network or process.
 expect_imports ae/nib/image/module.ae "nib.fserr|nib.jsonx|nib.lock|nib.tools.atomic_file|std.bytes|std.cryptography|std.encoding|std.fs|std.list|std.strbuilder|std.string"
-expect_imports $T/view/module.ae "nib.fserr|nib.image|nib.jsonx|nib.tools.atomic_file|nib.tools.rules|std.fs|std.list|std.string"
+expect_imports $T/view/module.ae "nib.image|nib.jsonx|nib.tools.atomic_file|nib.tools.rules|std.list|std.string"
 expect_imports $T/jail/module.ae "nib.tools.atomic_file|nib.tools.rules|std.dir|std.fs|std.list|std.os|std.string"
 # The project fence (docs/naeb/adr/0001): its read rules are pure logic; the
 # Fence resolves paths (file system) into a jail.Spec; the egress proxy is
