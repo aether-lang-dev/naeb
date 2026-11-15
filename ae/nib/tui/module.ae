@@ -76,7 +76,7 @@ import nib.image
 import nib.session.skills
 
 exports(App, new, free, start, run, step, settle, handle_input, handle_app, on_key, submit, render,
-        report, toggle_simple, toggle_entry, click_entry, append_bill, finish_queued, execute,
+        report, toggle_simple, toggle_entry, click_entry, append_bill, finish_queued, execute, fence_text,
         refresh_credentials, credentialed, user_background, code_background, hover_background,
         hover_fallback, is_newline, flushes_visible, refresh_of, post, busy, quit_requested,
         ADD_VALUE, ADD_LABEL, service_choices, open_provider_menu, provider_command, provider_key,
@@ -332,6 +332,8 @@ new(t: @keep ptr, p: @keep ptr, clk: @keep ptr, envp: @keep ptr) -> *App {
         return 1
     }
     a.menu.reflect_enabled = if issue_repo_(a) != "" { 1 } else { 0 }
+    string fj = call(a.p.fence, a.p.ctx)
+    a.menu.fence_enabled = if fj != "" { 1 } else { 0 }
     a.context = stats_context_(a)
     ix = paths.new(".", |c: ptr| { return 0 as long })
     clk2 = a.clk
@@ -1746,6 +1748,43 @@ select_model(a: *App, provider_id: string, model: string, note: string) {
     }
 }
 
+// path with home shown as "~".
+tilde_(home: string, path: string) -> string {
+    if path == home { return "~" }
+    if string.length(home) > 1 && string.starts_with(path, "${home}/") == 1 { return "~${string.substring(path, string.length(home), string.length(path))}" }
+    return path
+}
+
+// A JSON array of strings as "a · b · c" (home as "~"), or `empty`.
+joined_(v: ptr, key: string, home: string, empty: string) -> string {
+    a = jsonx.field(v, key)
+    n = if a == null { 0 } else { jsonx.array_size(a) }
+    if n == 0 { return empty }
+    out = ""
+    for i in 0..n {
+        if i > 0 { out = "${out} · " }
+        out = "${out}${tilde_(home, jsonx.str_field(jsonx.array_at(a, i)))}"
+    }
+    return out
+}
+
+// /fence: the project fence in force (a fence.describe JSON) as lines.
+fence_text(fj: string) -> string {
+    v = jsonx.parse(fj)
+    if v == null { return "Fence: unreadable" }
+    home = string.copy(jsonx.str_or(v, "home", ""))
+    pol = jsonx.field(v, "policy")
+    head = "Fence: default · no naeb.ae in ${tilde_(home, jsonx.str_or(v, "project", ""))} · the project only, no egress"
+    if pol != null && jsonx.has(pol, "file") == 1 {
+        head = "Fence: ${tilde_(home, jsonx.str_or(pol, "file", ""))} · sha256 ${jsonx.str_or(pol, "sha256", "")}\nLibrary: ${tilde_(home, jsonx.str_or(pol, "library", ""))} · sha256 ${jsonx.str_or(pol, "library_sha256", "")}"
+    }
+    closed = if jsonx.bool_or(v, "home_open", 0) == 1 { "home open except secrets" } else { "home closed" }
+    loop = if jsonx.bool_or(v, "loopback", 0) == 1 { "open" } else { "closed" }
+    out = "${head}\nReads (${closed}): ${joined_(v, "reads", home, "none")}\nRead-denied: ${joined_(v, "read_denied", home, "none")}\nWrites: ${joined_(v, "writes", home, "none")}\nRead-only: ${joined_(v, "read_only", home, "none")}\nHosts: ${joined_(v, "hosts", home, "none")} · loopback ${loop}\nEnv passed: ${joined_(v, "env_passed", home, "none")}\nEnv set: ${joined_(v, "env_set", home, "none")}"
+    jsonx.free(v)
+    return out
+}
+
 execute(a: *App, c: int, arg: string, line: string) {
     if c == commands.CMD_REFLECT && issue_repo_(a) == "" {
         report(a, entry.KIND_ERR, "unknown command /reflect · /help lists commands")
@@ -1775,6 +1814,13 @@ execute(a: *App, c: int, arg: string, line: string) {
         window = if cc.context_window > (1 as long) { cc.context_window } else { 1 as long }
         details = if a.has_last_summary != 0 { bill.details(a.last_summary) } else { "No completed turn yet." }
         report(a, entry.KIND_INFO, "Provider ${types.name(a.cfg)} · ${cc.model} · ${auth.describe(a.cfg)} · effort ${effective_effort_(a)} · context ${a.context * 100 / window}%\n${details}")
+    } else if c == commands.CMD_FENCE {
+        string fj = call(a.p.fence, a.p.ctx)
+        if fj == "" {
+            report(a, entry.KIND_ERR, "unknown command /fence · /help lists commands")
+            return
+        }
+        report(a, entry.KIND_INFO, fence_text(fj))
     } else if c == commands.CMD_MCP {
         mcp_command_(a, arg)
     } else if c == commands.CMD_SKILLS {
@@ -1815,7 +1861,7 @@ execute(a: *App, c: int, arg: string, line: string) {
         a.context = stats_context_(a)
         transcript.add(a.transcript, entry.KIND_INFO, text)
     } else if c == commands.CMD_HELP {
-        transcript.add(a.transcript, entry.KIND_INFO, commands.help_text(issue_repo_(a)))
+        transcript.add(a.transcript, entry.KIND_INFO, commands.help_text_fenced(issue_repo_(a), a.menu.fence_enabled))
     } else if c == commands.CMD_NEW || c == commands.CMD_RESUME {
         id = ""
         if c == commands.CMD_RESUME {

@@ -185,6 +185,7 @@ start_fence(home: string, cwd: string, env: ptr) -> (ptr, string, string) {
     if lerr != "" { return null, "", lerr }
     after = outside_roots_(f, cwd, env, dir, "the policy library's directory")
     if after != "" { return null, "", after }
+    fence.set_origin(f, src, record_field(record, "source_sha256"), lib, record_field(record, "library_sha256"))
     return f, "", ""
 }
 

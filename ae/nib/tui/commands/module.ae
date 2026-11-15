@@ -24,7 +24,7 @@ import nib.tui.mode
 
 exports(CMD_SIMPLE, CMD_HELP, CMD_NEW, CMD_RESUME, CMD_COMPACT, CMD_UNDO, CMD_PROVIDER, CMD_MODEL,
         CMD_EFFORT, CMD_COPY, CMD_REFLECT, CMD_JS, CMD_TASKS, CMD_STOP, CMD_STATUS, CMD_SKILLS,
-        CMD_MCP, CMD_COUNT,
+        CMD_MCP, CMD_FENCE, CMD_COUNT,
         CH_NONE, CH_MODELS, CH_EFFORTS, CH_SESSIONS, CH_TASKS, CH_SERVICES,
         G_SEND, G_VIEW, G_SESSION, G_COUNT,
         PARSE_NONE, PARSE_KNOWN, PARSE_UNKNOWN,
@@ -32,7 +32,7 @@ exports(CMD_SIMPLE, CMD_HELP, CMD_NEW, CMD_RESUME, CMD_COMPACT, CMD_UNDO, CMD_PR
         spec_group, spec_args, spec_help, spec_while_busy, spec_choices, spec_needs_arg,
         keys, tag_name, slash_name, parse, allowed_while_busy, choice, effort_choices, candidates,
         candidate_group, candidate_completion, candidate_runs, candidate_line,
-        group_name, reflect_help, help_text)
+        group_name, reflect_help, help_text, help_text_fenced)
 
 const CMD_SIMPLE = 0
 const CMD_HELP = 1
@@ -51,7 +51,8 @@ const CMD_STOP = 13
 const CMD_STATUS = 14
 const CMD_SKILLS = 15
 const CMD_MCP = 16
-const CMD_COUNT = 17
+const CMD_FENCE = 17
+const CMD_COUNT = 18
 
 const CH_NONE = 0
 const CH_MODELS = 1
@@ -71,21 +72,22 @@ const PARSE_UNKNOWN = 2
 
 // The tables below are indexed by command, in the order of the CMD_ constants:
 // simple help new resume compact undo provider model effort copy reflect js
-// tasks stop status skills mcp.
+// tasks stop status skills mcp fence (naeb only: hidden without a project fence).
 const TAGS[] = ["simple", "help", "new", "resume", "compact", "undo", "provider", "model", "effort",
-                "copy", "reflect", "js", "tasks", "stop", "status", "skills", "mcp"]
-const GROUPS[] = [1, 1, 2, 2, 2, 2, 2, 2, 0, 1, 2, 0, 1, 2, 1, 1, 1]
+                "copy", "reflect", "js", "tasks", "stop", "status", "skills", "mcp", "fence"]
+const GROUPS[] = [1, 1, 2, 2, 2, 2, 2, 2, 0, 1, 2, 0, 1, 2, 1, 1, 1, 1]
 const ARGS[] = ["", "", "", "<id>", "", "", "[service]", "<model>", "[level]", "", "[focus]", "<code>",
-                "", "<id>", "", "[on|off <name>]", "[on|off <id>]"]
+                "", "<id>", "", "[on|off <name>]", "[on|off <id>]", ""]
 const HELPS[] = ["toggle Simple mode", "commands and keys", "new session", "resume a session",
                  "compact earlier history", "undo last edited Turn; edit/write only",
                  "sign in and switch service", "switch model of this service", "reasoning effort",
                  "copy last answer", "publish issue drafts", "run JavaScript", "background tasks",
                  "stop a task; changes may remain", "timing and cache details",
-                 "list or enable skills for new sessions", "list or enable MCP servers for new sessions"]
-const WHILE_BUSY[] = [1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0]
-const CHOICES[] = [0, 0, 0, 3, 0, 0, 5, 1, 2, 0, 0, 0, 0, 4, 0, 0, 0]
-const NEEDS_ARG[] = [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0]
+                 "list or enable skills for new sessions", "list or enable MCP servers for new sessions",
+                 "the project fence in force"]
+const WHILE_BUSY[] = [1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1]
+const CHOICES[] = [0, 0, 0, 3, 0, 0, 5, 1, 2, 0, 0, 0, 0, 4, 0, 0, 0, 0]
+const NEEDS_ARG[] = [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0]
 
 spec_group(c: int) -> int { return GROUPS[c] }
 spec_args(c: int) -> string { return ARGS[c] }
@@ -276,14 +278,17 @@ reflect_help(repo: string) -> string {
     return "review session · issue publishing off"
 }
 
-help_text(issue_repo: string) -> string {
+help_text(issue_repo: string) -> string { return help_text_fenced(issue_repo, 0) }
+
+// help_text, listing /fence when fenced is 1 (naeb).
+help_text_fenced(issue_repo: string, fenced: int) -> string {
     sb = strbuilder.new(1024)
     g = 0
     while g < G_COUNT {
         strbuilder.append(sb, "${group_name(g)}\n")
         c = 0
         while c < CMD_COUNT {
-            skip = spec_group(c) != g || (c == CMD_REFLECT && string.length(issue_repo) == 0)
+            skip = spec_group(c) != g || (c == CMD_REFLECT && string.length(issue_repo) == 0) || (c == CMD_FENCE && fenced == 0)
             if !skip {
                 sep = ""
                 if string.length(spec_args(c)) > 0 { sep = " " }

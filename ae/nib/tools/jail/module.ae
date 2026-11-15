@@ -23,7 +23,7 @@ import nib.tools.rules
 @source("landlock.c")
 
 exports(HELPER_COMMAND, SANDBOX_EXEC, RELAY_PORT, Spec, new_spec, project_root, roots, base_roots, allows, expand_home, profile,
-        spec_profile, landlock_reads, scrub_environ, account_home, unavailable, unavailable_text, fence_unavailable, proxy_url, wrap, wrap_spec, helper)
+        spec_profile, landlock_reads, scrub_environ, account_home, unavailable, unavailable_text, fence_unavailable, proxy_url, wrap, wrap_spec, helper, os_name)
 
 const HELPER_COMMAND = "__jail"
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec"
@@ -593,6 +593,12 @@ helper(args: ptr) -> string {
     prog, _e4 = list.get_string(command, 0)
     os.os_execv(prog, command)
     return "exec failed"
+}
+
+// "macos", "linux", or the platform's own name.
+os_name() -> string {
+    if is_mac_() == 1 { return "macos" }
+    return os.platform()
 }
 
 is_mac_() -> int {

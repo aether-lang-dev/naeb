@@ -20,6 +20,7 @@ import std.worker
 import nib.sandbox
 import nib.tools
 import nib.tools.atomic_file
+import nib.fence
 
 tmp_() -> string {
     d, _e = fs.make_temp_dir("", "nib-tools")
@@ -183,6 +184,29 @@ main() {
             r = sandbox.eval(ex, sandbox.limits(), echo_host_("[\"bash\"]"), null) as *sandbox.Outcome
             spec.assert_eq(r.ok, 1, "ok: ${r.text}")
             spec.assert_str_eq(r.text, "{\"command\":\"sh checks.sh\"}", "args")
+        }
+        spec.it("a fenced table adds tools.fence and fence_denied; its example reaches the host byte for byte") callback {
+            d = tmp_()
+            plain = new_tools_(d)
+            spec.assert_eq(contains_(tools.docs(plain), "async fence("), 0, "nib: no fence tool")
+            spec.assert_eq(contains_(tools.docs(plain), "fence_denied"), 0, "nib: no fence_denied")
+            spec.assert_eq(contains_(tools.names_json(plain), "\"fence\""), 0, "nib: not in the API")
+            t = new_tools_(d)
+            tools.set_fence(t, fence.new(d))
+            docs = tools.docs(t)
+            spec.assert_eq(contains_(docs, "fence_denied: [{ op, resource, layer, command_id?, suggestion? }]"), 1, "records named")
+            spec.assert_eq(contains_(tools.names_json(t), "\"fence\""), 1, "in the API")
+            r = sandbox.eval("() => {\n${docs}}", sandbox.limits(), null, null) as *sandbox.Outcome
+            spec.assert_eq(r.ok, 1, "fenced docs parse: ${r.text}")
+            ex = example_(docs, "  // The project fence in force")
+            spec.assert_str_eq(ex, "await tools.fence()", "example")
+            e = sandbox.eval(ex, sandbox.limits(), echo_host_("[\"fence\"]"), null) as *sandbox.Outcome
+            spec.assert_eq(e.ok, 1, "ok: ${e.text}")
+            spec.assert_str_eq(e.text, "{}", "args")
+            s = tools.new_scope(t, 1)
+            got = sandbox.eval("(await tools.fence()).home", sandbox.limits(), tools.host(s), null) as *sandbox.Outcome
+            spec.assert_str_eq(got.text, "\"${d}\"", "the fence as data: ${got.text}")
+            fs.remove_tree(d)
         }
         spec.it("grep documentation RegExp example reaches the host byte for byte") callback {
             ex = example_(tools.all_docs(), "  // pattern: RegExp literal")

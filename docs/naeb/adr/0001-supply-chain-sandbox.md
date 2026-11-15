@@ -266,6 +266,20 @@ In detail:
     and an `LD_PRELOAD` shim (misses static binaries, and naeb would ship a
     second file).
 
+### The policy in force, visible
+
+`tools.fence()` (only under naeb; not in upstream's table, so `nib` has no
+such tool) returns the fence as data: `platform`, `policy` (`file`,
+`sha256`, `library`, `library_sha256`, as the build record vouched for them
+at start; `null` for the default fence), `project`, `home`, `home_open`,
+`reads` and `read_denied` (the read rules both layers apply: reads are open
+except `read_denied`, with `reads` reopened inside them, deeper paths
+winning), `writes`, `read_only`, `hosts`, `loopback`, `env_passed` (the
+allow-list plus `pass_env`) and `env_set`. A sub-agent is naeb loading the
+same policy, so its `tools.fence()` is the parent's. The TUI's `/fence`
+shows the same as text (listed in `/help` and the menu only under naeb), and
+`/status` says `Sandbox: project fence · /fence`.
+
 ### Policy integrity
 
 - **Where.** The policy's source is `naeb.ae` at the project root

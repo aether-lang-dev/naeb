@@ -47,6 +47,7 @@ struct Menu {
     file_generation: int
     file_fresh: int
     reflect_enabled: int
+    fence_enabled: int        // 1: /fence is listed (naeb, a project fence)
     services_fn: fn          // |input_arg: string| -> commands.Choice[] (the app's providers.service_choices)
     has_services_fn: int
     skill_source: fn         // || -> ptr: std.list of *skills.Skill
@@ -102,10 +103,13 @@ items(m: *Menu, input: string) -> commands.Candidate[] {
         return make([]commands.Candidate, 0)
     }
     slash = commands.candidates(input, m.sessions, m.tasks, m.models, m.services, BUF)
-    if m.reflect_enabled == 0 {
+    if m.reflect_enabled == 0 || m.fence_enabled == 0 {
         kept = make([]commands.Candidate, 0)
         for i in 0..slash.len {
-            if slash[i].command == commands.CMD_REFLECT {
+            if m.reflect_enabled == 0 && slash[i].command == commands.CMD_REFLECT {
+                continue
+            }
+            if m.fence_enabled == 0 && slash[i].command == commands.CMD_FENCE {
                 continue
             }
             c = slash[i]

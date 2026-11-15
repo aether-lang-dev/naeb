@@ -315,7 +315,11 @@ new(sp: @keep ptr, cfg: @keep ptr, op: @keep ptr, home: string) -> *port.Port {
     }
     p.sandbox_status = |ctx: ptr| {
         t = tools_(ctx as *Live)
-        string out = if t.workspace == 0 { "off" } else if jail.unavailable() == "" { "workspace" } else { "workspace · bash unavailable" }
+        string out = if t.fence != null { "project fence · /fence" } else if t.workspace == 0 { "off" } else if jail.unavailable() == "" { "workspace" } else { "workspace · bash unavailable" }
+        return out
+    }
+    p.fence = |ctx: ptr| {
+        string out = tools.fence_json(tools_(ctx as *Live) as ptr)
         return out
     }
     // Upstream's idle tick: the progress snapshots due while no Turn runs.

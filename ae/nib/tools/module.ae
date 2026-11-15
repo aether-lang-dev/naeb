@@ -48,7 +48,7 @@ import nib.image
 import nib.provider.types
 
 exports(Tools, RunScope, new, new_scope, host, call_tool, active_tool, names_json, docs, all_docs, tool_names,
-        is_ported, take_images, credential_paths, writable_roots, nib_home, take_changes, set_workspace, set_fence, fence_spec, fence_proxy, fence_monitor, fence_base, fence_child, close_channel, child_refusals, refusals_json, take_denied,
+        is_ported, take_images, credential_paths, writable_roots, nib_home, take_changes, set_workspace, set_fence, fence_json, fence_spec, fence_proxy, fence_monitor, fence_base, fence_child, close_channel, child_refusals, refusals_json, take_denied,
         cancel_cell, set_log, sandbox_roots, change_paths, export_versions, import_versions, set_config, take_usage, take_jail_notice, enable_undo, begin_turn_undo, finish_turn_undo, run_undo, turn_undo_dir, attach_turn_undo_dir, close_undo)
 
 const DOC_MCP = "  // Call an enabled MCP server tool. Server/transport failures are data; argument errors reject. Full results stay in JS; images share the Run image limit.\n  async mcp(name, args = {}) {}, // → { ok, content, structured?, error? }\n"
@@ -69,6 +69,8 @@ const DOC_AGENT = "  // Default: work yourself. Unless requested, delegate only 
 
 // naeb only (a project fence): appended to the table, never part of upstream's.
 const DOC_FENCE_DENIED = "  // Project fence: a refusal is listed as fence_denied: [{ op, resource, layer, command_id?, suggestion? }] on bash/mcp results, on a rejected tool's Error (e.fence_denied) and in a failed hook's payload. op: read|write|egress|network|socket; layer: tool|child. suggestion: a naeb.ae line for the user to review; nothing widens the fence by itself.\n"
+
+const DOC_FENCE = "  // The project fence in force: what commands and tools may read, write and reach, and the naeb.ae and library it was built from (SHA-256). Reads are open except read_denied, with reads reopened inside them. Read-only: ask the user to change naeb.ae.\n  // Example: await tools.fence()\n  async fence() {}, // → { platform, policy: { file, sha256, library, library_sha256 } | null, project, home, home_open, reads, read_denied, writes, read_only, hosts, loopback, env_passed, env_set }\n"
 
 const TOOL_COUNT = 15
 
@@ -260,6 +262,16 @@ fence_proxy(tp: ptr) -> ptr {
     p = t.proxy
     lock.release(t.proxy_guard)
     return p
+}
+
+// The fence in force for the current directory as data (fence.describe),
+// "" without a fence.
+fence_json(tp: ptr) -> string {
+    t = tp as *Tools
+    if t.fence == null { return "" }
+    env = t.env
+    if env == null { env = sysenv.environ() }
+    return fence.describe(t.fence, os.getcwd(), nib_home(tp), env)
 }
 
 // What names a fenced child's refusals (tools/denials), made on first use.
@@ -536,6 +548,10 @@ tool_index_(name: string) -> int {
 }
 
 enabled_(t: *Tools, name: string) -> int {
+    if name == "fence" {
+        if t.fence != null { return 1 }
+        return 0
+    }
     if is_ported(name) == 0 { return 0 }
     if (name == "mcp" || name == "mcp_schema") && t.mcp_enabled == 0 { return 0 }
     if name == "agent" && t.depth != 0 && t.forked == 0 { return 0 }
@@ -558,6 +574,10 @@ names_json(tp: ptr) -> string {
             first = 0
         }
         i = i + 1
+    }
+    if t.fence != null {
+        if first == 0 { strbuilder.append(b, ",") }
+        strbuilder.append(b, "\"fence\"")
     }
     strbuilder.append(b, "]")
     return strbuilder.finish(b)
@@ -582,7 +602,7 @@ docs(tp: ptr) -> string {
         if enabled_(t, n) == 1 && !(n == "search" && web_search.supported(t.cfg) == 0) { body = "${body}${doc_of_(n)}" }
         i = i + 1
     }
-    if t.fence != null { body = "${body}${DOC_FENCE_DENIED}" }
+    if t.fence != null { body = "${body}${DOC_FENCE}${DOC_FENCE_DENIED}" }
     return llm_call.fill_docs(wrap_docs_(body), cfg)
 }
 
@@ -979,6 +999,10 @@ run_tool_(s: *RunScope, t: *Tools, name: string, args: string, out: ptr) {
         }
         "mcp_schema" -> {
             ok, text = mcp_tool.execute(t.mcp_client, args, 1, s.cancel, null)
+        }
+        "fence" -> {
+            ok = 1
+            text = fence_json(s.tools)
         }
         "view" -> {
             tg = image_target_(s)

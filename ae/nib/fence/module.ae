@@ -28,7 +28,7 @@ import nib.tools.jail
 import nib.tools.rules
 
 exports(Fence, new, open_home, allow_read, deny_read, allow_write, deny_write, allow_host, pass_env,
-        set_env, allow_loopback, host_allowed, resolve, child_env, proxy_env, read_rules, write_denied, refusal, refusals_json,
+        set_env, allow_loopback, set_origin, describe, host_allowed, resolve, child_env, proxy_env, read_rules, write_denied, refusal, refusals_json,
         suggestion, SECRETS)
 
 // Relative to $HOME: denied to every fenced reader unless allowed exactly.
@@ -65,6 +65,10 @@ struct Fence {
     env_pass: ptr
     env_set: ptr       // "NAME=value", set for every fenced child
     loopback: int      // macOS: localhost reachable by children
+    policy_file: string    // the naeb.ae it was built from, "" for the default fence
+    policy_sha256: string
+    library: string        // the policy library naeb loaded, ""
+    library_sha256: string
 }
 
 new(home: string) -> ptr {
@@ -79,6 +83,10 @@ new(home: string) -> ptr {
     f.env_pass = list.list_new()
     f.env_set = list.list_new()
     f.loopback = 0
+    f.policy_file = ""
+    f.policy_sha256 = ""
+    f.library = ""
+    f.library_sha256 = ""
     return f as ptr
 }
 
@@ -94,6 +102,71 @@ allow_host(fp: ptr, host: string, port: int) { list.list_add((fp as *Fence).host
 pass_env(fp: ptr, name: string) { list.list_add((fp as *Fence).env_pass, string.copy(name)) }
 set_env(fp: ptr, name: string, value: string) { list.list_add((fp as *Fence).env_set, string.copy("${name}=${value}")) }
 allow_loopback(fp: ptr) { (fp as *Fence).loopback = 1 }
+
+// Where the fence came from: naeb.ae and the library naeb loaded, with the
+// SHA-256s the build record vouched for (nib.fence.policy.start_fence).
+set_origin(fp: ptr, file: string, file_sha256: string, library: string, library_sha256: string) {
+    f = fp as *Fence
+    f.policy_file = string.copy(file)
+    f.policy_sha256 = string.copy(file_sha256)
+    f.library = string.copy(library)
+    f.library_sha256 = string.copy(library_sha256)
+}
+
+json_strings_(l: ptr) -> string {
+    out = "["
+    i = 0
+    while i < list.list_size(l) {
+        v, _e = list.get_string(l, i)
+        if i > 0 { out = "${out}," }
+        out = "${out}${jsonx.quote(v)}"
+        i = i + 1
+    }
+    return "${out}]"
+}
+
+// The fence in force for a project at `cwd`, as data (tools.fence, the
+// TUI's /fence): {platform, policy: {file, sha256, library, library_sha256}
+// or null (the default fence), project, home, home_open, reads, read_denied,
+// writes, read_only, hosts, loopback, env_passed, env_set}. Paths are
+// canonical; reads/read_denied are the read rules both layers apply (the
+// last matching rule wins, deeper paths after shallower ones).
+describe(fp: ptr, cwd: string, nib_home: string, env: ptr) -> string {
+    f = fp as *Fence
+    sp = resolve(fp, cwd, nib_home, env) as *jail.Spec
+    reads = list.list_new()
+    denied = list.list_new()
+    ordered = rules.sorted(sp.reads)
+    i = 0
+    while i < list.list_size(ordered) {
+        r, _e = list.get_string(ordered, i)
+        if rules.kind_of(r) == rules.DENY { list.list_add(denied, rules.path_of(r)) } else { list.list_add(reads, rules.path_of(r)) }
+        i = i + 1
+    }
+    passed = list.list_new()
+    k = 0
+    while k < ENV_KEEP_COUNT {
+        list.list_add(passed, ENV_KEEP[k])
+        k = k + 1
+    }
+    list.list_add(passed, "LC_*")
+    i = 0
+    while i < list.list_size(f.env_pass) {
+        n, _e2 = list.get_string(f.env_pass, i)
+        if has_(passed, n) == 0 { list.list_add(passed, n) }
+        i = i + 1
+    }
+    policy = "null"
+    if f.policy_file != "" {
+        policy = "{\"file\":${jsonx.quote(f.policy_file)},\"sha256\":${jsonx.quote(f.policy_sha256)},\"library\":${jsonx.quote(f.library)},\"library_sha256\":${jsonx.quote(f.library_sha256)}}"
+    }
+    platform = jail.os_name()
+    ho = "false"
+    if f.home_open == 1 { ho = "true" }
+    lb = "false"
+    if f.loopback == 1 { lb = "true" }
+    return "{\"platform\":${jsonx.quote(platform)},\"policy\":${policy},\"project\":${jsonx.quote(canon_(jail.project_root(cwd)))},\"home\":${jsonx.quote(f.home)},\"home_open\":${ho},\"reads\":${json_strings_(reads)},\"read_denied\":${json_strings_(denied)},\"writes\":${json_strings_(sp.writes)},\"read_only\":${json_strings_(sp.write_deny)},\"hosts\":${json_strings_(f.hosts)},\"loopback\":${lb},\"env_passed\":${json_strings_(passed)},\"env_set\":${json_strings_(f.env_set)}}"
+}
 
 host_allowed(fp: ptr, host: string, port: int) -> int {
     f = fp as *Fence

@@ -819,6 +819,19 @@ main() {
             tui.execute(r.a, commands.CMD_MCP, "on nope", "/mcp on nope")
             spec.assert_str_eq(transcript.at(r.a.transcript, 3).text, "MCP server not found: nope", "unknown")
         }
+        spec.it("/fence shows the project fence in force, and exists only under one") callback {
+            r = rig_(80, 24)
+            tui.execute(r.a, commands.CMD_FENCE, "", "/fence")
+            spec.assert_str_eq(transcript.at(r.a.transcript, 0).text, "unknown command /fence · /help lists commands", "nib: no fence")
+            spec.assert_eq(string.index_of(commands.help_text_fenced("", 0), "/fence"), -1, "nib's help omits it")
+            spec.assert_true(string.index_of(commands.help_text_fenced("", 1), "/fence · the project fence in force") >= 0, "naeb's help lists it")
+            r.s.fence = "{\"platform\":\"macos\",\"policy\":{\"file\":\"/h/work/p/naeb.ae\",\"sha256\":\"aa11\",\"library\":\"/h/.naeb/launchers/p-1/policy.dylib\",\"library_sha256\":\"bb22\"},\"project\":\"/h/work/p\",\"home\":\"/h\",\"home_open\":false,\"reads\":[\"/h/.gitconfig\",\"/h/work/p\"],\"read_denied\":[\"/h\",\"/h/.ssh\"],\"writes\":[\"/h/work/p\",\"/tmp\"],\"read_only\":[\"/h/work/p/.git/hooks\"],\"hosts\":[\"repo.example.com:443\"],\"loopback\":false,\"env_passed\":[\"PATH\",\"JAVA_HOME\"],\"env_set\":[\"A=b\"]}"
+            tui.execute(r.a, commands.CMD_FENCE, "", "/fence")
+            spec.assert_str_eq(transcript.at(r.a.transcript, 1).text, "Fence: ~/work/p/naeb.ae · sha256 aa11\nLibrary: ~/.naeb/launchers/p-1/policy.dylib · sha256 bb22\nReads (home closed): ~/.gitconfig · ~/work/p\nRead-denied: ~ · ~/.ssh\nWrites: ~/work/p · /tmp\nRead-only: ~/work/p/.git/hooks\nHosts: repo.example.com:443 · loopback closed\nEnv passed: PATH · JAVA_HOME\nEnv set: A=b", "the policy")
+            r.s.fence = "{\"policy\":null,\"project\":\"/h/work/p\",\"home\":\"/h\",\"home_open\":false,\"reads\":[],\"read_denied\":[\"/h\"],\"writes\":[\"/h/work/p\"],\"read_only\":[],\"hosts\":[],\"loopback\":false,\"env_passed\":[\"PATH\"],\"env_set\":[]}"
+            tui.execute(r.a, commands.CMD_FENCE, "", "/fence")
+            spec.assert_str_eq(transcript.at(r.a.transcript, 2).text, "Fence: default · no naeb.ae in ~/work/p · the project only, no egress\nReads (home closed): none\nRead-denied: ~\nWrites: ~/work/p\nRead-only: none\nHosts: none · loopback closed\nEnv passed: PATH\nEnv set: none", "the default fence")
+        }
         spec.it("/mcp shows the Session's connection state of enabled servers") callback {
             r = rig_(80, 24)
             fs.write("${r.home}/config.toml", "[mcp]\ndocs = true\ngone = true\nidle = true\n[mcp.docs]\ncommand = \"docs-server\"\n[mcp.gone]\ncommand = \"x\"\n[mcp.idle]\ncommand = \"y\"\n[mcp.off]\ncommand = \"z\"\n")
