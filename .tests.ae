@@ -299,6 +299,8 @@ aeb(cap) {
         }
         aether.program_test() {
             source("ae/tests/tui_title_test.ae")
+            lib("ae")
+        }
         aether.program_test() {
             source("ae/tests/agent_sessions_test.ae")
             lib("ae")
