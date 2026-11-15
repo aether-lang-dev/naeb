@@ -103,6 +103,7 @@ struct Output {
     text: string
     usage: ptr               // *types.Usage
     changes: ptr             // list of *Change
+    denied: ptr              // the child's fence refusal records (JSON objects), from its run_end events
     child_id: string
     requested_session: string
     id: string
@@ -205,6 +206,7 @@ new_output(id: string, requested_session: string) -> ptr {
     o.text = ""
     o.usage = types.usage_new()
     o.changes = list.list_new()
+    o.denied = list.list_new()
     o.child_id = ""
     o.requested_session = requested_session
     o.id = id
@@ -308,6 +310,14 @@ observe_value_(o: *Output, v: ptr) -> string {
     if run != null && json.json_type(run) != json.JSON_NULL {
         e = merge_changes_(o, run)
         if e != "" { return e }
+        dv = jsonx.field(run, "fence_denied")
+        if dv != null && json.json_type(dv) == json.JSON_ARRAY {
+            k = 0
+            while k < jsonx.array_size(dv) {
+                list.list_add(o.denied, jsonx.encode(jsonx.array_at(dv, k)))
+                k = k + 1
+            }
+        }
     }
     if jsonx.has(v, "end") == 1 || jsonx.has(v, "error") == 1 {
         if o.ended == 1 { return "InvalidAgentOutput" }
@@ -325,6 +335,24 @@ observe_value_(o: *Output, v: ptr) -> string {
         }
     }
     return ""
+}
+
+// ",\"fence_denied\":[...]" of a sub-agent's refusal records (a fenced naeb
+// child reports them in its run_end events), "" none.
+denied_json_(l: ptr) -> string {
+    n = list.list_size(l)
+    if n == 0 { return "" }
+    b = strbuilder.new(64)
+    strbuilder.append(b, ",\"fence_denied\":[")
+    i = 0
+    while i < n {
+        r, _e = list.get_string(l, i)
+        if i > 0 { strbuilder.append(b, ",") }
+        strbuilder.append(b, r)
+        i = i + 1
+    }
+    strbuilder.append(b, "]")
+    return strbuilder.finish(b)
 }
 
 changes_json_(l: ptr) -> string {
@@ -346,7 +374,7 @@ changes_json_(l: ptr) -> string {
 // The call's result JSON. reason "" means success; timeout_ms >= 0 means it timed out.
 result(op: ptr, elapsed_ms: long, reason: string, timeout_ms: long) -> string {
     o = op as *Output
-    tail = ",\"text\":${jsonx.quote(o.text)},\"usage\":${types.usage_json(o.usage)},\"changes\":${changes_json_(o.changes)}}"
+    tail = ",\"text\":${jsonx.quote(o.text)},\"usage\":${types.usage_json(o.usage)},\"changes\":${changes_json_(o.changes)}${denied_json_(o.denied)}}"
     if reason == "" { return "{\"ok\":true,\"id\":${jsonx.quote(o.id)}${tail}" }
     detail = "subagent: ${reason} after ${elapsed_ms} ms; task id: ${o.id}. Files it changed may be incomplete; inspect them before continuing."
     if timeout_ms >= 0 { detail = "subagent stopped due to timeout after ${elapsed_ms} ms (limit ${timeout_ms} ms); task id: ${o.id}. Files it changed may be incomplete; inspect them before continuing." }

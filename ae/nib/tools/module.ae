@@ -48,7 +48,7 @@ import nib.image
 import nib.provider.types
 
 exports(Tools, RunScope, new, new_scope, host, call_tool, active_tool, names_json, docs, all_docs, tool_names,
-        is_ported, take_images, credential_paths, writable_roots, nib_home, take_changes, set_workspace, set_fence, fence_spec, fence_proxy, fence_monitor, fence_base, fence_child, close_channel, child_refusals,
+        is_ported, take_images, credential_paths, writable_roots, nib_home, take_changes, set_workspace, set_fence, fence_spec, fence_proxy, fence_monitor, fence_base, fence_child, close_channel, child_refusals, refusals_json, take_denied,
         cancel_cell, set_log, sandbox_roots, change_paths, export_versions, import_versions, set_config, take_usage, take_jail_notice, enable_undo, begin_turn_undo, finish_turn_undo, run_undo, turn_undo_dir, attach_turn_undo_dir, close_undo)
 
 const DOC_MCP = "  // Call an enabled MCP server tool. Server/transport failures are data; argument errors reject. Full results stay in JS; images share the Run image limit.\n  async mcp(name, args = {}) {}, // → { ok, content, structured?, error? }\n"
@@ -66,6 +66,9 @@ const DOC_BASH = "  // cwd; merged stderr; group cleanup (nohup/& too).\n  // >1
 const DOC_STOP = "  // Requires a concrete reason; elapsed time/no output alone is not a failure. Canceling a long test discards progress and its completed validation result; restarting repeats work. With no independent work, reply without tools to wait locally. Cancel and join one background bash/agent/Run by id, cleaning up its process group. Completed tasks return stopped:false; unknown ids reject. Completion is still delivered once as a background message.\n  async stop({ id, reason }) {}, // → { id, stopped, reason, notice? }\n"
 const DOC_LLM = "  // Pure single-step model call: judgments, classification, extraction on supplied data; no tools/side effects, usually seconds. Limits: {{llm_limits}} prompt+input.\n  // {{llm_options}}\n  // Example: await Promise.all([\"yes\", \"no\"].map(input => tools.llm({prompt: \"Classify the input\", input})))\n  async llm({ prompt, input, schema, model, effort }) {}, // → { text, data, usage }\n"
 const DOC_AGENT = "  // Default: work yourself. Unless requested, delegate only parallel independent read-only investigations with discardable results.\n  // Serial edits/builds/tests/reviews:parent. No nesting; shared cwd, partial files possible.\n  // fork:parent history; model/effort switch loses cache. resume:a1 after completion; busy:wait, don't retry/replace. fork+resume rejects.\n  // background:{id}, auto-delivered result message. No ps/log reads/sleep/reruns to check/wait. No independent work:brief reply without tools; Session waits. Failure:ok:false; args/cancel reject.\n  async agent({ prompt, resume, fork = false, timeout_ms = 1800000, model, effort, background = false }) {}, // → { ok, id, text, usage, changes, error? } or { id }\n"
+
+// naeb only (a project fence): appended to the table, never part of upstream's.
+const DOC_FENCE_DENIED = "  // Project fence: a refusal is listed as fence_denied: [{ op, resource, layer, command_id?, suggestion? }] on bash/mcp results, on a rejected tool's Error (e.fence_denied) and in a failed hook's payload. op: read|write|egress|network|socket; layer: tool|child. suggestion: a naeb.ae line for the user to review; nothing widens the fence by itself.\n"
 
 const TOOL_COUNT = 15
 
@@ -178,6 +181,8 @@ struct RunScope {
     llm_calls: ptr         // std.sync cell: tools.llm calls admitted in this Run
     fork: ptr              // the Step's *agent_input.Fork when the Run started, or null
     images: ptr            // *image.Attached: the images this Run viewed, for its result
+    denied: ptr            // the Run's fence refusal records (JSON objects), for its run_end
+    denied_guard: ptr
     active: ptr[]          // std.sync cells, one per tool of tool_names(): calls in flight
 }
 
@@ -307,6 +312,52 @@ fence_child(tp: ptr) -> (ptr, ptr, ptr, ptr, string) {
 // back what the fence refused it, oldest first, as "op resource": the
 // OS's refusals (read, write, network, socket), then the proxy's (egress).
 child_refusals(ch: ptr, w: ptr) -> ptr { return denials.close_child(ch, w) }
+
+// `entries` ("op resource") as a JSON array of the fence's refusal records
+// (fence.refusal), "" when empty or without a fence.
+refusals_json(tp: ptr, entries: ptr, layer: string, command_id: string) -> string {
+    t = tp as *Tools
+    if t.fence == null { return "" }
+    return fence.refusals_json(t.fence, os.getcwd(), nib_home(tp), entries, layer, command_id)
+}
+
+// Adds the records of a JSON array (text) to the Run's.
+note_denied_(s: *RunScope, records: string) {
+    if records == "" { return }
+    v = jsonx.parse(records)
+    if v == null { return }
+    lock.acquire(s.denied_guard)
+    i = 0
+    while i < jsonx.array_size(v) {
+        list.list_add(s.denied, jsonx.encode(jsonx.array_at(v, i)))
+        i = i + 1
+    }
+    lock.release(s.denied_guard)
+    jsonx.free(v)
+}
+
+// The fence refusal records of this Run's tools and foreground commands as a
+// JSON array, "" none; emptied.
+take_denied(sp: ptr) -> string {
+    s = sp as *RunScope
+    lock.acquire(s.denied_guard)
+    n = list.list_size(s.denied)
+    out = ""
+    if n > 0 {
+        out = "["
+        i = 0
+        while i < n {
+            r, _e = list.get_string(s.denied, i)
+            if i > 0 { out = "${out}," }
+            out = "${out}${r}"
+            i = i + 1
+        }
+        out = "${out}]"
+        s.denied = list.list_new()
+    }
+    lock.release(s.denied_guard)
+    return out
+}
 
 // Closes a fence child's channel (fence_child) whose refusals nobody lists;
 // null is ignored.
@@ -455,6 +506,8 @@ new_scope(tp: @keep ptr, id: int) -> ptr {
     s.llm_calls = sync.atomic_new(0)
     s.fork = (tp as *Tools).fork_snapshot
     s.images = image.new_attached()
+    s.denied = list.list_new()
+    s.denied_guard = lock.new()
     ptr[] active = []
     for i in 0..TOOL_COUNT {
         active.push(sync.atomic_new(0))
@@ -529,6 +582,7 @@ docs(tp: ptr) -> string {
         if enabled_(t, n) == 1 && !(n == "search" && web_search.supported(t.cfg) == 0) { body = "${body}${doc_of_(n)}" }
         i = i + 1
     }
+    if t.fence != null { body = "${body}${DOC_FENCE_DENIED}" }
     return llm_call.fill_docs(wrap_docs_(body), cfg)
 }
 
@@ -680,6 +734,7 @@ bash_(s: *RunScope, args: string, out: ptr) {
         c.env = fenv
         c.channel = fch
         c.watch = fw
+        c.fence = t.fence
     } else {
         c.roots = bash_roots_(t)
     }
@@ -720,6 +775,7 @@ bash_(s: *RunScope, args: string, out: ptr) {
     changes.recovery_note_bash(t.recovery as *changes.Recovery)
     sandbox.result_set_identity(out, id, 0)
     ok, text = bash.execute(c as ptr, command, timeout, 0, id, null)
+    if ok == 1 && t.fence != null { note_denied_(s, denied_member_(text)) }
     if ok == 1 { sandbox.result_set_ok(out, text) } else { sandbox.result_set_err(out, text) }
 }
 
@@ -914,7 +970,12 @@ run_tool_(s: *RunScope, t: *Tools, name: string, args: string, out: ptr) {
             tg = image_target_(s)
             ok, text = mcp_tool.execute(t.mcp_client, args, 0, s.cancel, tg)
             heap.free(tg)
-            if ok == 1 && t.fence != null { text = with_denied_(text, mcp_tool.take_refusals(t.mcp_client, args)) }
+            if ok == 1 && t.fence != null {
+                server, d = mcp_tool.take_refusals(t.mcp_client, args)
+                records = refusals_json(s.tools, d, "child", "mcp:${server}")
+                note_denied_(s, records)
+                text = with_denied_(text, records)
+            }
         }
         "mcp_schema" -> {
             ok, text = mcp_tool.execute(t.mcp_client, args, 1, s.cancel, null)
@@ -928,23 +989,47 @@ run_tool_(s: *RunScope, t: *Tools, name: string, args: string, out: ptr) {
             text = "SandboxOnlyTool"
         }
     }
-    if ok == 1 { sandbox.result_set_ok(out, text) } else { sandbox.result_set_err(out, text) }
+    if ok == 1 {
+        sandbox.result_set_ok(out, text)
+        return
+    }
+    records = tool_refusal_(s, text)
+    note_denied_(s, records)
+    sandbox.result_set_err_denied(out, text, records)
 }
 
-// A result object's JSON with a "fence_denied" member listing `denied`
-// ("op resource"), or unchanged when it is empty.
-with_denied_(obj: string, denied: ptr) -> string {
-    n = list.list_size(denied)
-    if n == 0 || string.ends_with(obj, "}") == 0 { return obj }
+const FENCE_PREFIX = "denied by the project fence: "
+
+// An in-process tool's refusal ("denied by the project fence: read /p",
+// perhaps after "<path>: ") as a JSON array of one record (layer "tool"),
+// "" for any other error.
+tool_refusal_(s: *RunScope, text: string) -> string {
+    t = s.tools as *Tools
+    at = string.index_of(text, FENCE_PREFIX)
+    if t.fence == null || at < 0 { return "" }
+    entry = string.substring(text, at + string.length(FENCE_PREFIX), string.length(text))
+    if string.starts_with(entry, "read ") == 0 && string.starts_with(entry, "write ") == 0 && string.starts_with(entry, "egress ") == 0 { return "" }
+    one = list.list_new()
+    list.list_add(one, entry)
+    return refusals_json(s.tools, one, "tool", "")
+}
+
+// The "fence_denied" array of a result object's JSON (text), "" none.
+denied_member_(obj: string) -> string {
+    v = jsonx.parse(obj)
+    if v == null { return "" }
     out = ""
-    i = 0
-    while i < n {
-        v, _e = list.get_string(denied, i)
-        if i > 0 { out = "${out}," }
-        out = "${out}${jsonx.quote(v)}"
-        i = i + 1
-    }
-    return "${string.substring(obj, 0, string.length(obj) - 1)},\"fence_denied\":[${out}]}"
+    d = jsonx.field(v, "fence_denied")
+    if d != null { out = jsonx.encode(d) }
+    jsonx.free(v)
+    return out
+}
+
+// A result object's JSON with a "fence_denied" member (records: a JSON
+// array), or unchanged when records is "".
+with_denied_(obj: string, records: string) -> string {
+    if records == "" || string.ends_with(obj, "}") == 0 { return obj }
+    return "${string.substring(obj, 0, string.length(obj) - 1)},\"fence_denied\":${records}}"
 }
 
 // The fence's read rules, or null.

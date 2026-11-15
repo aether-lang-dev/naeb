@@ -170,6 +170,35 @@ started through a pre-forked unconfined helper.
 
 ### Denials reaching the model
 
+Every refusal reaches the model as one record, whichever layer made it:
+
+```json
+{"op": "read", "resource": "/home/u/.npmrc", "layer": "child", "command_id": "b3",
+ "suggestion": "policy.allow_read(p, \"~/.npmrc\")"}
+```
+
+`op` is `read`, `write`, `egress` (the proxy), `network` (a direct
+connection the OS refused), `socket` (a Unix socket) or the OS's own
+operation name; `layer` is `tool` (naeb's in-process tools) or `child` (a
+process naeb started); `command_id` is the bash task id (`b3`),
+`hook:<event>` or `mcp:<server>`, absent for a tool. `suggestion` is the
+`naeb.ae` line that would allow it, as text only, absent where no policy
+line can (naeb's own files, `.git/hooks`, `.git/config`, `naeb.ae`, a path
+the policy itself denies). Nothing is ever widened automatically: the user
+edits `naeb.ae` and runs `naeb build`. Where the records are:
+
+- a bash result (foreground, or a background one when it is delivered),
+  an MCP call's result, a failed hook's payload: `fence_denied: [...]`;
+- an in-process tool's rejection: the error message is unchanged
+  (`denied by the project fence: read ~/.ssh/id_ed25519`) and the `Error`
+  carries `fence_denied`; an uncaught one prints it after the stack;
+- a sub-agent: its Runs' records reach the parent through `run_end`
+  (`fence_denied`) and the agent result's `fence_denied`;
+- the model is told the field in the fenced tool table; `nib`, with no
+  Fence, keeps upstream's shapes and descriptions.
+
+In detail:
+
 - In-process tools fail with the path or `host:port` named (`denied by the
   project fence: read ~/.ssh/id_ed25519`).
 - Proxy denials are per command: a bash result lists under `fence_denied`

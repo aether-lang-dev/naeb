@@ -267,7 +267,14 @@ take_refusals(tp: ptr) -> ptr {
     i = 0
     while i < list.list_size(now) {
         v, _e = list.get_string(now, i)
-        list.list_add(out, v)
+        seen = 0
+        k = 0
+        while k < list.list_size(out) {
+            o, _e2 = list.get_string(out, k)
+            if o == v { seen = 1 }
+            k = k + 1
+        }
+        if seen == 0 { list.list_add(out, v) }
         i = i + 1
     }
     return out

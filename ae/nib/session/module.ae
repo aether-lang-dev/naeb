@@ -738,7 +738,7 @@ run_hooks_(s: *Session, event: string, commands: ptr, paths: ptr, status: string
     if hch == null && hw == null { return f }
     d = tools.child_refusals(hch, hw)
     if list.list_size(d) == 0 { return f }
-    dj = json_list_(d)
+    dj = tools.refusals_json(s.tools, d, "child", "hook:${event}")
     log.event(s.log, ",\"hook_fence_denied\":{\"event\":${jsonx.quote(event)},\"fence_denied\":${dj}}", 0)
     if f != null { (f as *hooks.Failure).fence_denied = dj }
     return f
@@ -931,7 +931,10 @@ execute_(s: *Session, tc: *types.ToolCall, sk: ptr, cancel: @keep ptr, run: @kee
     sj = tool_summary.to_json(summary)
     okt = "false"
     if o.ok == 1 { okt = "true" }
-    emit_(sk, "{\"run_end\":{\"ok\":${okt},\"output\":${jsonx.quote(out_text)},\"changes\":${changes_json_(changes)},\"tool_summary\":${sj}}}")
+    dj = tools.take_denied(j.scope)
+    denied = ""
+    if dj != "" { denied = ",\"fence_denied\":${dj}" }
+    emit_(sk, "{\"run_end\":{\"ok\":${okt},\"output\":${jsonx.quote(out_text)},\"changes\":${changes_json_(changes)},\"tool_summary\":${sj}${denied}}}")
     e = new_executed_(out_text, o.ok)
     if o.text == "undefined" && string.length(string.trim(o.logs)) == 0 { e.empty = 1 }
     e.run_ms = run_ms

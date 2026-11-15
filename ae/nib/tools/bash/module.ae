@@ -22,6 +22,7 @@ import nib.tools.progress
 import nib.tools.jail
 import nib.tools.egress
 import nib.tools.denials
+import nib.fence
 
 exports(Ctx, Args, Tracker, new_tracker, tick_at, finish_tracker, new_ctx, discard_channel, parse_args, validation_error, timeout_ms_of, check, execute, MAX_OUTPUT,
         DEFAULT_TIMEOUT_MS, child_env)
@@ -42,6 +43,7 @@ struct Ctx {
     spec: ptr             // a fence's *jail.Spec (in place of roots), or null
     channel: ptr          // this command's own *egress.Channel under a fence: execute closes it and lists its refusals
     watch: ptr            // this command's own *denials.Watch under a fence: what the OS refused it
+    fence: ptr            // the *fence.Fence the refusals are named against, or null
     self_exe: string
     env: ptr              // "NAME=value" list the child starts from (null: this process's)
     strip_env: string     // one more variable to remove (the provider key's), or ""
@@ -72,6 +74,7 @@ new_ctx(home: string, cancel: @keep ptr, registry: @keep ptr, ids: @keep ptr) ->
     c.spec = null
     c.channel = null
     c.watch = null
+    c.fence = null
     c.self_exe = ""
     c.env = null
     c.strip_env = ""
@@ -261,7 +264,7 @@ execute(cp: ptr, command: string, timeout_ms: long, detached: int, id: string, t
         tt.output_bytes = bytes
         tick_(tt)
     }, 1) as *process.Result
-    denied = fence_denied_(c)
+    denied = fence_denied_(c, id)
     c.exec_start = 0 as long
     c.exec_end = 0 as long
     if r.error == "" || r.error == "OutputLimit" {
@@ -300,26 +303,17 @@ execute(cp: ptr, command: string, timeout_ms: long, detached: int, id: string, t
 // Closes the command's channel to the fence's proxy and its watch, if any,
 // and names what the fence refused this command's processes (the OS's
 // refusals of files, sockets and the network, the proxy's of hosts) as a
-// ",\"fence_denied\":[...]" member (the model proposes a naeb.ae change from
-// it), or "".
-fence_denied_(c: *Ctx) -> string {
+// ",\"fence_denied\":[...]" member of refusal records (fence.refusal: the
+// model proposes a naeb.ae change from them), or "".
+fence_denied_(c: *Ctx, id: string) -> string {
     if c.channel == null && c.watch == null { return "" }
     d = denials.close_child(c.channel, c.watch)
     c.channel = null
     c.watch = null
-    n = list.list_size(d)
-    if n == 0 { return "" }
-    out = ",\"fence_denied\":["
-    i = 0
-    while i < n {
-        v, _e = list.get_string(d, i)
-        if i > 0 { out = "${out}," }
-        out = "${out}${jsonx.quote(v)}"
-        i = i + 1
-    }
-    return "${out}]"
+    if list.list_size(d) == 0 || c.fence == null { return "" }
+    return ",\"fence_denied\":${fence.refusals_json(c.fence, os.getcwd(), c.data_home, d, "child", id)}"
 }
 
 // Closes the channel and watch of a command that will not run (it was
 // refused after its fence child was made).
-discard_channel(cp: ptr) { fence_denied_(cp as *Ctx) }
+discard_channel(cp: ptr) { fence_denied_(cp as *Ctx, "") }

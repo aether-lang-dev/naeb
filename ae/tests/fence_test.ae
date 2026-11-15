@@ -354,5 +354,35 @@ main() {
             spec.assert_eq(p4, 0, "bad port")
         }
     }
+    spec.describe(fw, "fence.refusal") {
+        spec.it("names the naeb.ae line that would allow a refusal, and none where no line can") callback {
+            base = tmp_()
+            home = "${base}/home"
+            proj = "${home}/work/proj"
+            fs.mkdir_p("${proj}/.git/hooks")
+            fs.mkdir_p("${home}/.ssh")
+            fs.mkdir_p("${home}/.naeb")
+            fs.mkdir_p("${base}/opt/secret")
+            f = fence.new(home)
+            fence.deny_read(f, "${base}/opt/secret")
+            fence.deny_write(f, "${base}/opt")
+            r = fence.refusal(f, proj, "${home}/.nib", "read ${home}/.ssh/id_fake", "child", "b3")
+            spec.assert_str_eq(r, "{\"op\":\"read\",\"resource\":\"${home}/.ssh/id_fake\",\"layer\":\"child\",\"command_id\":\"b3\",\"suggestion\":\"policy.allow_read(p, \\\"~/.ssh/id_fake\\\")\"}", "read")
+            spec.assert_str_eq(fence.suggestion(f, proj, "", "write", "${home}/planted"), "policy.allow_write(p, \"~/planted\")", "write")
+            spec.assert_str_eq(fence.suggestion(f, proj, "", "write", "${proj}/.git/hooks/pre-commit"), "", "built-in read-only")
+            spec.assert_str_eq(fence.suggestion(f, proj, "", "read", "${home}/.naeb/x"), "", "naeb's own")
+            spec.assert_str_eq(fence.suggestion(f, proj, "${home}/.nib", "read", "${home}/.nib/auth.json"), "", "naeb's data")
+            spec.assert_str_eq(fence.suggestion(f, proj, "", "read", "${base}/opt/secret/k"), "", "the policy's own deny_read")
+            spec.assert_str_eq(fence.suggestion(f, proj, "", "write", "${base}/opt/x"), "", "the policy's own deny_write")
+            spec.assert_str_eq(fence.suggestion(f, proj, "", "egress", "example.invalid:443"), "policy.allow_host(p, \"example.invalid\", 443)", "egress")
+            spec.assert_str_eq(fence.suggestion(f, proj, "", "egress", "[::1]:8080"), "policy.allow_host(p, \"::1\", 8080)", "IPv6")
+            spec.assert_str_eq(fence.suggestion(f, proj, "", "socket", "/var/run/docker.sock"), "", "socket")
+            t = fence.refusal(f, proj, "", "egress example.invalid:443", "tool", "")
+            spec.assert_eq(contains_(t, "command_id"), 0, "no command_id for a tool")
+            l = list.list_new()
+            spec.assert_str_eq(fence.refusals_json(f, proj, "", l, "child", "b1"), "", "none: empty")
+            fs.remove_tree(base)
+        }
+    }
     return spec.run_summary(fw)
 }

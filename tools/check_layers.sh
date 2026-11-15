@@ -59,7 +59,7 @@ expect_imports $T/grep/module.ae "contrib.quickjs|nib.tools.walk|std.fs|std.list
 expect_imports $T/search/module.ae "nib.jsonx|nib.tools.grep|nib.tools.walk|std.json|std.list|std.strbuilder|std.string"
 # Processes.
 expect_imports $T/process/module.ae "nib.sysenv|std.cryptography|std.fs|std.io|std.ipc|std.list|std.os|std.string|std.sync|std.worker"
-expect_imports $T/bash/module.ae "nib.jsonx|nib.tools.denials|nib.tools.egress|nib.tools.jail|nib.tools.policy|nib.tools.process|nib.tools.progress|nib.tools.registry|nib.tools.secrets|std.list|std.os|std.string|std.sync"
+expect_imports $T/bash/module.ae "nib.fence|nib.jsonx|nib.tools.denials|nib.tools.egress|nib.tools.jail|nib.tools.policy|nib.tools.process|nib.tools.progress|nib.tools.registry|nib.tools.secrets|std.list|std.os|std.string|std.sync"
 # Images: file system only (store, read, hash, base64), no network or process.
 expect_imports ae/nib/image/module.ae "nib.fserr|nib.jsonx|nib.lock|nib.tools.atomic_file|std.bytes|std.cryptography|std.encoding|std.fs|std.list|std.strbuilder|std.string"
 expect_imports $T/view/module.ae "nib.fserr|nib.image|nib.jsonx|nib.tools.atomic_file|nib.tools.rules|std.fs|std.list|std.string"
@@ -68,7 +68,7 @@ expect_imports $T/jail/module.ae "nib.tools.atomic_file|nib.tools.rules|std.dir|
 # Fence resolves paths (file system) into a jail.Spec; the egress proxy is
 # the fenced children's and tools.fetch's only way out.
 expect_imports $T/rules/module.ae "std.list|std.string"
-expect_imports ae/nib/fence/module.ae "nib.tools.atomic_file|nib.tools.jail|nib.tools.rules|std.fs|std.list|std.string"
+expect_imports ae/nib/fence/module.ae "nib.jsonx|nib.tools.atomic_file|nib.tools.jail|nib.tools.rules|std.fs|std.list|std.string"
 # naeb.ae: built by `naeb build` (diff, then `ae build --emit=lib` through
 # tools/process), checked against its record and dlopened at start (policy_host.c).
 expect_imports ae/nib/fence/policy/module.ae "nib.build_info|nib.fence|nib.tools.atomic_file|nib.tools.jail|nib.tools.process|std.cryptography|std.fs|std.io|std.list|std.os|std.string"

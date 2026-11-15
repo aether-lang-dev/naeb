@@ -47,7 +47,7 @@ import std.intarr
 exports(TOOL_CONCURRENCY, MAX_STOPPED_BYTES, Limits, ToolResult, Host, Outcome, Virtual,
         limits, new_host, host_set_admit, host_set_start, host_set_cancel, host_set_timing, host_set_waiting,
         host_set_record, host_set_virtual, new_virtual,
-        result_ok, result_err, result_set_ok, result_set_err, result_set_identity,
+        result_ok, result_err, result_set_ok, result_set_err, result_set_err_denied, result_set_identity,
         result_set_started, result_started,
         eval, syntax_context)
 
@@ -251,6 +251,16 @@ result_set_err(out: ptr, text: string) {
     r.text = text
 }
 
+// An error whose Error carries a project fence's refusal records
+// (`denied`, a JSON array) as its fence_denied property. They travel in the
+// text after DENIED_MARK, so a recorded and replayed call rejects the same.
+result_set_err_denied(out: ptr, text: string, denied: string) {
+    r = out as *ToolResult
+    r.ok = 0
+    r.text = text
+    if denied != "" { r.text = "${text}${DENIED_MARK}${denied}" }
+}
+
 result_set_identity(out: ptr, id: string, background: int) {
     r = out as *ToolResult
     r.id = id
@@ -260,6 +270,9 @@ result_set_identity(out: ptr, id: string, background: int) {
 result_set_started(out: ptr, started: @keep ptr) { (out as *ToolResult).started = started }
 
 result_started(out: ptr) -> ptr { return (out as *ToolResult).started }
+
+// U+001E (record separator) never appears in a tool's error text.
+const DENIED_MARK = "\u001efence_denied:"
 
 const PRELUDE = <<JS
 (() => {
@@ -279,7 +292,11 @@ const PRELUDE = <<JS
       args = { ...args, pattern: re.source, ...(re.ignoreCase && !Object.hasOwn(args, "ignore_case") ? { ignore_case: true } : {}) };
     }
     let r;
-    try { r = await host(name, JSON.stringify(args ?? {})); } catch (e) { throw new Error(name + ": " + e.message); }
+    try { r = await host(name, JSON.stringify(args ?? {})); } catch (e) {
+      const err = new Error(name + ": " + e.message);
+      if (e.fence_denied !== undefined) err.fence_denied = e.fence_denied;
+      throw err;
+    }
     return r;
   };
   globalThis.tools = Object.freeze(Object.fromEntries(names.map((n) => [n, (a, b) => call(n, n === "mcp" ? {name: a, arguments: b === undefined ? {} : b} : n === "mcp_schema" ? {name: a} : a)])));
@@ -384,7 +401,18 @@ describe_error_(st: *State, h: int) -> string {
     }
     s = to_str_(st, stack)
     quickjs.release(st.q, stack)
-    return "${msg}\n${trim_newlines_end_(s)}"
+    return "${msg}\n${trim_newlines_end_(s)}${denied_of_(st, h)}"
+}
+
+// "\nfence_denied: [...]" for an uncaught error that carries a project
+// fence's refusal records, so the model sees them without a catch; else "".
+denied_of_(st: *State, h: int) -> string {
+    d, err = quickjs.get(st.q, h, "fence_denied")
+    if err != "" { return "" }
+    out = ""
+    if quickjs.type_of(st.q, d) == "array" { out = "\nfence_denied: ${quickjs.to_json(st.q, d)}" }
+    quickjs.release(st.q, d)
+    return out
 }
 
 to_json_(st: *State, h: int) -> string {
@@ -552,13 +580,27 @@ deliver_(st: *State, c: *Call) {
         }
     } else {
         rejected = 1
-        msg = quickjs.new_string(q, r.text)
+        text = r.text
+        denied = ""
+        mark = string.index_of(text, DENIED_MARK)
+        if mark >= 0 {
+            denied = string.substring(text, mark + string.length(DENIED_MARK), string.length(text))
+            text = string.substring(text, 0, mark)
+        }
+        msg = quickjs.new_string(q, text)
         a = quickjs.new_array(q)
         quickjs.set_index(q, a, 0, msg)
         quickjs.release(q, msg)
         ev2, _e3 = quickjs.call(q, st.error_ctor, 0, a)
         value = ev2
         quickjs.release(q, a)
+        if denied != "" {
+            dv, derr = quickjs.parse_json(q, denied)
+            if derr == "" {
+                quickjs.set(q, value, "fence_denied", dv)
+                quickjs.release(q, dv)
+            }
+        }
     }
     settle_name = "resolve"
     if rejected == 1 { settle_name = "reject" }
