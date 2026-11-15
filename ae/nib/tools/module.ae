@@ -31,6 +31,7 @@ import nib.tools.changes
 import nib.tools.jail
 import nib.tools.egress
 import nib.fence
+import nib.sysenv
 import nib.tools.background
 import nib.tools.progress
 import nib.tools.undo
@@ -46,7 +47,7 @@ import nib.image
 import nib.provider.types
 
 exports(Tools, RunScope, new, new_scope, host, call_tool, active_tool, names_json, docs, all_docs, tool_names,
-        is_ported, take_images, credential_paths, writable_roots, nib_home, take_changes, set_workspace, set_fence, fence_spec, fence_proxy,
+        is_ported, take_images, credential_paths, writable_roots, nib_home, take_changes, set_workspace, set_fence, fence_spec, fence_proxy, fence_child,
         cancel_cell, set_log, sandbox_roots, change_paths, export_versions, import_versions, set_config, take_usage, take_jail_notice, enable_undo, begin_turn_undo, finish_turn_undo, run_undo, turn_undo_dir, attach_turn_undo_dir, close_undo)
 
 const DOC_MCP = "  // Call an enabled MCP server tool. Server/transport failures are data; argument errors reject. Full results stay in JS; images share the Run image limit.\n  async mcp(name, args = {}) {}, // → { ok, content, structured?, error? }\n"
@@ -164,6 +165,7 @@ struct Tools {
     fence: ptr             // *fence.Fence the launcher gave, or null (upstream behaviour)
     proxy: ptr             // *egress.Proxy, started on first use under a fence
     proxy_guard: ptr
+    fence_reason: string   // "?" until probed, then "" (a fenced child can be confined) or why not
 }
 
 struct RunScope {
@@ -218,6 +220,7 @@ new(home: string) -> ptr {
     t.fence = null
     t.proxy = null
     t.proxy_guard = lock.new()
+    t.fence_reason = "?"
     return t as ptr
 }
 
@@ -253,6 +256,28 @@ fence_proxy(tp: ptr) -> (ptr, string) {
     p2 = t.proxy
     lock.release(t.proxy_guard)
     return p2, ""
+}
+
+// What a fenced child runs in: (spec with its network part, environment,
+// "") or (null, null, why it cannot be confined here). Fails closed: the
+// caller refuses the command rather than run it unconfined.
+fence_child(tp: ptr) -> (ptr, ptr, string) {
+    t = tp as *Tools
+    sp = fence_spec(tp)
+    if sp == null { return null, null, "no project fence" }
+    p, perr = fence_proxy(tp)
+    if perr != "" { return null, null, perr }
+    s = sp as *jail.Spec
+    s.net = 1
+    s.proxy_port = egress.port(p)
+    s.proxy_sock = egress.sock_path(p)
+    if t.fence_reason == "?" { t.fence_reason = jail.fence_unavailable(sp) }
+    if t.fence_reason != "" { return null, null, "commands cannot be confined here: ${t.fence_reason}" }
+    child_url = egress.url(p)
+    if s.proxy_sock != "" { child_url = "http://127.0.0.1:${jail.RELAY_PORT}" }
+    base = t.env
+    if base == null { base = sysenv.environ() }
+    return sp, fence.child_env(t.fence, base, child_url), ""
 }
 
 fetch_proxy_(t: *Tools) -> (string, string) {
@@ -600,7 +625,18 @@ bash_(s: *RunScope, args: string, out: ptr) {
         sandbox.result_set_err(out, refused)
         return
     }
-    c.roots = bash_roots_(t)
+    if t.fence != null {
+        fspec, fenv, ferr = fence_child(s.tools)
+        if ferr != "" {
+            sandbox.result_set_err(out, "denied by the project fence: ${ferr}")
+            return
+        }
+        c.spec = fspec
+        c.env = fenv
+        c.proxy = t.proxy
+    } else {
+        c.roots = bash_roots_(t)
+    }
     timeout = bash.timeout_ms_of(a)
     if (a as *bash.Args).background == 1 {
         detached = (a as *bash.Args).detached

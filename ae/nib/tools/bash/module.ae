@@ -1,7 +1,8 @@
 // tools.bash: tools.bash in the foreground (upstream src/tools/bash.zig).
 // The command runs as `bash -c "exec 2>&1\n<command>"` in nib's cwd, in its
 // own process group, with credentials scrubbed from its environment, behind
-// the deny-list, and inside the OS write sandbox when workspace mode is on.
+// the deny-list, and inside the OS write sandbox when workspace mode is on,
+// or inside a project fence's jail (docs/naeb/adr/0001) when one is given.
 
 import std.os hiding (exec, run_capture, run_pipe, run_pipe_drain_and_wait, run_socket,
     run_stdio, run_full, run_supervised, spawn_proc, spawn_proc_to, os_system,
@@ -19,6 +20,7 @@ import nib.tools.process
 import nib.tools.registry
 import nib.tools.progress
 import nib.tools.jail
+import nib.tools.egress
 
 exports(Ctx, Args, Tracker, new_tracker, tick_at, finish_tracker, new_ctx, parse_args, validation_error, timeout_ms_of, check, execute, MAX_OUTPUT,
         DEFAULT_TIMEOUT_MS, child_env)
@@ -36,6 +38,8 @@ struct Ctx {
     ids: ptr              // std.sync cell: the Session's bash id counter
     run_id: int
     roots: ptr            // writable roots, or null (sandbox off or unavailable)
+    spec: ptr             // a fence's *jail.Spec (in place of roots), or null
+    proxy: ptr            // the fence's *egress.Proxy, whose refusals the result lists
     self_exe: string
     env: ptr              // "NAME=value" list the child starts from (null: this process's)
     strip_env: string     // one more variable to remove (the provider key's), or ""
@@ -63,6 +67,8 @@ new_ctx(home: string, cancel: @keep ptr, registry: @keep ptr, ids: @keep ptr) ->
     c.ids = ids
     c.run_id = 0
     c.roots = null
+    c.spec = null
+    c.proxy = null
     c.self_exe = ""
     c.env = null
     c.strip_env = ""
@@ -242,6 +248,7 @@ execute(cp: ptr, command: string, timeout_ms: long, detached: int, id: string, t
     list.list_add(inner, script)
     argv = inner
     if c.roots != null { argv = jail.wrap(c.roots, inner, c.self_exe) }
+    if c.spec != null { argv = jail.wrap_spec(c.spec, inner, c.self_exe) }
     cancel_b = (cmd as *registry.Command).cancel
     first = c.cancel
     if task_cancel != null { first = task_cancel }
@@ -283,5 +290,23 @@ execute(cp: ptr, command: string, timeout_ms: long, detached: int, id: string, t
     state = "failed"
     if r.exit_code == 0 { state = "done" }
     finish_tracker(tr, state)
-    return 1, "{\"exit_code\":${r.exit_code},\"output\":${jsonx.quote(r.output)}}"
+    return 1, "{\"exit_code\":${r.exit_code},\"output\":${jsonx.quote(r.output)}${fence_denied_(c)}}"
+}
+
+// ",\"fence_denied\":[...]" naming what the fence's proxy refused while the
+// command ran (the model proposes a launcher change from it), or "".
+fence_denied_(c: *Ctx) -> string {
+    if c.proxy == null { return "" }
+    d = egress.take_denied(c.proxy)
+    n = list.list_size(d)
+    if n == 0 { return "" }
+    out = ",\"fence_denied\":["
+    i = 0
+    while i < n {
+        v, _e = list.get_string(d, i)
+        if i > 0 { out = "${out}," }
+        out = "${out}${jsonx.quote("egress ${v}")}"
+        i = i + 1
+    }
+    return "${out}]"
 }

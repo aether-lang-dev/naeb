@@ -40,7 +40,7 @@ import nib.tools.jail
 import nib.tools.process
 import nib.tools.secrets
 
-exports(Transport, Source, new, close, ensure, rpc, incoming, checked, watch, source_fixed, read_line,
+exports(Transport, Source, new, set_fence, close, ensure, rpc, incoming, checked, watch, source_fixed, read_line,
         PROTOCOL_VERSION, LEGACY_VERSION, TIMEOUT_MS, MAX_MESSAGE)
 
 const PROTOCOL_VERSION = "2026-07-28"
@@ -56,6 +56,9 @@ struct Transport {
     writable: ptr
     sandboxed: int
     self_exe: string
+    fence_spec: ptr      // a project fence's *jail.Spec for a stdio server, or null
+    fence_env: ptr       // what the fence adds to its environment (the proxy)
+    fence_refuse: string // why a fenced server cannot be confined here, or ""
     to_fd: int
     pid: int             // 0: no child
     src: ptr             // *Source over the child's stdout
@@ -104,6 +107,9 @@ new(config: @keep ptr, env: @keep ptr, home: string, user_home: string, writable
     if writable == null { t.writable = list.list_new() }
     t.sandboxed = sandboxed
     t.self_exe = self_exe
+    t.fence_spec = null
+    t.fence_env = null
+    t.fence_refuse = ""
     t.to_fd = -1
     t.pid = 0
     t.src = source_fixed("")
@@ -228,6 +234,45 @@ child_env_(t: *Transport) -> ptr {
     return env
 }
 
+// A project fence (docs/naeb/adr/0001): a stdio server runs in `spec`
+// (plus its own state directory) with `env` added, or not at all (`refuse`).
+set_fence(tp: ptr, spec: @keep ptr, env: @keep ptr, refuse: string) {
+    t = tp as *Transport
+    t.fence_spec = spec
+    t.fence_env = env
+    t.fence_refuse = refuse
+}
+
+// The fence's spec with `directory` writable and readable.
+fenced_spec_(t: *Transport, directory: string) -> ptr {
+    s = t.fence_spec as *jail.Spec
+    writes = list.list_new()
+    i = 0
+    while i < list.list_size(s.writes) {
+        w, _e = list.get_string(s.writes, i)
+        list.list_add(writes, w)
+        i = i + 1
+    }
+    real, _k, _m = fs.realpath(directory)
+    list.list_add(writes, real)
+    np = jail.new_spec(writes)
+    n = np as *jail.Spec
+    n.write_deny = s.write_deny
+    n.reads = list.list_new()
+    i = 0
+    while i < list.list_size(s.reads) {
+        r, _e2 = list.get_string(s.reads, i)
+        list.list_add(n.reads, r)
+        i = i + 1
+    }
+    list.list_add(n.reads, "+${real}")
+    n.net = s.net
+    n.proxy_port = s.proxy_port
+    n.proxy_sock = s.proxy_sock
+    n.loopback = s.loopback
+    return np
+}
+
 // ---- stdio ----
 
 spawn_(t: *Transport) -> string {
@@ -244,7 +289,16 @@ spawn_(t: *Transport) -> string {
         i = i + 1
     }
     wrapped = argv
-    if t.sandboxed == 1 {
+    if t.fence_refuse != "" { return "SandboxUnavailable" }
+    if t.fence_spec != null {
+        wrapped = jail.wrap_spec(fenced_spec_(t, directory), argv, t.self_exe)
+        i = 0
+        while i < list.list_size(t.fence_env) {
+            e, _e3 = list.get_string(t.fence_env, i)
+            list.list_add(env, e)
+            i = i + 1
+        }
+    } else if t.sandboxed == 1 {
         if jail.unavailable() != "" { return "SandboxUnavailable" }
         extras = list.list_new()
         j = 0

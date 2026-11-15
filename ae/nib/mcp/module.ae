@@ -17,7 +17,7 @@ import nib.mcp.mcp_index
 import nib.mcp.mcp_transport
 import nib.provider.types
 
-exports(Client, new, close, prompt, schema, call, server_state, enabled_any, split, checked,
+exports(Client, new, set_fence, close, prompt, schema, call, server_state, enabled_any, split, checked,
         PROTOCOL_VERSION, LEGACY_VERSION, TIMEOUT_MS, MAX_MESSAGE)
 
 const PROTOCOL_VERSION = "2026-07-28"
@@ -60,6 +60,17 @@ new(servers: ptr, env: @keep ptr, home: string, user_home: string, writable: @ke
         i = i + 1
     }
     return c as ptr
+}
+
+// Holds every stdio server to a project fence (mcp_transport.set_fence).
+set_fence(cp: ptr, spec: @keep ptr, env: @keep ptr, refuse: string) {
+    c = cp as *Client
+    i = 0
+    while i < list.list_size(c.servers) {
+        st = list.list_get_raw(c.servers, i) as *State
+        mcp_transport.set_fence(st.transport, spec, env, refuse)
+        i = i + 1
+    }
 }
 
 // Stops every connection (stdio children are killed).

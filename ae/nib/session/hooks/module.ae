@@ -28,6 +28,8 @@ struct Ctx {
     env: ptr          // "NAME=value" list the commands start from, null: this process's
     strip_env: string // the provider key variable, "" none
     roots: ptr        // writable roots to wrap the shell in, null: unsandboxed
+    spec: ptr         // a project fence's *jail.Spec (in place of roots), or null
+    refuse: string    // why a fenced hook cannot be confined here: it fails without running
     self_exe: string
     has_log: int
     log_ctx: ptr
@@ -45,6 +47,8 @@ new_ctx() -> ptr {
     c.env = null
     c.strip_env = ""
     c.roots = null
+    c.spec = null
+    c.refuse = ""
     c.self_exe = ""
     c.has_log = 0
     c.log_ctx = null
@@ -146,6 +150,13 @@ run(cp: ptr, event: string, commands: ptr, paths: ptr, status: string, timeout_m
     while k < list.list_size(commands) {
         template, _g3 = list.get_string(commands, k)
         command = replace_all_(template, "{files}", quoted)
+        if c.refuse != "" {
+            fr = heap.new(Failure)
+            fr.command = command
+            fr.exit_code = 126
+            fr.output = c.refuse
+            return fr as ptr
+        }
         // The project root is the commands' working directory.
         script = "cd ${quote(root)} || exit 1\n${redirect}\n${command}"
         inner = list.list_new()
@@ -154,6 +165,7 @@ run(cp: ptr, event: string, commands: ptr, paths: ptr, status: string, timeout_m
         list.list_add(inner, script)
         argv = inner
         if c.roots != null { argv = jail.wrap(c.roots, inner, c.self_exe) }
+        if c.spec != null { argv = jail.wrap_spec(c.spec, inner, c.self_exe) }
         remaining = timeout_ms
         if event == "turn_end" { remaining = timeout_ms - (os.now_monotonic_ms() - started) }
         if remaining <= 0 {

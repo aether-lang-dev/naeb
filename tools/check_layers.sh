@@ -59,7 +59,7 @@ expect_imports $T/grep/module.ae "contrib.quickjs|nib.tools.walk|std.fs|std.list
 expect_imports $T/search/module.ae "nib.jsonx|nib.tools.grep|nib.tools.walk|std.json|std.list|std.strbuilder|std.string"
 # Processes.
 expect_imports $T/process/module.ae "nib.sysenv|std.cryptography|std.fs|std.io|std.ipc|std.list|std.os|std.string|std.sync|std.worker"
-expect_imports $T/bash/module.ae "nib.jsonx|nib.tools.jail|nib.tools.policy|nib.tools.process|nib.tools.progress|nib.tools.registry|nib.tools.secrets|std.list|std.os|std.string|std.sync"
+expect_imports $T/bash/module.ae "nib.jsonx|nib.tools.egress|nib.tools.jail|nib.tools.policy|nib.tools.process|nib.tools.progress|nib.tools.registry|nib.tools.secrets|std.list|std.os|std.string|std.sync"
 # Images: file system only (store, read, hash, base64), no network or process.
 expect_imports ae/nib/image/module.ae "nib.fserr|nib.jsonx|nib.lock|nib.tools.atomic_file|std.bytes|std.cryptography|std.encoding|std.fs|std.list|std.strbuilder|std.string"
 expect_imports $T/view/module.ae "nib.fserr|nib.image|nib.jsonx|nib.tools.atomic_file|nib.tools.rules|std.fs|std.list|std.string"
@@ -80,7 +80,7 @@ expect_imports ae/nib/session/fork_history/module.ae "nib.msg|nib.provider.types
 expect_imports $T/web/module.ae "nib.jsonx|nib.tools.html|std.http.client|std.json|std.string|std.sync|std.worker"
 expect_imports $T/llm_call/module.ae "nib.jsonx|nib.lock|nib.msg|nib.provider|nib.provider.sink|nib.provider.types|std.json|std.list|std.strbuilder|std.string|std.sync"
 expect_imports $T/web_search/module.ae "nib.jsonx|nib.lock|nib.provider.sse|nib.provider.types|std.http.client|std.json|std.list|std.string|std.sync|std.time|std.worker"
-expect_imports $T/module.ae "nib.fence|nib.image|nib.jsonx|nib.lock|nib.provider.types|nib.sandbox|nib.tools.agent|nib.tools.agent_input|nib.tools.agent_sessions|nib.tools.atomic_file|nib.tools.background|nib.tools.bash|nib.tools.changes|nib.tools.egress|nib.tools.file_state|nib.tools.files|nib.tools.jail|nib.tools.llm_call|nib.tools.mcp_tool|nib.tools.progress|nib.tools.registry|nib.tools.search|nib.tools.undo|nib.tools.view|nib.tools.web|nib.tools.web_search|std.list|std.os|std.strbuilder|std.string|std.sync"
+expect_imports $T/module.ae "nib.fence|nib.image|nib.jsonx|nib.lock|nib.provider.types|nib.sandbox|nib.sysenv|nib.tools.agent|nib.tools.agent_input|nib.tools.agent_sessions|nib.tools.atomic_file|nib.tools.background|nib.tools.bash|nib.tools.changes|nib.tools.egress|nib.tools.file_state|nib.tools.files|nib.tools.jail|nib.tools.llm_call|nib.tools.mcp_tool|nib.tools.progress|nib.tools.registry|nib.tools.search|nib.tools.undo|nib.tools.view|nib.tools.web|nib.tools.web_search|std.list|std.os|std.strbuilder|std.string|std.sync"
 
 # The Session + provider slice.
 expect_imports ae/nib/auth/module.ae "nib.auth.store|nib.config|nib.config.env|nib.provider.types|std.list|std.string"

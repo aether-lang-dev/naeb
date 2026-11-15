@@ -162,6 +162,70 @@ main() {
             spec.assert_eq(has_(env, "JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=3128 -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=3128 -Dhttp.nonProxyHosts="), 1, "jvm")
         }
     }
+    spec.describe(fw, "tools.jail, a fence's Spec") {
+        spec.it("Landlock grants split a directory around a deny and skip what is closed") callback {
+            base = fixture_()
+            r = list.list_new()
+            list.list_add(r, "+${base}/home/work/proj")
+            list.list_add(r, "+${base}/home")
+            list.list_add(r, "-${base}/home/.ssh")
+            g = jail.landlock_reads(r)
+            spec.assert_eq(has_(g, "${base}/home/work"), 1, "an entry with only allows below is granted whole")
+            spec.assert_eq(has_(g, "${base}/home/work/proj"), 0, "covered by its parent's grant")
+            spec.assert_eq(has_(g, "${base}/home/other"), 1, "sibling granted")
+            spec.assert_eq(has_(g, "${base}/home/.ssh"), 0, "secret not granted")
+            spec.assert_eq(has_(g, "${base}/home"), 0, "split directory itself not granted")
+            spec.assert_eq(has_(g, "/"), 0, "root split")
+            closed = list.list_new()
+            list.list_add(closed, "-${base}/home")
+            list.list_add(closed, "+${base}/home/work/proj")
+            g2 = jail.landlock_reads(closed)
+            spec.assert_eq(has_(g2, "${base}/home/work/proj"), 1, "allowed inside closed")
+            spec.assert_eq(has_(g2, "${base}/home/other"), 0, "closed sibling")
+            fs.remove_tree(base)
+        }
+        spec.it("the SBPL profile orders reads shallow to deep and confines the network to the proxy") callback {
+            w = list.list_new()
+            list.list_add(w, "/p")
+            sp = jail.new_spec(w) as *jail.Spec
+            list.list_add(sp.write_deny, "/p/.git/hooks")
+            sp.reads = list.list_new()
+            list.list_add(sp.reads, "-/h/.ssh")
+            list.list_add(sp.reads, "+/h/p")
+            list.list_add(sp.reads, "-/h")
+            sp.net = 1
+            sp.proxy_port = 4321
+            text = jail.spec_profile(sp as ptr)
+            spec.assert_true(contains_(text, "(deny file-write* (subpath \"/p/.git/hooks\"))"), "read-only path")
+            spec.assert_true(contains_(text, "(deny file-read-data (subpath \"/h\"))(allow file-read-data (subpath \"/h/p\"))(deny file-read-data (subpath \"/h/.ssh\"))"), "read order")
+            spec.assert_true(contains_(text, "(deny network*)(allow network-outbound (remote ip \"localhost:4321\"))"), "network")
+            spec.assert_true(contains_(text, "(deny lsopen)"), "no open")
+            spec.assert_false(contains_(text, "localhost:*"), "no loopback by default")
+        }
+        spec.it("wrap_spec gives the Linux helper its options") callback {
+            w = list.list_new()
+            list.list_add(w, "/p")
+            sp = jail.new_spec(w) as *jail.Spec
+            list.list_add(sp.write_deny, "/p/.git/hooks")
+            sp.net = 1
+            sp.proxy_sock = "/n/run/s"
+            inner = list.list_new()
+            list.list_add(inner, "bash")
+            argv = jail.wrap_spec(sp as ptr, inner, "/bin/naeb")
+            joined = ""
+            i = 0
+            while i < list.list_size(argv) {
+                a, _e = list.get_string(argv, i)
+                joined = "${joined}${a} "
+                i = i + 1
+            }
+            if string.contains(joined, "sandbox-exec") == 1 {
+                spec.assert_true(contains_(joined, "(deny network*)"), "macOS profile")
+            } else {
+                spec.assert_str_eq(joined, "/bin/naeb __jail -w /p -W /p/.git/hooks --net /n/run/s -- bash ", "linux argv")
+            }
+        }
+    }
     spec.describe(fw, "fence, in-process tools") {
         spec.it("grep and glob skip what the rules close, and refuse a closed root") callback {
             base = fixture_()

@@ -64,7 +64,7 @@ struct Fence {
 
 new(home: string) -> ptr {
     f = heap.new(Fence)
-    f.home = home
+    f.home = string.copy(home)
     f.home_open = 0
     f.read_allow = list.list_new()
     f.read_deny = list.list_new()
@@ -76,15 +76,16 @@ new(home: string) -> ptr {
     return f as ptr
 }
 
-expand_(f: *Fence, path: string) -> string { return jail.expand_home(f.home, path) }
+// Copies: a launcher may pass getenv() results, which naeb zeroes at start-up.
+expand_(f: *Fence, path: string) -> string { return string.copy(jail.expand_home(f.home, path)) }
 
 open_home(fp: ptr) { (fp as *Fence).home_open = 1 }
 allow_read(fp: ptr, path: string) { list.list_add((fp as *Fence).read_allow, expand_(fp as *Fence, path)) }
 deny_read(fp: ptr, path: string) { list.list_add((fp as *Fence).read_deny, expand_(fp as *Fence, path)) }
 allow_write(fp: ptr, path: string) { list.list_add((fp as *Fence).write_allow, expand_(fp as *Fence, path)) }
 deny_write(fp: ptr, path: string) { list.list_add((fp as *Fence).write_deny, expand_(fp as *Fence, path)) }
-allow_host(fp: ptr, host: string, port: int) { list.list_add((fp as *Fence).hosts, "${string.to_lower(host)}:${port}") }
-pass_env(fp: ptr, name: string) { list.list_add((fp as *Fence).env_pass, name) }
+allow_host(fp: ptr, host: string, port: int) { list.list_add((fp as *Fence).hosts, string.copy("${string.to_lower(host)}:${port}")) }
+pass_env(fp: ptr, name: string) { list.list_add((fp as *Fence).env_pass, string.copy(name)) }
 allow_loopback(fp: ptr) { (fp as *Fence).loopback = 1 }
 
 host_allowed(fp: ptr, host: string, port: int) -> int {
@@ -129,6 +130,16 @@ add_rule_(out: ptr, kind: string, path: string) {
     if has_(out, r) == 0 { list.list_add(out, r) }
 }
 
+// $HOME as the launcher gave it and the account's home from the user
+// database, when they differ: both are closed.
+homes_(f: *Fence) -> ptr {
+    out = list.list_new()
+    if string.length(f.home) > 0 { list.list_add(out, f.home) }
+    acct = jail.account_home()
+    if string.length(acct) > 0 && canon_(acct) != canon_(f.home) { list.list_add(out, acct) }
+    return out
+}
+
 // The read rules (tools.rules) for a project at `cwd`, given the writable
 // roots and naeb's own data directory.
 read_rules(fp: ptr, cwd: string, nib_home: string, writes: ptr) -> ptr {
@@ -141,13 +152,19 @@ read_rules(fp: ptr, cwd: string, nib_home: string, writes: ptr) -> ptr {
         list.list_add(allowed, canon_(a))
         i = i + 1
     }
-    if f.home_open == 0 && string.length(f.home) > 0 {
-        add_rule_(out, "-", canon_(f.home))
-        k = 0
-        while k < HOME_READ_COUNT {
-            add_rule_(out, "+", canon_(atomic_file.join(f.home, HOME_READS[k])))
-            k = k + 1
+    homes = homes_(f)
+    h = 0
+    while h < list.list_size(homes) {
+        home, _eh = list.get_string(homes, h)
+        if f.home_open == 0 {
+            add_rule_(out, "-", canon_(home))
+            k = 0
+            while k < HOME_READ_COUNT {
+                add_rule_(out, "+", canon_(atomic_file.join(home, HOME_READS[k])))
+                k = k + 1
+            }
         }
+        h = h + 1
     }
     add_rule_(out, "+", canon_(jail.project_root(cwd)))
     i = 0
@@ -162,13 +179,16 @@ read_rules(fp: ptr, cwd: string, nib_home: string, writes: ptr) -> ptr {
         add_rule_(out, "+", a2)
         i = i + 1
     }
-    if string.length(f.home) > 0 {
+    h = 0
+    while h < list.list_size(homes) {
+        home2, _eh2 = list.get_string(homes, h)
         k = 0
         while k < SECRET_COUNT {
-            s = canon_(atomic_file.join(f.home, SECRETS[k]))
+            s = canon_(atomic_file.join(home2, SECRETS[k]))
             if has_(allowed, s) == 0 { add_rule_(out, "-", s) }
             k = k + 1
         }
+        h = h + 1
     }
     if nib_home != "" {
         nh = canon_(nib_home)
@@ -238,6 +258,17 @@ keep_(f: *Fence, name: string) -> int {
     return has_(f.env_pass, name)
 }
 
+has_prefix_(l: ptr, prefix: string) -> int {
+    n = list.list_size(l)
+    i = 0
+    while i < n {
+        v, _e = list.get_string(l, i)
+        if string.starts_with(v, prefix) == 1 { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
 // A fenced child's environment: only the kept names of `base` ("NAME=value"
 // list), then the proxy's variables when proxy_url is not "".
 child_env(fp: ptr, base: ptr, proxy_url: string) -> ptr {
@@ -251,6 +282,7 @@ child_env(fp: ptr, base: ptr, proxy_url: string) -> ptr {
         if eq > 0 && keep_(f, string.substring(e, 0, eq)) == 1 { list.list_add(out, e) }
         i = i + 1
     }
+    if has_prefix_(out, "HOME=") == 0 && string.length(f.home) > 0 { list.list_add(out, "HOME=${f.home}") }
     if proxy_url != "" {
         pe = proxy_env(proxy_url)
         i = 0

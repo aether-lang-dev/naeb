@@ -453,7 +453,25 @@ attach_mcp_(s: *Session, servers: ptr) {
     t = s.tools as *tools.Tools
     if t.mcp_client != null { mcp.close(t.mcp_client) }
     t.mcp_client = mcp.new(servers, t.env, o.home, o.user_home, c.sandbox_writable, c.sandbox_workspace, o.self_exe)
+    if t.fence != null && mcp.enabled_any(servers) == 1 {
+        fspec, fenv, ferr = tools.fence_child(s.tools)
+        purl = list.list_new()
+        if ferr == "" { purl = proxy_vars_(fenv) }
+        mcp.set_fence(t.mcp_client, fspec, purl, ferr)
+    }
     t.mcp_enabled = mcp.enabled_any(servers)
+}
+
+// The proxy variables of a fenced child's environment.
+proxy_vars_(env: ptr) -> ptr {
+    out = list.list_new()
+    i = 0
+    while i < list.list_size(env) {
+        e, _e = list.get_string(env, i)
+        if string.contains(string.to_lower(e), "proxy") == 1 { list.list_add(out, e) }
+        i = i + 1
+    }
+    return out
 }
 
 json_list_(l: ptr) -> string {
@@ -732,6 +750,14 @@ hooks_ctx_(s: *Session) -> ptr {
     h.env = t.env
     h.strip_env = (s.cfg as *types.Config).api_key_env
     h.roots = tools.sandbox_roots(s.tools)
+    if t.fence != null {
+        // Fenced: the hook runs confined, or fails closed with the reason.
+        fspec, fenv, ferr = tools.fence_child(s.tools)
+        h.roots = null
+        h.spec = fspec
+        h.env = fenv
+        if ferr != "" { h.refuse = "denied by the project fence: ${ferr}" }
+    }
     h.self_exe = t.self_exe
     h.has_log = 1
     h.log_ctx = s as ptr

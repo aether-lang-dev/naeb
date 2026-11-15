@@ -13,6 +13,53 @@
 #endif
 #include <string.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <pwd.h>
+#include <unistd.h>
+
+extern char **environ;
+
+/* The account's home directory from the user database, which a child
+ * falls back to when $HOME is unset or points elsewhere; "" unknown. */
+const char *nibjail_account_home(void) {
+    struct passwd *pw = getpwuid(getuid());
+    return pw && pw->pw_dir ? pw->pw_dir : "";
+}
+
+/* Moves every environment entry to the heap (setenv) and zeroes the
+ * originals, which sit in the initial stack area another process of this
+ * user can read: macOS's KERN_PROCARGS2, Linux's /proc/<pid>/environ.
+ * naeb under a project fence calls it first thing. Returns how many
+ * entries it moved. */
+int nibjail_scrub_environ(void) {
+    size_t n = 0;
+    while (environ && environ[n]) n++;
+    char **orig = (char **)malloc((n + 1) * sizeof(char *));
+    if (!orig) return -1;
+    for (size_t i = 0; i < n; i++) orig[i] = environ[i];
+    orig[n] = NULL;
+    int moved = 0;
+    for (size_t i = 0; i < n; i++) {
+        char *eq = strchr(orig[i], '=');
+        if (!eq || eq == orig[i]) continue;
+        size_t nl = (size_t)(eq - orig[i]);
+        char *name = (char *)malloc(nl + 1);
+        char *value = strdup(eq + 1);
+        if (!name || !value) { free(name); free(value); continue; }
+        memcpy(name, orig[i], nl);
+        name[nl] = 0;
+        if (setenv(name, value, 1) == 0) moved++;
+        free(name);
+        free(value);
+    }
+    for (size_t i = 0; i < n; i++) {
+        int still = 0;
+        for (size_t k = 0; environ && environ[k]; k++) if (environ[k] == orig[i]) still = 1;
+        if (!still) memset(orig[i], 0, strlen(orig[i]));
+    }
+    free(orig);
+    return moved;
+}
 #ifdef __linux__
 #include <fcntl.h>
 #include <unistd.h>

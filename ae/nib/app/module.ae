@@ -291,6 +291,7 @@ print_event_(ev: string) {
 
 // The whole program. fence: the launcher's *fence.Fence, or null.
 run(fence: @keep ptr) {
+    if fence != null { jail.scrub_environ() }
     n = os.args_count()
     if n >= 2 && os.args_get(1) == jail.HELPER_COMMAND {
         println("nib __jail: ${jail.helper(rest_args_(2))}")
