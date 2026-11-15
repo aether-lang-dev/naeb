@@ -23,7 +23,7 @@ import nib.tools.rules
 @source("landlock.c")
 
 exports(HELPER_COMMAND, SANDBOX_EXEC, RELAY_PORT, Spec, new_spec, project_root, roots, base_roots, allows, expand_home, profile,
-        spec_profile, landlock_reads, scrub_environ, account_home, unavailable, unavailable_text, fence_unavailable, wrap, wrap_spec, helper)
+        spec_profile, landlock_reads, scrub_environ, account_home, unavailable, unavailable_text, fence_unavailable, proxy_url, wrap, wrap_spec, helper)
 
 const HELPER_COMMAND = "__jail"
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec"
@@ -409,6 +409,14 @@ scrub_environ() -> int { return nibjail_scrub_environ() }
 // The account's home from the user database ("" unknown): a fence closes it
 // as well as $HOME, since a child without $HOME falls back to it.
 account_home() -> string { return string.copy(nibjail_account_home()) }
+
+// The proxy URL a child confined by `sp` is told about: the namespace relay
+// when it reaches the proxy through a Unix socket (Linux), else the port.
+proxy_url(sp: ptr) -> string {
+    s = sp as *Spec
+    if s.proxy_sock != "" { return "http://127.0.0.1:${RELAY_PORT}" }
+    return "http://127.0.0.1:${s.proxy_port}"
+}
 
 // "" when a fence's Spec can be applied here, else why not. A fence fails
 // closed: the caller refuses the command rather than run it unconfined.

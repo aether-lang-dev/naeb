@@ -47,7 +47,7 @@ import nib.image
 import nib.provider.types
 
 exports(Tools, RunScope, new, new_scope, host, call_tool, active_tool, names_json, docs, all_docs, tool_names,
-        is_ported, take_images, credential_paths, writable_roots, nib_home, take_changes, set_workspace, set_fence, fence_spec, fence_proxy, fence_child,
+        is_ported, take_images, credential_paths, writable_roots, nib_home, take_changes, set_workspace, set_fence, fence_spec, fence_proxy, fence_base, fence_child, close_channel,
         cancel_cell, set_log, sandbox_roots, change_paths, export_versions, import_versions, set_config, take_usage, take_jail_notice, enable_undo, begin_turn_undo, finish_turn_undo, run_undo, turn_undo_dir, attach_turn_undo_dir, close_undo)
 
 const DOC_MCP = "  // Call an enabled MCP server tool. Server/transport failures are data; argument errors reject. Full results stay in JS; images share the Run image limit.\n  async mcp(name, args = {}) {}, // → { ok, content, structured?, error? }\n"
@@ -163,7 +163,7 @@ struct Tools {
     mcp_client: ptr        // *mcp.Client of the Session, or null
     mcp_enabled: int       // 1: an enabled server puts tools.mcp in the API
     fence: ptr             // *fence.Fence the launcher gave, or null (upstream behaviour)
-    proxy: ptr             // *egress.Proxy, started on first use under a fence
+    proxy: ptr             // *egress.Proxy, made on first use under a fence
     proxy_guard: ptr
     fence_reason: string   // "?" until probed, then "" (a fenced child can be confined) or why not
 }
@@ -236,55 +236,78 @@ fence_spec(tp: ptr) -> ptr {
     return fence.resolve(t.fence, os.getcwd(), nib_home(tp), t.env)
 }
 
-// The fence's egress proxy, started on first use: (proxy, "") or (null, why).
-fence_proxy(tp: ptr) -> (ptr, string) {
+// The fence's egress proxy, made on first use. It has no listener of its
+// own: every child and every fetch opens a channel (egress.channel) whose
+// refusals are its alone.
+fence_proxy(tp: ptr) -> ptr {
     t = tp as *Tools
-    if t.fence == null { return null, "no project fence" }
     lock.acquire(t.proxy_guard)
     if t.proxy == null {
-        sock = ""
+        prefix = ""
         if os.platform() == "linux" {
-            sock = atomic_file.join(atomic_file.join(nib_home(tp), "run"), "egress-${os.getpid()}.sock")
+            prefix = atomic_file.join(atomic_file.join(nib_home(tp), "run"), "egress-${os.getpid()}")
         }
-        p, err = egress.start(t.fence, sock)
-        if err != "" {
-            lock.release(t.proxy_guard)
-            return null, err
-        }
-        t.proxy = p
+        t.proxy = egress.new(t.fence, prefix)
     }
-    p2 = t.proxy
+    p = t.proxy
     lock.release(t.proxy_guard)
-    return p2, ""
+    return p
 }
 
-// What a fenced child runs in: (spec with its network part, environment,
-// "") or (null, null, why it cannot be confined here). Fails closed: the
-// caller refuses the command rather than run it unconfined.
-fence_child(tp: ptr) -> (ptr, ptr, string) {
+// The fence's spec with the network part still to fill (net on, no channel)
+// and the proxy, or why a child cannot be confined here: (spec, proxy, "")
+// or (null, null, why). An MCP stdio server opens its channel per spawn.
+fence_base(tp: ptr) -> (ptr, ptr, string) {
     t = tp as *Tools
     sp = fence_spec(tp)
     if sp == null { return null, null, "no project fence" }
-    p, perr = fence_proxy(tp)
-    if perr != "" { return null, null, perr }
-    s = sp as *jail.Spec
-    s.net = 1
-    s.proxy_port = egress.port(p)
-    s.proxy_sock = egress.sock_path(p)
+    (sp as *jail.Spec).net = 1
     if t.fence_reason == "?" { t.fence_reason = jail.fence_unavailable(sp) }
     if t.fence_reason != "" { return null, null, "commands cannot be confined here: ${t.fence_reason}" }
-    child_url = egress.url(p)
-    if s.proxy_sock != "" { child_url = "http://127.0.0.1:${jail.RELAY_PORT}" }
-    base = t.env
-    if base == null { base = sysenv.environ() }
-    return sp, fence.child_env(t.fence, base, child_url), ""
+    return sp, fence_proxy(tp), ""
 }
 
-fetch_proxy_(t: *Tools) -> (string, string) {
-    if t.fence == null { return "", "" }
-    p, err = fence_proxy(t as ptr)
-    if err != "" { return "", err }
-    return egress.url(p), ""
+// What one fenced child runs in: (spec with its network part, environment,
+// channel, "") or (null, null, null, why it cannot be confined here). Fails
+// closed: the caller refuses the command rather than run it unconfined. The
+// channel is the child's own way to the proxy: the caller closes it
+// (egress.channel_close, which hands back its refusals) when the child ends.
+fence_child(tp: ptr) -> (ptr, ptr, ptr, string) {
+    t = tp as *Tools
+    sp, p, why = fence_base(tp)
+    if why != "" { return null, null, null, why }
+    ch, cerr = egress.child_channel(p)
+    if cerr != "" { return null, null, null, cerr }
+    s = sp as *jail.Spec
+    s.proxy_port = egress.channel_port(ch)
+    s.proxy_sock = egress.channel_sock(ch)
+    base = t.env
+    if base == null { base = sysenv.environ() }
+    return sp, fence.child_env(t.fence, base, jail.proxy_url(sp)), ch, ""
+}
+
+// Closes a fence child's channel (fence_child) whose refusals nobody lists;
+// null is ignored.
+close_channel(ch: ptr) {
+    if ch == null { return }
+    list.list_free(egress.channel_close(ch))
+}
+
+// tools.fetch under a fence: through a channel of its own, so its refusal is
+// reported here, named like the file tools' refusals, and nowhere else.
+fenced_fetch_(t: *Tools, args: string, cancel: ptr) -> (int, string) {
+    ch, cerr = egress.channel(fence_proxy(t as ptr), 0)
+    if cerr != "" { return 0, "denied by the project fence: ${cerr}" }
+    ok, text = web.fetch(args, cancel, egress.channel_url(ch))
+    denied = egress.channel_close(ch)
+    n = list.list_size(denied)
+    // The proxy answers 403 only for a fence refusal; the pair is the last hop's.
+    if ok == 0 && n > 0 && string.contains(text, "proxy CONNECT refused (status 403)") == 1 {
+        pair, _e = list.get_string(denied, n - 1)
+        text = "denied by the project fence: egress ${pair}"
+    }
+    list.list_free(denied)
+    return ok, text
 }
 
 set_workspace(tp: ptr, on: int) { (tp as *Tools).workspace = on }
@@ -626,14 +649,14 @@ bash_(s: *RunScope, args: string, out: ptr) {
         return
     }
     if t.fence != null {
-        fspec, fenv, ferr = fence_child(s.tools)
+        fspec, fenv, fch, ferr = fence_child(s.tools)
         if ferr != "" {
             sandbox.result_set_err(out, "denied by the project fence: ${ferr}")
             return
         }
         c.spec = fspec
         c.env = fenv
-        c.proxy = t.proxy
+        c.channel = fch
     } else {
         c.roots = bash_roots_(t)
     }
@@ -641,6 +664,7 @@ bash_(s: *RunScope, args: string, out: ptr) {
     if (a as *bash.Args).background == 1 {
         detached = (a as *bash.Args).detached
         if background.active_bash(t.background) >= background.BASH_LIMIT {
+            bash.discard_channel(c as ptr)
             sandbox.result_set_err(out, "background bash limit is ${background.BASH_LIMIT} running commands; retry after a background result arrives")
             return
         }
@@ -661,6 +685,7 @@ bash_(s: *RunScope, args: string, out: ptr) {
             background.set_result(job, bok, btext, cc.exec_start, cc.exec_end)
         })
         if serr != "" {
+            bash.discard_channel(cp)
             sandbox.result_set_err(out, serr)
             return
         }
@@ -853,11 +878,10 @@ run_tool_(s: *RunScope, t: *Tools, name: string, args: string, out: ptr) {
             return
         }
         "fetch" -> {
-            purl, perr = fetch_proxy_(t)
-            if perr != "" {
-                text = "denied by the project fence: ${perr}"
+            if t.fence != null {
+                ok, text = fenced_fetch_(t, args, s.cancel)
             } else {
-                ok, text = web.fetch(args, s.cancel, purl)
+                ok, text = web.fetch(args, s.cancel, "")
             }
         }
         "search" -> {

@@ -146,7 +146,7 @@ request_(jp: ptr) {
     denied = ""
     if j.proxy != "" { denied = client.response_header(resp, "x-naeb-denied") }
     if string.length(denied) > 0 {
-        j.err = "denied by the project fence: egress to ${denied}"
+        j.err = "denied by the project fence: egress ${denied}"
         client.response_free(resp)
         client.request_free(req)
         sync.atomic_store(j.done, 1)
@@ -246,7 +246,10 @@ fetch(args: string, cancel: ptr, proxy: string) -> (int, string) {
             "Timeout" -> { return 0, "timed out after ${timeout_ms} ms" }
             "BinaryContent" -> { return 0, "binary content (${content_type}); download it with bash if needed" }
             "ResponseTooLarge" -> { return 0, "response exceeds 5 MB" }
-            _ -> { return 0, "${url}: ${err}" }
+            _ -> {
+                if string.starts_with(err, "denied by the project fence: ") == 1 { return 0, err }
+                return 0, "${url}: ${err}"
+            }
         }
     }
     p = pp as *Page

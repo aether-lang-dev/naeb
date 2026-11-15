@@ -454,24 +454,10 @@ attach_mcp_(s: *Session, servers: ptr) {
     if t.mcp_client != null { mcp.close(t.mcp_client) }
     t.mcp_client = mcp.new(servers, t.env, o.home, o.user_home, c.sandbox_writable, c.sandbox_workspace, o.self_exe)
     if t.fence != null && mcp.enabled_any(servers) == 1 {
-        fspec, fenv, ferr = tools.fence_child(s.tools)
-        purl = list.list_new()
-        if ferr == "" { purl = proxy_vars_(fenv) }
-        mcp.set_fence(t.mcp_client, fspec, purl, ferr)
+        fspec, fproxy, ferr = tools.fence_base(s.tools)
+        mcp.set_fence(t.mcp_client, fspec, fproxy, ferr)
     }
     t.mcp_enabled = mcp.enabled_any(servers)
-}
-
-// The proxy variables of a fenced child's environment.
-proxy_vars_(env: ptr) -> ptr {
-    out = list.list_new()
-    i = 0
-    while i < list.list_size(env) {
-        e, _e = list.get_string(env, i)
-        if string.contains(string.to_lower(e), "proxy") == 1 { list.list_add(out, e) }
-        i = i + 1
-    }
-    return out
 }
 
 json_list_(l: ptr) -> string {
@@ -742,17 +728,21 @@ start_run_job_(s: *Session, code: string, run_index: int) -> *RunJob {
     return j
 }
 
-// The hook context of this Session's commands.
-hooks_ctx_(s: *Session) -> ptr {
+// The hook context of this Session's commands and, under a fence, the
+// hooks' own channel to the proxy (null without one), which the caller
+// closes (tools.close_channel) once the hooks have run.
+hooks_ctx_(s: *Session) -> (ptr, ptr) {
     t = s.tools as *tools.Tools
     hp = hooks.new_ctx()
     h = hp as *hooks.Ctx
     h.env = t.env
     h.strip_env = (s.cfg as *types.Config).api_key_env
     h.roots = tools.sandbox_roots(s.tools)
+    ch = null
     if t.fence != null {
         // Fenced: the hook runs confined, or fails closed with the reason.
-        fspec, fenv, ferr = tools.fence_child(s.tools)
+        fspec, fenv, fch, ferr = tools.fence_child(s.tools)
+        ch = fch
         h.roots = null
         h.spec = fspec
         h.env = fenv
@@ -765,7 +755,7 @@ hooks_ctx_(s: *Session) -> ptr {
         ss = ctx as *Session
         log.event(ss.log, members, 0)
     }
-    return hp
+    return hp, ch
 }
 
 // after_edit hooks once a Run that changed files ends (upstream afterEdit).
@@ -774,7 +764,9 @@ after_edit_(s: *Session, j: *RunJob) {
     if list.list_size(c.hooks_after_edit) == 0 { return }
     paths = tools.change_paths(j.scope)
     if list.list_size(paths) == 0 { return }
-    f = hooks.run(hooks_ctx_(s), "after_edit", c.hooks_after_edit, paths, "", hooks.TIMEOUT_MS as long)
+    hctx, hch = hooks_ctx_(s)
+    f = hooks.run(hctx, "after_edit", c.hooks_after_edit, paths, "", hooks.TIMEOUT_MS as long)
+    tools.close_channel(hch)
     if f != null {
         j.hook = hooks.payload(f)
         j.hook_notice = hooks.notice(f)
@@ -806,12 +798,13 @@ start_turn_end_hooks(sp: @keep ptr, status: string, ctx: @keep ptr, notify: @kee
     job = heap.new(HookJob)
     job.done = sync.atomic_new(0)
     list.list_add_raw(s.hook_jobs, job as ptr)
-    hctx = hooks_ctx_(s)
+    hctx, hch = hooks_ctx_(s)
     commands = c.hooks_turn_end
     done = job.done
     st = string.copy(status)
     worker.run_detached(|| {
         f = hooks.run(hctx, "turn_end", commands, list.list_new(), st, hooks.TIMEOUT_MS as long)
+        tools.close_channel(hch)
         if f != null && has_notify == 1 {
             call(notify, ctx, "hook turn_end · exit ${(f as *hooks.Failure).exit_code}")
         }
@@ -853,7 +846,9 @@ run(sp: @keep ptr, code: string, cancel: @keep ptr) -> *Ran {
     if list.list_size(((s.cfg as *types.Config).hooks_after_edit)) > 0 {
         paths = tools.change_paths(scope)
         if list.list_size(paths) > 0 {
-            hooks.run(hooks_ctx_(s), "after_edit", (s.cfg as *types.Config).hooks_after_edit, paths, "", hooks.TIMEOUT_MS as long)
+            hctx, hch = hooks_ctx_(s)
+            hooks.run(hctx, "after_edit", (s.cfg as *types.Config).hooks_after_edit, paths, "", hooks.TIMEOUT_MS as long)
+            tools.close_channel(hch)
         }
     }
     types.usage_add(s.usage, tools.take_usage(s.tools))

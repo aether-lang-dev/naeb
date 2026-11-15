@@ -106,12 +106,17 @@ Children get **no network except a naeb-run proxy**. The proxy speaks
 `CONNECT host:port` (TLS is tunnelled, never intercepted) and absolute-form
 `GET http://host/...`; it allows only the Fence's `host:port` pairs, resolves
 names itself (children have no DNS), and answers others with 403 naming the
-pair. Denials are collected per Tools and reported with the bash result.
+pair. The proxy has no listener of its own: each fenced child (a bash
+command, foreground or background; a hook run; an MCP stdio server for as
+long as it runs) and each `tools.fetch` opens its own channel to it, a
+127.0.0.1 port (macOS, fetch) or a Unix socket (Linux), which records only
+the refusals made through it and closes when its owner ends. A process a
+command leaves running after it returns loses the proxy with it.
 
 | | Linux | macOS |
 |---|---|---|
 | Confinement | unprivileged user + network + mount namespace: only a loopback | `(deny network*)` `(allow network-outbound (remote ip "localhost:<port>"))` |
-| Path to the proxy | the helper relays 127.0.0.1:3128 inside the namespace to the proxy's Unix socket (path sockets are not network-namespaced) | the proxy listens on 127.0.0.1:<port> |
+| Path to the proxy | the helper relays 127.0.0.1:3128 inside the namespace to the child's own Unix socket of the proxy (path sockets are not network-namespaced) | the child's own channel of the proxy listens on 127.0.0.1:<port> |
 | Verified | `unshare -Urn` works unprivileged on ae-x64 (Ubuntu 22.04, kernel 6.8) and cachyos (7.3) | other localhost ports, a Unix socket, DNS and 1.1.1.1 all refused; the allowed port connects |
 
 Children are told about the proxy through `HTTP(S)_PROXY`, `http(s)_proxy`,
@@ -157,8 +162,13 @@ started through a pre-forked unconfined helper.
 
 - In-process tools fail with the path or `host:port` named (`denied by the
   project fence: read ~/.ssh/id_ed25519`).
-- Proxy denials are listed in the bash result under `fence_denied` (only
-  under a Fence; upstream's result shape is unchanged otherwise).
+- Proxy denials are per command: a bash result lists under `fence_denied`
+  only what the proxy refused that command's own processes (a background
+  command's in its own result when it is delivered), never another
+  command's, a hook's, an MCP server's or a fetch's. Only under a Fence;
+  upstream's result shape is unchanged otherwise.
+- `tools.fetch` fails with the pair named, like the file tools:
+  `denied by the project fence: egress example.com:443`.
 - A child's file denial is a plain `EACCES`/`EPERM`: Landlock reports no
   path to the caller. Options for later: Landlock audit records (ABI 7; need
   root to read), seccomp user notification on `openat` (heavy), or `strace`
@@ -221,6 +231,10 @@ case asserts refusal on macOS and Linux.
 | `i-write-rc`, `i-write-hook`, `i-write-launcher` | in-process | write `~/.zshrc`, the hook, the launcher |
 | `i-fetch-exfil`, `i-fetch-allowed` | in-process | fetch the exfil URL; positive control |
 | `x-launcher-in-root` | start-up | run naeb from a copy inside the project |
+
+`ae/tests/redteam/attribution.py` (run by `run.sh`) checks that each
+refusal reaches only the command that caused it: a fetch, two concurrent
+commands, a background command and an MCP server.
 
 Status (2026-11-15): every case refused on macOS 27.3, ae-x64 (Ubuntu
 22.04, kernel 6.8, Landlock ABI 4: the seccomp path for Unix sockets) and

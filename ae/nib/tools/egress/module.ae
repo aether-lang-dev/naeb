@@ -2,11 +2,14 @@
 // The only way out for a fenced child and for tools.fetch: `CONNECT
 // host:port` (TLS is tunnelled, never intercepted) and absolute-form
 // `GET http://host/...`, allowed only for the fence's host:port pairs; any
-// other is answered 403 with the pair named, and remembered until
-// take_denied. Names are resolved here: children have no DNS. It listens on
-// 127.0.0.1 (tools.fetch, macOS children) and, on Linux, on a Unix socket
-// the namespace relay of tools/jail reaches. One Proxy per Tools, its own
-// threads; nothing here is module state.
+// other is answered 403 with the pair named. Names are resolved here:
+// children have no DNS.
+//
+// A Proxy holds the fence; every user opens its own Channel: a listener of
+// its own (127.0.0.1 for tools.fetch and macOS children, a Unix socket under
+// the run directory for the namespace relay of tools/jail on Linux) whose
+// refusals are recorded for that channel only, so a refusal is reported with
+// the command whose process made the connection. Nothing here is module state.
 
 import std.tcp
 import std.fs
@@ -17,97 +20,136 @@ import std.worker
 import nib.lock
 import nib.fence
 
-exports(Proxy, start, url, sock_path, port, take_denied, close, parse_target)
+exports(Proxy, Channel, new, channel, child_channel, channel_url, channel_port, channel_sock, channel_close, parse_target)
 
 const HEADER_LIMIT = 16384
 const IDLE_MS = 300000
 
 struct Proxy {
     fence: ptr
-    server: ptr        // 127.0.0.1 listener
-    port: int
-    unix_server: ptr   // Linux: the Unix listener, or null
-    sock: string
-    guard: ptr
-    denied: ptr        // "host:port" refused since the last take
-    stopped: ptr       // std.sync cell
+    sock_prefix: string // Unix channels' socket paths start with it
+    seq: ptr           // std.sync cell: numbers Unix channels
 }
 
-// (proxy, "") or (null, why). sock: a Unix socket path to listen on too, or
-// ""; its directory is made, owner-only.
-start(fence_p: @keep ptr, sock: string) -> (ptr, string) {
-    server, err = tcp.listen_on("127.0.0.1", 0)
-    if err != "" { return null, "egress proxy: ${err}" }
+// One way in. Shared by its owner, its accept thread and the connections in
+// flight; refs counts them and the last release frees it.
+struct Channel {
+    proxy: ptr
+    server: ptr        // the listener: closed by the accept thread when it stops
+    port: int          // 0 for a Unix channel
+    sock: string       // the Unix socket's path, or ""
+    guard: ptr
+    denied: ptr        // "host:port" refused here; null once the owner took it
+    stopped: ptr       // std.sync cell
+    refs: ptr          // std.sync cell
+}
+
+// A proxy for `fence_p`. sock_prefix: a path the Unix channels' sockets are
+// named after ("<prefix>-<n>.sock"; its directory is made on first use), or
+// "" when none will be opened.
+new(fence_p: @keep ptr, sock_prefix: string) -> ptr {
     p = heap.new(Proxy)
     p.fence = fence_p
-    p.server = server
-    p.port = tcp.server_port(server)
-    p.unix_server = null
-    p.sock = ""
-    p.guard = lock.new()
-    p.denied = list.list_new()
-    p.stopped = sync.atomic_new(0)
-    pp = p as ptr
-    if sock != "" {
-        fs.mkdir_p(fs.path_dirname(sock))
-        if fs.exists(sock) == 1 { fs.delete(sock) }
-        us, uerr = tcp.listen_unix(sock)
-        if uerr != "" {
-            tcp.tcp_server_close(server)
-            return null, "egress proxy: ${uerr}"
-        }
-        p.unix_server = us
-        p.sock = sock
-        worker.run_detached(|| {
-            accept_loop_(pp, us)
-            return null
-        })
-    }
-    worker.run_detached(|| {
-        accept_loop_(pp, server)
-        return null
-    })
-    return pp, ""
+    p.sock_prefix = sock_prefix
+    p.seq = sync.atomic_new(0)
+    return p as ptr
 }
 
-url(pp: ptr) -> string { return "http://127.0.0.1:${(pp as *Proxy).port}" }
-sock_path(pp: ptr) -> string { return (pp as *Proxy).sock }
-port(pp: ptr) -> int { return (pp as *Proxy).port }
-
-// The pairs refused since the last call, oldest first; emptied.
-take_denied(pp: ptr) -> ptr {
+// A new way in: (channel, "") or (null, why). use_unix: 1 for a Unix socket in
+// the proxy's socket directory, 0 for 127.0.0.1 on a free port.
+channel(pp: @keep ptr, use_unix: int) -> (ptr, string) {
     p = pp as *Proxy
-    lock.acquire(p.guard)
-    out = p.denied
-    p.denied = list.list_new()
-    lock.release(p.guard)
+    server = null
+    port = 0
+    sock = ""
+    if use_unix == 1 {
+        if p.sock_prefix == "" { return null, "egress proxy: no socket path for a Unix channel" }
+        fs.mkdir_p(fs.path_dirname(p.sock_prefix))
+        n = sync.atomic_add(p.seq, 1 as long)
+        sock = "${p.sock_prefix}-${n}.sock"
+        if fs.exists(sock) == 1 { fs.delete(sock) }
+        us, uerr = tcp.listen_unix(sock)
+        if uerr != "" { return null, "egress proxy: ${uerr}" }
+        server = us
+    } else {
+        ts, terr = tcp.listen_on("127.0.0.1", 0)
+        if terr != "" { return null, "egress proxy: ${terr}" }
+        server = ts
+        port = tcp.server_port(ts)
+    }
+    c = heap.new(Channel)
+    c.proxy = pp
+    c.server = server
+    c.port = port
+    c.sock = sock
+    c.guard = lock.new()
+    c.denied = list.list_new()
+    c.stopped = sync.atomic_new(0)
+    c.refs = sync.atomic_new(2)    // the owner and the accept thread
+    cp = c as ptr
+    worker.run_detached(|| {
+        accept_loop_(cp)
+        return null
+    })
+    return cp, ""
+}
+
+// A channel for a fenced child: a Unix socket when the proxy has a socket
+// path (Linux: the namespace relay reaches it), else 127.0.0.1.
+child_channel(pp: @keep ptr) -> (ptr, string) {
+    use_unix = 0
+    if (pp as *Proxy).sock_prefix != "" { use_unix = 1 }
+    return channel(pp, use_unix)
+}
+
+// The URL tools.fetch uses for a 127.0.0.1 channel.
+channel_url(cp: ptr) -> string { return "http://127.0.0.1:${(cp as *Channel).port}" }
+channel_port(cp: ptr) -> int { return (cp as *Channel).port }
+channel_sock(cp: ptr) -> string { return (cp as *Channel).sock }
+
+// Stops the channel (its listener closes within the accept poll) and hands
+// back the pairs it refused, oldest first. The channel must not be used
+// after; a connection still in flight finishes without recording.
+channel_close(cp: ptr) -> ptr {
+    c = cp as *Channel
+    sync.atomic_store(c.stopped, 1)
+    lock.acquire(c.guard)
+    out = c.denied
+    c.denied = null
+    lock.release(c.guard)
+    release_(c)
     return out
 }
 
-close(pp: ptr) {
-    p = pp as *Proxy
-    if sync.atomic_cas(p.stopped, 0, 1) == 0 { return }
-    tcp.tcp_server_close(p.server)
-    if p.unix_server != null { tcp.tcp_server_close(p.unix_server) }
+release_(c: *Channel) {
+    if sync.atomic_sub(c.refs, 1 as long) != 0 { return }
+    lock.free(c.guard)
+    sync.atomic_free(c.stopped)
+    sync.atomic_free(c.refs)
+    heap.free(c)
 }
 
-accept_loop_(pp: @keep ptr, server: @keep ptr) {
-    p = pp as *Proxy
-    while sync.atomic_load(p.stopped) == 0 {
-        if tcp.server_poll(server, 200) <= 0 { continue }
-        c, err = tcp.accept(server)
+accept_loop_(cp: @keep ptr) {
+    c = cp as *Channel
+    while sync.atomic_load(c.stopped) == 0 {
+        if tcp.server_poll(c.server, 200) <= 0 { continue }
+        conn, err = tcp.accept(c.server)
         if err != "" { continue }
+        sync.atomic_add(c.refs, 1 as long)
         worker.run_detached(|| {
-            handle_(pp, c)
+            handle_(cp, conn)
+            release_(cp as *Channel)
             return null
         })
     }
+    tcp.tcp_server_close(c.server)
+    release_(c)
 }
 
-deny_(p: *Proxy, pair: string) {
-    lock.acquire(p.guard)
-    list.list_add(p.denied, pair)
-    lock.release(p.guard)
+deny_(c: *Channel, pair: string) {
+    lock.acquire(c.guard)
+    if c.denied != null { list.list_add(c.denied, pair) }
+    lock.release(c.guard)
 }
 
 send_text_(sock: ptr, text: string) {
@@ -146,8 +188,9 @@ port_of_(s: string) -> int {
     return v
 }
 
-handle_(pp: @keep ptr, c: @keep ptr) {
-    p = pp as *Proxy
+handle_(chp: @keep ptr, c: @keep ptr) {
+    ch = chp as *Channel
+    p = ch.proxy as *Proxy
     head = ""
     end = -1
     while end < 0 && string.length(head) < HEADER_LIMIT {
@@ -207,7 +250,7 @@ handle_(pp: @keep ptr, c: @keep ptr) {
     }
     pair = "${host}:${port}"
     if host == "" || port <= 0 || fence.host_allowed(p.fence, host, port) == 0 {
-        deny_(p, pair)
+        deny_(ch, pair)
         body = "naeb: egress to ${pair} is not in the project fence\n"
         send_text_(c, "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: ${string.length(body)}\r\nConnection: close\r\nX-Naeb-Denied: ${pair}\r\n\r\n${body}")
         tcp.tcp_close(c)

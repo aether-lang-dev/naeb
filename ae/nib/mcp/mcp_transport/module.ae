@@ -37,6 +37,8 @@ import nib.mcp.mcp_headers
 import nib.provider.sse
 import nib.provider.types
 import nib.tools.jail
+import nib.tools.egress
+import nib.fence
 import nib.tools.process
 import nib.tools.secrets
 
@@ -57,7 +59,8 @@ struct Transport {
     sandboxed: int
     self_exe: string
     fence_spec: ptr      // a project fence's *jail.Spec for a stdio server, or null
-    fence_env: ptr       // what the fence adds to its environment (the proxy)
+    fence_proxy: ptr     // the fence's *egress.Proxy
+    fence_channel: ptr   // the running server's own *egress.Channel, or null
     fence_refuse: string // why a fenced server cannot be confined here, or ""
     to_fd: int
     pid: int             // 0: no child
@@ -108,7 +111,8 @@ new(config: @keep ptr, env: @keep ptr, home: string, user_home: string, writable
     t.sandboxed = sandboxed
     t.self_exe = self_exe
     t.fence_spec = null
-    t.fence_env = null
+    t.fence_proxy = null
+    t.fence_channel = null
     t.fence_refuse = ""
     t.to_fd = -1
     t.pid = 0
@@ -235,11 +239,12 @@ child_env_(t: *Transport) -> ptr {
 }
 
 // A project fence (docs/naeb/adr/0001): a stdio server runs in `spec`
-// (plus its own state directory) with `env` added, or not at all (`refuse`).
-set_fence(tp: ptr, spec: @keep ptr, env: @keep ptr, refuse: string) {
+// (plus its own state directory), reaching `proxy` through a channel of its
+// own for as long as it runs, or not at all (`refuse`).
+set_fence(tp: ptr, spec: @keep ptr, proxy: @keep ptr, refuse: string) {
     t = tp as *Transport
     t.fence_spec = spec
-    t.fence_env = env
+    t.fence_proxy = proxy
     t.fence_refuse = refuse
 }
 
@@ -291,13 +296,22 @@ spawn_(t: *Transport) -> string {
     wrapped = argv
     if t.fence_refuse != "" { return "SandboxUnavailable" }
     if t.fence_spec != null {
-        wrapped = jail.wrap_spec(fenced_spec_(t, directory), argv, t.self_exe)
+        close_channel_(t)
+        ch, cerr = egress.child_channel(t.fence_proxy)
+        if cerr != "" { return "SandboxUnavailable" }
+        fsp = fenced_spec_(t, directory)
+        net = fsp as *jail.Spec
+        net.proxy_port = egress.channel_port(ch)
+        net.proxy_sock = egress.channel_sock(ch)
+        wrapped = jail.wrap_spec(fsp, argv, t.self_exe)
+        pe = fence.proxy_env(jail.proxy_url(fsp))
         i = 0
-        while i < list.list_size(t.fence_env) {
-            e, _e3 = list.get_string(t.fence_env, i)
+        while i < list.list_size(pe) {
+            e, _e3 = list.get_string(pe, i)
             list.list_add(env, e)
             i = i + 1
         }
+        t.fence_channel = ch
     } else if t.sandboxed == 1 {
         if jail.unavailable() != "" { return "SandboxUnavailable" }
         extras = list.list_new()
@@ -312,7 +326,10 @@ spawn_(t: *Transport) -> string {
         wrapped = jail.wrap(roots, argv, t.self_exe)
     }
     to_fd, from_fd, pid, err = process.open_stdio(wrapped, env, directory)
-    if err != "" { return err }
+    if err != "" {
+        close_channel_(t)
+        return err
+    }
     t.to_fd = to_fd
     t.pid = pid
     s = t.src as *Source
@@ -321,7 +338,14 @@ spawn_(t: *Transport) -> string {
     return ""
 }
 
-// Ends the connection: the child is killed, the session forgotten.
+close_channel_(t: *Transport) {
+    if t.fence_channel == null { return }
+    list.list_free(egress.channel_close(t.fence_channel))
+    t.fence_channel = null
+}
+
+// Ends the connection: the child is killed, the session forgotten, its
+// channel to a fence's proxy closed.
 close(tp: ptr) {
     t = tp as *Transport
     if t.pid > 0 {
@@ -334,6 +358,7 @@ close(tp: ptr) {
         t.pid = 0
         t.to_fd = -1
     }
+    close_channel_(t)
     t.session = ""
     t.ready = 0
     t.version = PROTOCOL_VERSION
