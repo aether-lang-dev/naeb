@@ -3,7 +3,11 @@
 // host:port` (TLS is tunnelled, never intercepted) and absolute-form
 // `GET http://host/...`, allowed only for the fence's host:port pairs; any
 // other is answered 403 with the pair named. Names are resolved here:
-// children have no DNS.
+// children have no DNS. The proxy connects to an address it vetted, never
+// re-resolving: a loopback, private, link-local, unspecified, multicast or
+// reserved address (IPv4-mapped and NAT64 forms by the address they carry)
+// only when the fence names that very address for the port, so an allowed
+// name that resolves (or rebinds) to a local service is refused.
 //
 // A Proxy holds the fence; every user opens its own Channel: a listener of
 // its own (127.0.0.1 for tools.fetch and macOS children, a Unix socket under
@@ -20,7 +24,13 @@ import std.worker
 import nib.lock
 import nib.fence
 
-exports(Proxy, Channel, new, channel, child_channel, channel_url, channel_port, channel_sock, channel_close, channel_take, parse_target)
+@source("resolve.c")
+
+exports(Proxy, Channel, new, channel, child_channel, channel_url, channel_port, channel_sock, channel_close, channel_take, parse_target,
+        vet, addresses_for)
+
+extern nibnet_resolve(host: string) -> string @heap
+extern nibnet_vet(addr: string) -> string
 
 const HEADER_LIMIT = 16384
 const IDLE_MS = 300000
@@ -108,7 +118,8 @@ channel_port(cp: ptr) -> int { return (cp as *Channel).port }
 channel_sock(cp: ptr) -> string { return (cp as *Channel).sock }
 
 // Stops the channel (its listener closes within the accept poll) and hands
-// back the pairs it refused, oldest first. The channel must not be used
+// back the pairs it refused ("host:port", or "host:port <reason>" when the
+// pair is allowed but where it resolves is not), oldest first. The channel must not be used
 // after; a connection still in flight finishes without recording.
 channel_close(cp: ptr) -> ptr {
     c = cp as *Channel
@@ -269,8 +280,25 @@ handle_(chp: @keep ptr, c: @keep ptr) {
         tcp.tcp_close(c)
         return
     }
-    up, uerr = tcp.connect_timeout(host, port, 10000)
-    if uerr != "" {
+    addrs, why = addresses_for(p.fence, host, port)
+    if why != "" {
+        deny_(ch, "${pair} ${why}")
+        body = "naeb: egress to ${pair} refused: ${why}; the project fence reaches such an address only where naeb.ae names it\n"
+        send_text_(c, "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: ${string.length(body)}\r\nConnection: close\r\nX-Naeb-Denied: ${pair}\r\n\r\n${body}")
+        tcp.tcp_close(c)
+        return
+    }
+    up = null
+    uerr = "does not resolve"
+    k = 0
+    while k < list.list_size(addrs) && up == null {
+        a, _ae = list.get_string(addrs, k)
+        u, e = tcp.connect_timeout(a, port, 10000)
+        if e == "" { up = u } else { uerr = e }
+        k = k + 1
+    }
+    list.list_free(addrs)
+    if up == null {
         send_text_(c, "HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\nnaeb: ${pair}: ${uerr}\n")
         tcp.tcp_close(c)
         return
@@ -284,6 +312,37 @@ handle_(chp: @keep ptr, c: @keep ptr) {
     splice_(c, up)
     tcp.tcp_close(up)
     tcp.tcp_close(c)
+}
+
+// Why the proxy does not connect to the numeric `addr` on its own: a
+// loopback, private, ... address (see the top), or "" for a public one.
+vet(addr: string) -> string { return string.copy(nibnet_vet(addr)) }
+
+// The addresses to try, in order, for an allowed `host`:`port`: (list,
+// "") of those vetted (public, or named for the port by the fence), (empty,
+// "resolves to <address>, a <kind> address") when it resolves only to
+// refused ones, (empty, "") when it does not resolve.
+addresses_for(fp: ptr, host: string, port: int) -> (ptr, string) {
+    h = host
+    if string.starts_with(h, "[") == 1 && string.ends_with(h, "]") == 1 { h = string.substring(h, 1, string.length(h) - 1) }
+    text = nibnet_resolve(h)
+    out = list.list_new()
+    first_why = ""
+    n = string.length(text)
+    i = 0
+    while i < n {
+        j = string.index_of_from(text, "\n", i)
+        if j < 0 { j = n }
+        a = string.substring(text, i, j)
+        i = j + 1
+        if a == "" { continue }
+        why = vet(a)
+        if why == "" || fence.host_named(fp, a, port) == 1 { list.list_add(out, a) } else if first_why == "" {
+            first_why = "resolves to ${a}, a ${why} address"
+        }
+    }
+    if list.list_size(out) > 0 { return out, "" }
+    return out, first_why
 }
 
 // Copies bytes both ways until either side closes or both idle IDLE_MS.

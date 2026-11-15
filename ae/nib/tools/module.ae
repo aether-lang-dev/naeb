@@ -68,7 +68,7 @@ const DOC_LLM = "  // Pure single-step model call: judgments, classification, ex
 const DOC_AGENT = "  // Default: work yourself. Unless requested, delegate only parallel independent read-only investigations with discardable results.\n  // Serial edits/builds/tests/reviews:parent. No nesting; shared cwd, partial files possible.\n  // fork:parent history; model/effort switch loses cache. resume:a1 after completion; busy:wait, don't retry/replace. fork+resume rejects.\n  // background:{id}, auto-delivered result message. No ps/log reads/sleep/reruns to check/wait. No independent work:brief reply without tools; Session waits. Failure:ok:false; args/cancel reject.\n  async agent({ prompt, resume, fork = false, timeout_ms = 1800000, model, effort, background = false }) {}, // → { ok, id, text, usage, changes, error? } or { id }\n"
 
 // naeb only (a project fence): appended to the table, never part of upstream's.
-const DOC_FENCE_DENIED = "  // Project fence: a refusal is listed as fence_denied: [{ op, resource, layer, command_id?, suggestion? }] on bash/mcp results, on a rejected tool's Error (e.fence_denied) and in a failed hook's payload. op: read|write|egress|network|socket; layer: tool|child. suggestion: a naeb.ae line for the user to review; nothing widens the fence by itself.\n"
+const DOC_FENCE_DENIED = "  // Project fence: a refusal is listed as fence_denied: [{ op, resource, layer, command_id?, reason?, suggestion? }] on bash/mcp results, on a rejected tool's Error (e.fence_denied) and in a failed hook's payload. op: read|write|egress|network|socket; layer: tool|child. reason (egress): why an allowed host's address was refused. suggestion: a naeb.ae line for the user to review; nothing widens the fence by itself.\n"
 
 const DOC_FENCE = "  // The project fence in force: what commands and tools may read, write and reach, and the naeb.ae and library it was built from (SHA-256). Reads are open except read_denied, with reads reopened inside them. Read-only: ask the user to change naeb.ae.\n  // Example: await tools.fence()\n  async fence() {}, // → { platform, policy: { file, sha256, library, library_sha256 } | null, project, home, home_open, reads, read_denied, writes, read_only, hosts, loopback, env_passed, env_set }\n"
 
@@ -390,6 +390,12 @@ fenced_fetch_(t: *Tools, args: string, cancel: ptr) -> (int, string) {
     if ok == 0 && n > 0 && string.contains(text, "proxy CONNECT refused (status 403)") == 1 {
         pair, _e = list.get_string(denied, n - 1)
         text = "denied by the project fence: egress ${pair}"
+    }
+    // The channel's entry carries the reason when the pair is allowed but
+    // where it resolves is not ("host:port resolves to ...").
+    if ok == 0 && n > 0 && string.starts_with(text, "denied by the project fence: egress ") == 1 {
+        entry, _e2 = list.get_string(denied, n - 1)
+        text = "denied by the project fence: egress ${entry}"
     }
     list.list_free(denied)
     return ok, text

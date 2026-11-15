@@ -28,7 +28,7 @@ import nib.tools.jail
 import nib.tools.rules
 
 exports(Fence, new, open_home, allow_read, deny_read, allow_write, deny_write, allow_host, pass_env,
-        set_env, allow_loopback, set_origin, describe, host_allowed, resolve, child_env, proxy_env, read_rules, write_denied, refusal, refusals_json,
+        set_env, allow_loopback, set_origin, describe, host_allowed, host_named, resolve, child_env, proxy_env, read_rules, write_denied, refusal, refusals_json,
         suggestion, SECRETS)
 
 // Relative to $HOME: denied to every fenced reader unless allowed exactly.
@@ -185,6 +185,15 @@ host_allowed(fp: ptr, host: string, port: int) -> int {
         i = i + 1
     }
     return 0
+}
+
+// 1 when an allow_host pair names exactly `host` (no wildcard) for `port`:
+// how the egress proxy tells a local address the policy means to reach.
+host_named(fp: ptr, host: string, port: int) -> int {
+    f = fp as *Fence
+    h = string.to_lower(host)
+    if string.starts_with(h, "[") == 1 && string.ends_with(h, "]") == 1 { h = string.substring(h, 1, string.length(h) - 1) }
+    return has_(f.hosts, "${h}:${port}")
 }
 
 // The canonical form of a path that may not exist yet.
@@ -477,18 +486,44 @@ suggestion(fp: ptr, cwd: string, nib_home: string, op: string, resource: string)
     return "policy.allow_write(p, ${jsonx.quote(tilde_(f, path))})"
 }
 
-// One refusal record (above) as JSON. entry: "op resource".
+// One refusal record (above) as JSON. entry: "op resource", or for egress
+// "egress host:port <reason>" when the pair is allowed but where it
+// resolves is not: the record then carries "reason", and the suggestion
+// names the address ("resolves to <address>, ...").
 refusal(fp: ptr, cwd: string, nib_home: string, entry: string, layer: string, command_id: string) -> string {
     sp = string.index_of(entry, " ")
     op = entry
     resource = ""
+    reason = ""
     if sp > 0 {
         op = string.substring(entry, 0, sp)
         resource = string.substring(entry, sp + 1, string.length(entry))
     }
+    if op == "egress" {
+        rs = string.index_of(resource, " ")
+        if rs > 0 {
+            reason = string.substring(resource, rs + 1, string.length(resource))
+            resource = string.substring(resource, 0, rs)
+        }
+    }
     out = "{\"op\":${jsonx.quote(op)},\"resource\":${jsonx.quote(resource)},\"layer\":${jsonx.quote(layer)}"
     if command_id != "" { out = "${out},\"command_id\":${jsonx.quote(command_id)}" }
-    sug = suggestion(fp, cwd, nib_home, op, resource)
+    if reason != "" { out = "${out},\"reason\":${jsonx.quote(reason)}" }
+    sug = ""
+    if reason != "" {
+        if string.starts_with(reason, "resolves to ") == 1 {
+            rest = string.substring(reason, 12, string.length(reason))
+            comma = string.index_of(rest, ",")
+            if comma > 0 {
+                addr = string.substring(rest, 0, comma)
+                colon = string.length(resource) - 1
+                while colon > 0 && string.char_at(resource, colon) != 58 { colon = colon - 1 }
+                if colon > 0 { sug = "policy.allow_host(p, ${jsonx.quote(addr)}, ${string.substring(resource, colon + 1, string.length(resource))})" }
+            }
+        }
+    } else {
+        sug = suggestion(fp, cwd, nib_home, op, resource)
+    }
     if sug != "" { out = "${out},\"suggestion\":${jsonx.quote(sug)}" }
     return "${out}}"
 }

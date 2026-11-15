@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """One refusal record everywhere (docs/naeb/adr/0001, "Denials reaching the
 model"): in-process tools, bash, hooks, MCP stdio servers and sub-agents all
-report a fence refusal as {op, resource, layer, command_id?, suggestion?},
+report a fence refusal as {op, resource, layer, command_id?, reason?, suggestion?},
 the suggestion a naeb.ae line as text; without a fence (nib) the shapes are
 upstream's.
 
@@ -189,7 +189,7 @@ def main():
     rec = find((payload or {}).get("fence_denied"), "read", key)
     check("hook-record", rec is not None and rec.get("command_id") == "hook:after_edit" and rec.get("layer") == "child", "the payload was %r" % payload)
     docs = "".join(system) + tools_desc
-    check("docs-name-the-field", "fence_denied: [{ op, resource, layer, command_id?, suggestion? }]" in docs, "the model was not told about fence_denied")
+    check("docs-name-the-field", "fence_denied: [{ op, resource, layer, command_id?, reason?, suggestion? }]" in docs, "the model was not told about fence_denied")
 
     server = os.path.join(proj, "rr_mcp.py")
     with open(server, "w") as f:
