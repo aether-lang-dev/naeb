@@ -1,0 +1,293 @@
+// fence.policy: a project's policy, naeb.ae at the project root, as naeb
+// builds and loads it (docs/naeb/adr/0001). `naeb build` compiles it, after
+// a y/N on its diff against the last approved copy, into a shared library
+// under ~/.naeb/launchers/<key>/ (outside every writable root) with a build
+// record; naeb start-up checks the record against naeb.ae and the library,
+// dlopens the library and lets it fill a Fence through a table of functions
+// (policy_host.c). No module state: the Fence is the caller's.
+//
+// <key>/ holds: policy.dylib (macOS) or policy.so, policy.built (the
+// record), naeb.ae (the approved copy) and build/ (the compiled source).
+
+import std.fs
+import std.io
+import std.list
+import std.os hiding (exec, run_capture, run_pipe, run_pipe_drain_and_wait, run_socket,
+    run_stdio, run_full, run_supervised, spawn_proc, spawn_proc_to, os_system,
+    os_exec_raw, os_execv, os_run, os_run_capture_raw, os_run_capture_status_raw,
+    os_run_pipe_raw, os_run_pipe_drain_and_wait_raw, os_run_socket_raw,
+    os_run_stdio_raw, os_run_full_raw, os_run_supervised_raw, os_spawn_raw,
+    os_spawn_to_raw)
+import std.string
+import std.cryptography
+import nib.build_info
+import nib.fence
+import nib.tools.atomic_file
+import nib.tools.jail
+import nib.tools.process
+
+@source("policy_host.c")
+
+exports(FILE, interface, key, dir_for, library_path, record_field, platform, load, start_fence, build)
+
+const FILE = "naeb.ae"
+const RECORD = "policy.built"
+const COMPILE_TIMEOUT_MS = 600000
+
+// Appended to naeb.ae for the compile: the library's two exports.
+const GLUE = "\n\n// Added by naeb build (docs/naeb/adr/0001).\nnaeb_policy_interface() -> int { return policy.INTERFACE }\n\nnaeb_policy_v1(naeb_api: @keep ptr, naeb_fence: @keep ptr) -> int {\n    naeb_p = policy.open(naeb_api, naeb_fence)\n    if naeb_p == null { return 1 }\n    fence(naeb_p)\n    return 0\n}\n"
+
+extern naeb_policy_interface() -> int
+extern naeb_policy_new(home: string, project: string, platform: string) -> ptr
+extern naeb_policy_load(ctx: ptr, path: string) -> int
+extern naeb_policy_error(ctx: ptr) -> string
+extern naeb_policy_op_count(ctx: ptr) -> int
+extern naeb_policy_op_kind(ctx: ptr, i: int) -> int
+extern naeb_policy_op_a(ctx: ptr, i: int) -> string
+extern naeb_policy_op_b(ctx: ptr, i: int) -> string
+extern naeb_policy_op_port(ctx: ptr, i: int) -> int
+extern naeb_policy_free(ctx: ptr)
+
+// The interface (the table's version) this naeb speaks.
+interface() -> int { return naeb_policy_interface() }
+
+canon_(path: string) -> string {
+    c, err = atomic_file.canonical_path(path)
+    if err != "" { return path }
+    return c
+}
+
+// "macos" or "linux" (else what the OS calls itself).
+platform() -> string {
+    p = os.platform()
+    if p == "darwin" { return "macos" }
+    return p
+}
+
+// A project's directory name under ~/.naeb/launchers: its basename and a
+// hash of its canonical path, so two projects named alike do not share one.
+key(project: string) -> string {
+    c = canon_(project)
+    h, _e = cryptography.sha256_hex(string.bytes(c))
+    return "${atomic_file.basename(c)}-${string.substring(h, 0, 12)}"
+}
+
+dir_for(home: string, project: string) -> string { return "${home}/.naeb/launchers/${key(project)}" }
+
+library_path(dir: string) -> string {
+    if platform() == "macos" { return "${dir}/policy.dylib" }
+    return "${dir}/policy.so"
+}
+
+// A "name=value" line of a build record, or "".
+record_field(record: string, name: string) -> string {
+    lines = string.split(record, "\n")
+    out = ""
+    i = 0
+    while i < string.array_size(lines) {
+        l = string.array_get(lines, i)
+        if string.starts_with(l, "${name}=") == 1 { out = string.copy(string.trim(string.substring(l, string.length(name) + 1, string.length(l)))) }
+        i = i + 1
+    }
+    string.array_free(lines)
+    return out
+}
+
+sha_of_text_(text: string) -> string {
+    h, _e = cryptography.sha256_hex(string.bytes(text))
+    return h
+}
+
+sha_of_file_(path: string) -> string {
+    h, err = cryptography.sha256_file(path)
+    if err != "" { return "" }
+    return h
+}
+
+// Runs the library at `lib` against `f`: "" or why it was refused.
+load(f: ptr, lib: string, home: string, project: string) -> string {
+    ctx = naeb_policy_new(home, project, platform())
+    if ctx == null { return "out of memory" }
+    code = naeb_policy_load(ctx, lib)
+    if code != 0 {
+        e = string.copy(naeb_policy_error(ctx))
+        naeb_policy_free(ctx)
+        if code == 3 { return "${e}; rebuild the policy: naeb build" }
+        return e
+    }
+    n = naeb_policy_op_count(ctx)
+    i = 0
+    while i < n {
+        k = naeb_policy_op_kind(ctx, i)
+        a = naeb_policy_op_a(ctx, i)
+        match k {
+            1 -> { fence.allow_read(f, a) }
+            2 -> { fence.deny_read(f, a) }
+            3 -> { fence.allow_write(f, a) }
+            4 -> { fence.deny_write(f, a) }
+            5 -> { fence.allow_host(f, a, naeb_policy_op_port(ctx, i)) }
+            6 -> { fence.pass_env(f, a) }
+            7 -> { fence.set_env(f, a, naeb_policy_op_b(ctx, i)) }
+            8 -> { fence.allow_loopback(f) }
+            9 -> { fence.open_home(f) }
+            _ -> { }
+        }
+        i = i + 1
+    }
+    naeb_policy_free(ctx)
+    return ""
+}
+
+// "" when no root of `f` a fenced command may write holds `path`.
+outside_roots_(f: ptr, cwd: string, env: ptr, path: string, what: string) -> string {
+    sp = fence.resolve(f, cwd, "", env) as *jail.Spec
+    if jail.allows(sp.writes, canon_(path)) == 0 { return "" }
+    return "${what} ${path} lies inside a root the project fence lets commands write; keep ~/.naeb outside them"
+}
+
+// naeb's Fence for a process starting in `cwd`: (fence, notice, error).
+// No naeb.ae: the default fence (the project only, no egress) and a notice.
+// Otherwise naeb.ae must match what `naeb build` built, for this naeb's
+// interface, from outside every writable root; it is read-only to the
+// fenced. env: this process's environment as "NAME=value" (temp roots).
+start_fence(home: string, cwd: string, env: ptr) -> (ptr, string, string) {
+    project = canon_(jail.project_root(cwd))
+    f = fence.new(home)
+    src = atomic_file.join(project, FILE)
+    if fs.exists(src) == 0 {
+        return f, "naeb: no ${FILE} in ${project}: the default fence (the project only, no egress)", ""
+    }
+    fence.deny_write(f, src)
+    dir = dir_for(home, project)
+    lib = library_path(dir)
+    record, rerr = fs.read(atomic_file.join(dir, RECORD))
+    if rerr != "" {
+        return null, "", "${FILE} has not been built; review it and run: naeb build"
+    }
+    built_iface = record_field(record, "interface")
+    if built_iface != "${interface()}" {
+        return null, "", "the policy was built for interface ${built_iface}, this naeb speaks ${interface()}; rebuild the policy: naeb build"
+    }
+    if record_field(record, "project") != project {
+        return null, "", "the policy in ${dir} was built for ${record_field(record, "project")}, not ${project}; run: naeb build"
+    }
+    text, terr = fs.read(src)
+    if terr != "" { return null, "", "cannot read ${src}: ${terr}" }
+    if sha_of_text_(text) != record_field(record, "source_sha256") {
+        return null, "", "${FILE} changed since it was built; review it and run: naeb build"
+    }
+    if sha_of_file_(lib) != record_field(record, "library_sha256") {
+        return null, "", "the policy library ${lib} is not the one naeb build made; run: naeb build"
+    }
+    before = outside_roots_(f, cwd, env, dir, "the policy library's directory")
+    if before != "" { return null, "", before }
+    lerr = load(f, lib, home, project)
+    if lerr != "" { return null, "", lerr }
+    after = outside_roots_(f, cwd, env, dir, "the policy library's directory")
+    if after != "" { return null, "", after }
+    return f, "", ""
+}
+
+say_(fd: int, text: string) { io.fd_write(fd, string.bytes(text)) }
+
+// The unified diff from the approved copy (or nothing) to naeb.ae.
+diff_(old_path: string, new_path: string) -> string {
+    argv = list.list_new()
+    list.list_add(argv, "diff")
+    list.list_add(argv, "-u")
+    list.list_add(argv, "-L")
+    list.list_add(argv, "naeb.ae (approved)")
+    list.list_add(argv, "-L")
+    list.list_add(argv, "naeb.ae")
+    list.list_add(argv, old_path)
+    list.list_add(argv, new_path)
+    r = process.run(argv, null, null, null, 60000 as long, 16777216 as long) as *process.Result
+    if r.error != "" { return "(diff unavailable: ${r.error})\n" }
+    return r.output
+}
+
+// `naeb build [-y]` from `cwd`: shows naeb.ae's diff against the last
+// approved copy and asks confirm(question) (true: go on) unless yes is 1,
+// compiles the library against src (a naeb-code checkout), writes the
+// record and the approved copy. Exit status: 0 built, 1 not.
+build(home: string, cwd: string, src: string, yes: int, confirm: fn) -> int {
+    project = canon_(jail.project_root(cwd))
+    path = atomic_file.join(project, FILE)
+    text, terr = fs.read(path)
+    if terr != "" {
+        say_(2, "naeb: no ${FILE} to build in ${project} (${terr})\n")
+        return 1
+    }
+    if string.contains(text, "import naeb.policy") == 0 {
+        say_(2, "naeb: ${path} must import naeb.policy and define fence(p: ptr)\n")
+        return 1
+    }
+    policy_mod = "${src}/ae/policy_lib/naeb/policy/module.ae"
+    if src == "" || fs.exists(policy_mod) == 0 {
+        say_(2, "naeb: no naeb-code checkout at '${src}' (looked for ${policy_mod}); set NAEB_SRC\n")
+        return 1
+    }
+    dir = dir_for(home, project)
+    work = "${dir}/build"
+    mk = fs.mkdir_p(work)
+    if mk != "" {
+        say_(2, "naeb: cannot create ${work}: ${mk}\n")
+        return 1
+    }
+    fs.chmod("${home}/.naeb", 448)
+    approved = atomic_file.join(dir, FILE)
+    old, oerr = fs.read(approved)
+    if oerr != "" || old != text {
+        staged = "${work}/naeb.ae.proposed"
+        fs.write(staged, text)
+        before = approved
+        if oerr != "" { before = "/dev/null" }
+        say_(1, diff_(before, staged))
+        if yes == 0 {
+            int ok = call(confirm, "Build the policy with this change? [y/N] ")
+            if ok == 0 {
+                say_(2, "naeb: not built; the policy stays as it was\n")
+                return 1
+            }
+        }
+    }
+    entry = "${work}/policy.ae"
+    werr = fs.write(entry, "${text}${GLUE}")
+    if werr != "" {
+        say_(2, "naeb: cannot write ${entry}: ${werr}\n")
+        return 1
+    }
+    lib = library_path(dir)
+    tmp_lib = "${lib}.new"
+    argv = list.list_new()
+    list.list_add(argv, "ae")
+    list.list_add(argv, "build")
+    list.list_add(argv, "--emit=lib")
+    list.list_add(argv, entry)
+    list.list_add(argv, "--lib")
+    list.list_add(argv, "${src}/ae/policy_lib")
+    list.list_add(argv, "-o")
+    list.list_add(argv, tmp_lib)
+    r = process.run(argv, null, null, null, COMPILE_TIMEOUT_MS as long, 16777216 as long) as *process.Result
+    if r.error != "" || r.exit_code != 0 || fs.exists(tmp_lib) == 0 {
+        say_(2, r.output)
+        say_(2, "naeb: the policy did not compile (${r.error}exit ${r.exit_code}); nothing changed\n")
+        return 1
+    }
+    rn = fs.rename(tmp_lib, lib)
+    if rn != "" {
+        say_(2, "naeb: ${rn}\n")
+        return 1
+    }
+    src_sha = sha_of_text_(text)
+    lib_sha = sha_of_file_(lib)
+    record = "interface=${interface()}\nproject=${project}\nsource_sha256=${src_sha}\nlibrary_sha256=${lib_sha}\nnaeb_src=${src}\nnaeb_commit=${build_info.commit()}\n"
+    aerr = atomic_file.replace(approved, text, 384, 1, 1)
+    rerr = atomic_file.replace(atomic_file.join(dir, RECORD), record, 384, 1, 1)
+    if aerr != "" || rerr != "" {
+        say_(2, "naeb: cannot write the build record in ${dir}: ${aerr}${rerr}\n")
+        return 1
+    }
+    say_(1, "${src_sha}  ${path}\n${lib_sha}  ${lib}\nbuilt for interface ${interface()}: naeb in ${project} now runs with this policy\n")
+    return 0
+}

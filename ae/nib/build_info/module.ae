@@ -4,13 +4,17 @@
 
 @source("build_info.c")
 
-exports(VERSION, commit, nib_version, display_version)
+exports(VERSION, commit, source_dir, nib_version, display_version)
 
 const VERSION = "0.13.0"
 
 extern nib_build_commit() -> string
+extern nib_build_source_dir() -> string
 
 commit() -> string { return nib_build_commit() }
+
+// The naeb-code checkout this binary was built in, or "".
+source_dir() -> string { return nib_build_source_dir() }
 
 // build.zig.zon's version, plus +<commit> when the build had one.
 nib_version() -> string {

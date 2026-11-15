@@ -162,7 +162,7 @@ struct Tools {
     undo_dir: string       // a sub-agent's: the parent Turn's snapshot directory
     mcp_client: ptr        // *mcp.Client of the Session, or null
     mcp_enabled: int       // 1: an enabled server puts tools.mcp in the API
-    fence: ptr             // *fence.Fence the launcher gave, or null (upstream behaviour)
+    fence: ptr             // *fence.Fence naeb built, or null (upstream behaviour)
     proxy: ptr             // *egress.Proxy, made on first use under a fence
     proxy_guard: ptr
     fence_reason: string   // "?" until probed, then "" (a fenced child can be confined) or why not
@@ -225,7 +225,7 @@ new(home: string) -> ptr {
 }
 
 // A project fence (docs/naeb/adr/0001): from here on every tool and child
-// is held to it. The Fence is the launcher's, kept, not copied.
+// is held to it. The Fence is naeb's, kept, not copied.
 set_fence(tp: ptr, f: @keep ptr) { (tp as *Tools).fence = f }
 
 // The jail.Spec of the fence for the current directory (no network part),

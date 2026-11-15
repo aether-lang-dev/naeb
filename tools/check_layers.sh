@@ -69,6 +69,9 @@ expect_imports $T/jail/module.ae "nib.tools.atomic_file|nib.tools.rules|std.dir|
 # the fenced children's and tools.fetch's only way out.
 expect_imports $T/rules/module.ae "std.list|std.string"
 expect_imports ae/nib/fence/module.ae "nib.tools.atomic_file|nib.tools.jail|nib.tools.rules|std.fs|std.list|std.string"
+# naeb.ae: built by `naeb build` (diff, then `ae build --emit=lib` through
+# tools/process), checked against its record and dlopened at start (policy_host.c).
+expect_imports ae/nib/fence/policy/module.ae "nib.build_info|nib.fence|nib.tools.atomic_file|nib.tools.jail|nib.tools.process|std.cryptography|std.fs|std.io|std.list|std.os|std.string"
 expect_imports $T/egress/module.ae "nib.fence|nib.lock|std.fs|std.list|std.string|std.sync|std.tcp|std.worker"
 expect_imports $T/agent_sessions/module.ae "nib.lock|std.list|std.string"
 expect_imports $T/agent_input/module.ae "nib.jsonx|nib.provider.types|std.json|std.list|std.strbuilder|std.string"
@@ -120,8 +123,9 @@ expect_imports $T/mcp_tool/module.ae "nib.image|nib.jsonx|nib.mcp|std.encoding|s
 # exceptions named in the rules below).
 U=ae/nib/tui
 expect_imports ae/main.ae "nib.app"
-# The binary's body: ae/main.ae runs it with no fence, a project's launcher with its own.
-expect_imports ae/nib/app/module.ae "nib.auth|nib.config|nib.config.env|nib.fence|nib.jsonx|nib.provider.types|nib.run_replay|nib.sandbox|nib.session|nib.tools|nib.tools.agent_input|nib.tools.background|nib.tools.jail|nib.tui|nib.tui.clock|nib.tui.live|std.fs|std.io|std.list|std.os|std.signal|std.string|std.sync|std.worker|term|term.input"
+expect_imports ae/naeb_main.ae "nib.app"
+# The binaries' body: ae/main.ae (nib) runs it with no fence, ae/naeb_main.ae (naeb) with the project's.
+expect_imports ae/nib/app/module.ae "nib.auth|nib.build_info|nib.config|nib.config.env|nib.fence|nib.fence.policy|nib.jsonx|nib.provider.types|nib.run_replay|nib.sandbox|nib.session|nib.tools|nib.tools.agent_input|nib.tools.background|nib.tools.jail|nib.tui|nib.tui.clock|nib.tui.live|std.fs|std.io|std.list|std.os|std.signal|std.string|std.sync|std.worker|term|term.input"
 # `/model`'s listing (src/auth/models.zig): one GET of the provider's /models.
 expect_imports ae/nib/auth/models/module.ae "nib.jsonx|std.http.client|std.json|std.list|std.string|std.time"
 expect_imports $U/module.ae "nib.auth|nib.auth.models|nib.config|nib.config.env|nib.image|nib.jsonx|nib.provider.types|nib.session.skills|nib.session.tool_summary|nib.tools.changes|nib.tools.diff|nib.tui.agent_tree|nib.tui.app_queue|nib.tui.bill|nib.tui.clipboard|nib.tui.clock|nib.tui.commands|nib.tui.editor|nib.tui.entry|nib.tui.format|nib.tui.frames|nib.tui.long_text|nib.tui.menu|nib.tui.mode|nib.tui.open|nib.tui.paths|nib.tui.port|nib.tui.prediction|nib.tui.provider_flow|nib.tui.reflect|nib.tui.sel_history|nib.tui.selection|nib.tui.status|nib.tui.tasks|nib.tui.title|nib.tui.transcript|nib.tui.tui_view|nib.tui.turn|nib.tui.turn_changes|nib.tui.turn_summary|nib.tui.viewport|std.fs|std.json|std.list|std.os|std.strbuilder|std.string|std.sync|term|term.input|term.screen"
@@ -169,7 +173,7 @@ expect_imports $U/reflect/module.ae "nib.fserr|nib.jsonx|nib.tools.process|std.c
 expect_imports $U/open/module.ae "std.fs|std.list|std.map|std.os|std.strbuilder|std.string|std.worker"
 
 # Every module is pinned: a new one needs its line above.
-for f in ae/main.ae $(find ae/nib -name '*.ae' | sort); do
+for f in ae/main.ae ae/naeb_main.ae $(find ae/nib -name '*.ae' | sort); do
     case " $PINNED " in
         *" $f "*) ;;
         *) echo "FAIL $f has no expect_imports line"; fail=1 ;;
@@ -177,7 +181,7 @@ for f in ae/main.ae $(find ae/nib -name '*.ae' | sort); do
 done
 
 rule() {   # rule "what" "pattern" "allowed path regex"
-    hits=$(grep -rnE "$2" --include='*.ae' ae/nib ae/main.ae 2>/dev/null \
+    hits=$(grep -rnE "$2" --include='*.ae' ae/nib ae/main.ae ae/naeb_main.ae 2>/dev/null \
           | grep -vE "^($3)" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
     if [ -n "$hits" ]; then
         echo "FAIL $1:"
@@ -199,7 +203,7 @@ PROC="exec run_capture run_pipe run_pipe_drain_and_wait run_socket run_stdio run
 # ties a child to a Run (output capture, deadline, kill on cancel); a click is
 # outside any Run. So tui/open alone keeps spawn_proc_to (and os.wait on its
 # own worker to reap the child).
-for f in $(grep -rlE '^import std\.os( |$)' --include='*.ae' ae/nib ae/main.ae | sort); do
+for f in $(grep -rlE '^import std\.os( |$)' --include='*.ae' ae/nib ae/main.ae ae/naeb_main.ae | sort); do
     case $f in $T/process/*|$T/jail/*) continue ;; esac
     stmt=$(awk '/^import std\.os( |$)/ { on = 1 } on { printf "%s ", $0; if ($0 ~ /\)/ || $0 ~ /^import std\.os$/) exit }' "$f")
     keep=""
@@ -247,6 +251,15 @@ rule "the /model listing is reached only from the TUI's app and its provider flo
     '^import nib\.auth\.models' "$U/module.ae|$U/provider_flow/"
 rule "the TUI reaches the Session only through its live port" \
     '^import nib\.session$' "$U/live/|ae/nib/app/|ae/nib/tools/agent/|ae/nib/session/"
+
+# A project's policy library is compiled against ae/policy_lib alone: its
+# modules import nothing of nib (no copy of naeb's layouts) and nothing with a
+# capability (--emit=lib refuses those anyway).
+if grep -rnE '^import ' ae/policy_lib | grep -vE ':import (naeb\.policy|std\.(string|list|map|math))$' >/dev/null; then
+    echo "FAIL ae/policy_lib imports beyond naeb.policy and pure std:"; grep -rnE '^import ' ae/policy_lib | grep -vE ':import (naeb\.policy|std\.(string|list|map|math))$' | sed 's/^/       /'; fail=1
+else
+    echo "ok   ae/policy_lib imports only naeb.policy and pure std"
+fi
 
 # ae/term stands alone: nothing of nib.
 if grep -rnE '^import nib\.' ae/term >/dev/null 2>&1; then echo "FAIL ae/term imports nib"; fail=1; else echo "ok   ae/term imports nothing of nib"; fi

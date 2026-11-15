@@ -1,0 +1,113 @@
+// naeb.policy: what a project's naeb.ae writes its fence with
+// (docs/naeb/adr/0001). naeb build compiles naeb.ae into a small shared
+// library; naeb loads it at start and calls it with a table of functions
+// (struct naeb_fence_api in nib-code ae/nib/fence/policy/policy_host.c) and
+// the Fence it is filling. Nothing of naeb is compiled in here: every call
+// goes through the table, naeb copies the strings it is given, and the
+// library is capability-empty (no fs, os, net or extern), so a policy can
+// only declare, not act.
+//
+//     import naeb.policy
+//     import naeb_templates.maven
+//
+//     fence(p: ptr) {
+//         maven.apply(p)
+//         policy.allow_host(p, "repo.example.com", 443)
+//     }
+//
+// Paths may start with "~/" ($HOME) and may be relative to the project
+// (deny_write).
+
+exports(INTERFACE, open, allow_read, deny_read, allow_write, deny_write, allow_host, pass_env, set_env,
+        allow_loopback, open_home, home, project_root, platform)
+
+// The table's version. naeb refuses a library built for another: append to
+// the table and bump this together with naeb's NAEB_POLICY_INTERFACE.
+const INTERFACE = 1
+
+// struct naeb_fence_api, field for field: its layout is the interface.
+struct Api {
+    version: long
+    allow_read: ptr      // void (*)(void *fence, const char *path)
+    deny_read: ptr
+    allow_write: ptr
+    deny_write: ptr
+    allow_host: ptr      // void (*)(void *fence, const char *host, int32_t port)
+    pass_env: ptr        // void (*)(void *fence, const char *name)
+    set_env: ptr         // void (*)(void *fence, const char *name, const char *value)
+    allow_loopback: ptr  // void (*)(void *fence)
+    open_home: ptr
+    home: ptr            // const char *(*)(void *fence)
+    project_root: ptr
+    platform: ptr
+}
+
+struct Policy {
+    api: ptr
+    fence: ptr
+}
+
+// The handle a policy's fence(p) gets; null when naeb speaks another
+// interface.
+open(api: @keep ptr, fence: @keep ptr) -> ptr {
+    a = api as *Api
+    if a.version != INTERFACE as long { return null }
+    p = heap.new(Policy)
+    p.api = api
+    p.fence = fence
+    return p as ptr
+}
+
+api_(p: ptr) -> *Api { return (p as *Policy).api as *Api }
+fence_(p: ptr) -> ptr { return (p as *Policy).fence }
+
+path_call_(p: ptr, fp: ptr, path: string) {
+    f = fp as fn(ptr, string)
+    f(fence_(p), path)
+}
+
+// Readable to commands and naeb's tools (a secret on naeb's list only when
+// named exactly).
+allow_read(p: ptr, path: string) { path_call_(p, api_(p).allow_read, path) }
+deny_read(p: ptr, path: string) { path_call_(p, api_(p).deny_read, path) }
+// A writable root beyond the project and temp dirs.
+allow_write(p: ptr, path: string) { path_call_(p, api_(p).allow_write, path) }
+// Read-only inside a writable root (absolute, or relative to the project).
+deny_write(p: ptr, path: string) { path_call_(p, api_(p).deny_write, path) }
+
+// Egress through naeb's proxy; a host "*.example.com" matches below it.
+allow_host(p: ptr, host: string, port: int) {
+    f = api_(p).allow_host as fn(ptr, string, int)
+    f(fence_(p), host, port)
+}
+
+// A variable of naeb's environment that commands keep.
+pass_env(p: ptr, name: string) { path_call_(p, api_(p).pass_env, name) }
+
+// A variable set for every fenced command.
+set_env(p: ptr, name: string, value: string) {
+    f = api_(p).set_env as fn(ptr, string, string)
+    f(fence_(p), name, value)
+}
+
+// macOS: localhost reachable by commands (tests that bind a port). A named hole.
+allow_loopback(p: ptr) {
+    f = api_(p).allow_loopback as fn(ptr)
+    f(fence_(p))
+}
+
+// $HOME readable except naeb's secrets list.
+open_home(p: ptr) {
+    f = api_(p).open_home as fn(ptr)
+    f(fence_(p))
+}
+
+getter_(p: ptr, fp: ptr) -> string {
+    f = fp as fn(ptr) -> string
+    return f(fence_(p))
+}
+
+home(p: ptr) -> string { return getter_(p, api_(p).home) }
+project_root(p: ptr) -> string { return getter_(p, api_(p).project_root) }
+// "macos" or "linux".
+platform(p: ptr) -> string { return getter_(p, api_(p).platform) }

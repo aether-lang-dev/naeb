@@ -1,0 +1,21 @@
+// A fence template for Gradle projects (docs/naeb/adr/0001). Caches and the
+// wrapper's distributions only: ~/.gradle/init.d and init.gradle would run
+// on every later build outside naeb, and gradle.properties holds
+// credentials, so neither is writable (the latter not readable either).
+
+import naeb.policy
+
+exports(apply)
+
+apply(p: ptr) {
+    policy.allow_read(p, "~/.gradle/caches")
+    policy.allow_write(p, "~/.gradle/caches")
+    policy.allow_read(p, "~/.gradle/wrapper")
+    policy.allow_write(p, "~/.gradle/wrapper")
+    policy.allow_host(p, "services.gradle.org", 443)
+    policy.allow_host(p, "downloads.gradle.org", 443)
+    policy.allow_host(p, "plugins.gradle.org", 443)
+    policy.allow_host(p, "repo.maven.apache.org", 443)
+    policy.pass_env(p, "JAVA_HOME")
+    policy.pass_env(p, "GRADLE_OPTS")
+}

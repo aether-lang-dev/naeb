@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """A fence refusal is reported with the command that caused it (docs/naeb/adr/0001).
 
-Drives the red-team launcher (NAEB) with `js`, and with `ask` against the
+Drives naeb (NAEB) with `js`, and with `ask` against the
 local mock provider of tests/ for an MCP stdio server, in a fixture HOME of
 absolute fake paths, against hosts under `.invalid`: the proxy refuses them before
 resolving anything, so nothing leaves the machine and no real home or secret
-is touched.
+is touched. The fixture project has no naeb.ae, so naeb runs it inside the
+default fence (no egress at all).
 
-    NAEB=target/redteam/naeb-redteam python3 -I ae/tests/redteam/attribution.py
+    NAEB=target/build/bin/naeb python3 -I ae/tests/redteam/attribution.py
 
 Prints `ok   <case>` or `FAIL <case> ...`; the exit status is the number of
 failures (100 on a broken fixture).
@@ -24,7 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
 from mock_providers import Mock  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-NAEB = os.environ.get("NAEB", os.path.join(ROOT, "target/redteam/naeb-redteam"))
+NAEB = os.environ.get("NAEB", os.path.join(ROOT, "target/build/bin/naeb"))
 
 SCRIPT = r'''
 const out = {};

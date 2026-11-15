@@ -1,9 +1,9 @@
 // The nib binary (its name is set once, in .build.ae's output()): nib.app
-// with no project fence, as upstream behaves. A project's launcher calls
-// app.run with its own fence instead (docs/naeb/adr/0001).
+// with no project fence, as upstream behaves. ae/naeb_main.ae is the fenced
+// one (docs/naeb/adr/0001).
 
 import nib.app
 
 main() {
-    app.run(null)
+    app.run_nib()
 }

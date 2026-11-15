@@ -1,0 +1,22 @@
+// A fence template for Maven projects (docs/naeb/adr/0001): a policy (naeb.ae)
+// imports it and calls maven.apply(p). The local repository, not ~/.m2:
+// settings.xml (credentials, mirrors) stays unreadable and unwritable.
+// Maven Central only; add mirrors and plugin repositories in naeb.ae.
+// Unverified: whether a given Maven version's transport honours the JVM
+// proxy properties naeb sets; where it does not, add a <proxy> to a
+// settings file outside the project and pass it with -s.
+
+import naeb.policy
+
+exports(apply)
+
+apply(p: ptr) {
+    policy.allow_read(p, "~/.m2/repository")
+    policy.allow_write(p, "~/.m2/repository")
+    policy.allow_read(p, "~/.m2/wrapper")
+    policy.allow_write(p, "~/.m2/wrapper")
+    policy.allow_host(p, "repo.maven.apache.org", 443)
+    policy.allow_host(p, "repo1.maven.org", 443)
+    policy.pass_env(p, "JAVA_HOME")
+    policy.pass_env(p, "MAVEN_OPTS")
+}

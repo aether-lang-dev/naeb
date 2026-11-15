@@ -1,5 +1,7 @@
-// The nib binary, built from the Aether port under ae/. The binary's name
-// is set here and nowhere else (the port may become `naeb`).
+// The two binaries of the Aether port under ae/: `nib`, upstream's
+// behaviour with no project fence, and `naeb`, always fenced by the
+// project's policy (docs/naeb/adr/0001). Their names are set here and
+// nowhere else.
 
 import bldr
 import aether
@@ -11,7 +13,8 @@ import std.string
 
 // The Session header's nib_version carries the commit, as upstream's
 // build.zig does: written to a gitignored header the build_info module's C
-// side includes when present.
+// side includes when present, with this checkout's path (naeb build
+// compiles policies against its ae/policy_lib).
 write_commit_() {
     argv = list.list_new()
     list.list_add(argv, "rev-parse")
@@ -21,6 +24,7 @@ write_commit_() {
     c = string.trim(out)
     text = "#define NIB_COMMIT \"${c}\"\n"
     if err != "" || code != 0 { text = "" }
+    text = "${text}#define NAEB_SRC \"${os.getcwd()}\"\n"
     path = "ae/nib/build_info/commit.h"
     old, rerr = fs.read(path)
     if rerr == "" && old == text { return }
@@ -34,6 +38,11 @@ aeb(cap) {
             source("ae/main.ae")
             lib("ae")
             output("nib")
+        }
+        aether.program() {
+            source("ae/naeb_main.ae")
+            lib("ae")
+            output("naeb")
         }
         return 0
     }

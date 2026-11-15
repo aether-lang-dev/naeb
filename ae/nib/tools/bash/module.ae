@@ -296,7 +296,7 @@ execute(cp: ptr, command: string, timeout_ms: long, detached: int, id: string, t
 
 // Closes the command's channel to the fence's proxy, if any, and names what
 // the proxy refused this command's processes as a ",\"fence_denied\":[...]"
-// member (the model proposes a launcher change from it), or "".
+// member (the model proposes a naeb.ae change from it), or "".
 fence_denied_(c: *Ctx) -> string {
     if c.channel == null { return "" }
     d = egress.channel_close(c.channel)

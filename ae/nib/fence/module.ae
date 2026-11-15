@@ -1,6 +1,7 @@
 // fence: a project's fence against supply-chain attacks
-// (docs/naeb/adr/0001). A project's launcher builds one in Aether code and
-// hands it to nib.app.run; nothing here is module state. One Fence drives
+// (docs/naeb/adr/0001). naeb builds one from the project's policy (naeb.ae,
+// loaded by nib.fence.policy) and hands it to nib.app; nothing here is
+// module state. One Fence drives
 // both layers: the in-process tools check paths and hosts against it, and
 // every child naeb starts runs inside the jail.Spec it resolves to.
 //
@@ -9,13 +10,14 @@
 //     fence.allow_write(f, "~/.m2/repository")
 //     fence.allow_host(f, "repo.maven.apache.org", 443)
 //     fence.pass_env(f, "JAVA_HOME")
+//     fence.set_env(f, "BUNDLE_USER_HOME", "/work/proj/.bundle/user")
 //
 // Reads: $HOME is closed except the project, the writable roots, the
 // allowed paths and ~/.gitconfig; a built-in secrets list stays denied even
 // inside them unless allow_read names exactly that path. Writes: the project,
 // temp dirs and devices, plus allow_write; .git/hooks, .git/config and
 // deny_write paths stay read-only. Egress: only allow_host pairs, through
-// naeb's proxy.
+// naeb's proxy. Environment: an allow-list, pass_env names and set_env pairs.
 
 import std.fs
 import std.list
@@ -25,7 +27,7 @@ import nib.tools.jail
 import nib.tools.rules
 
 exports(Fence, new, open_home, allow_read, deny_read, allow_write, deny_write, allow_host, pass_env,
-        allow_loopback, launcher_source, source_of, host_allowed, resolve, child_env, proxy_env, read_rules, write_denied, SECRETS)
+        set_env, allow_loopback, host_allowed, resolve, child_env, proxy_env, read_rules, write_denied, SECRETS)
 
 // Relative to $HOME: denied to every fenced reader unless allowed exactly.
 const SECRETS[] = [".ssh", ".aws", ".gnupg", ".config/gh", ".config/gcloud", ".azure", ".kube", ".docker",
@@ -59,8 +61,8 @@ struct Fence {
     write_deny: ptr    // absolute, or relative to the project
     hosts: ptr         // "host:port"; a host "*.example.com" matches below it
     env_pass: ptr
+    env_set: ptr       // "NAME=value", set for every fenced child
     loopback: int      // macOS: localhost reachable by children
-    source: string     // the launcher's own source, relative to the project, or ""
 }
 
 new(home: string) -> ptr {
@@ -73,12 +75,12 @@ new(home: string) -> ptr {
     f.write_deny = list.list_new()
     f.hosts = list.list_new()
     f.env_pass = list.list_new()
+    f.env_set = list.list_new()
     f.loopback = 0
-    f.source = ""
     return f as ptr
 }
 
-// Copies: a launcher may pass getenv() results, which naeb zeroes at start-up.
+// Copies: a caller may pass getenv() results, which naeb zeroes at start-up.
 expand_(f: *Fence, path: string) -> string { return string.copy(jail.expand_home(f.home, path)) }
 
 open_home(fp: ptr) { (fp as *Fence).home_open = 1 }
@@ -88,13 +90,8 @@ allow_write(fp: ptr, path: string) { list.list_add((fp as *Fence).write_allow, e
 deny_write(fp: ptr, path: string) { list.list_add((fp as *Fence).write_deny, expand_(fp as *Fence, path)) }
 allow_host(fp: ptr, host: string, port: int) { list.list_add((fp as *Fence).hosts, string.copy("${string.to_lower(host)}:${port}")) }
 pass_env(fp: ptr, name: string) { list.list_add((fp as *Fence).env_pass, string.copy(name)) }
+set_env(fp: ptr, name: string, value: string) { list.list_add((fp as *Fence).env_set, string.copy("${name}=${value}")) }
 allow_loopback(fp: ptr) { (fp as *Fence).loopback = 1 }
-
-// The launcher's source inside the project (e.g. "naeb-launcher/naeb.ae"):
-// naeb refuses to start when it differs from the source the launcher was
-// built from, as recorded beside the binary (nib.app, "<exe>.built").
-launcher_source(fp: ptr, path: string) { (fp as *Fence).source = string.copy(path) }
-source_of(fp: ptr) -> string { return (fp as *Fence).source }
 
 host_allowed(fp: ptr, host: string, port: int) -> int {
     f = fp as *Fence
@@ -138,7 +135,7 @@ add_rule_(out: ptr, kind: string, path: string) {
     if has_(out, r) == 0 { list.list_add(out, r) }
 }
 
-// $HOME as the launcher gave it and the account's home from the user
+// $HOME as the Fence was given it and the account's home from the user
 // database, when they differ: both are closed.
 homes_(f: *Fence) -> ptr {
     out = list.list_new()
@@ -278,7 +275,8 @@ has_prefix_(l: ptr, prefix: string) -> int {
 }
 
 // A fenced child's environment: only the kept names of `base` ("NAME=value"
-// list), then the proxy's variables when proxy_url is not "".
+// list), then the set_env pairs (in place of base's), then the proxy's
+// variables when proxy_url is not "".
 child_env(fp: ptr, base: ptr, proxy_url: string) -> ptr {
     f = fp as *Fence
     out = list.list_new()
@@ -287,7 +285,13 @@ child_env(fp: ptr, base: ptr, proxy_url: string) -> ptr {
     while i < n {
         e, _e = list.get_string(base, i)
         eq = string.index_of(e, "=")
-        if eq > 0 && keep_(f, string.substring(e, 0, eq)) == 1 { list.list_add(out, e) }
+        if eq > 0 && keep_(f, string.substring(e, 0, eq)) == 1 && has_prefix_(f.env_set, string.substring(e, 0, eq + 1)) == 0 { list.list_add(out, e) }
+        i = i + 1
+    }
+    i = 0
+    while i < list.list_size(f.env_set) {
+        s, _es = list.get_string(f.env_set, i)
+        list.list_add(out, s)
         i = i + 1
     }
     if has_prefix_(out, "HOME=") == 0 && string.length(f.home) > 0 { list.list_add(out, "HOME=${f.home}") }

@@ -1,5 +1,7 @@
-// app: the nib binary's body, upstream src/main.zig; ae/main.ae runs it
-// with no fence, a project's launcher (docs/naeb/adr/0001) with its own. This slice has `nib ask [--json] [-c|--resume <id>]
+// app: the body of both binaries, upstream src/main.zig. run_nib (ae/main.ae)
+// runs with no fence, as upstream; run_naeb (ae/naeb_main.ae) always with the
+// project's (docs/naeb/adr/0001: naeb.ae through nib.fence.policy, else the
+// default fence), plus `naeb build [-y]`. This slice has `nib ask [--json] [-c|--resume <id>]
 // [--effort <level>] <prompt|->`, `nib js '<code>'`, `nib login`/`logout`
 // (API keys only), `--help` and `--version`, and the hidden
 // `nib __jail [-w <root>]... -- <command>...` helper the Linux write sandbox
@@ -16,7 +18,6 @@ import std.string
 import std.list
 import std.fs
 import std.io
-import std.cryptography
 import std.sync
 import std.worker
 import std.signal
@@ -25,6 +26,8 @@ import nib.sandbox
 import nib.tools
 import nib.tools.jail
 import nib.fence
+import nib.fence.policy
+import nib.build_info
 import nib.tools.background
 import nib.tools.agent_input
 import nib.provider.types
@@ -39,7 +42,7 @@ import nib.tui
 import nib.tui.live
 import nib.tui.clock
 
-exports(run)
+exports(run_nib, run_naeb)
 
 const HELP = "nib · a coding agent whose unit of work is a Run\n\nUsage:\n  nib [options]                         Open the TUI\n  nib ask [options] <prompt|->           Ask once; - reads stdin\n  nib js <code>                         Run sandbox JavaScript\n  nib login [service] [--device]        Sign in or store a key; no service lists them\n  nib update [version]                  Upgrade in place\n  nib logout <service>                  Remove nib's stored credential\n  nib replay <session-id> --all [--json] Replay recorded Runs offline\n\nOptions:\n  -h, --help            Show help\n  -V, --version         Show version\n  -c, --continue        Continue this directory's latest session\n  --resume <id>         Resume a session (32 lowercase hex characters)\n  --effort <level>      Set reasoning effort; /effort lists levels\n  --json                Stream NDJSON events (ask only)\n\nTUI: Enter sends · Shift+Enter adds a line · Esc cancels · Ctrl+O opens latest details · click a Run\nType / for commands, /help for keys, /status for timing and cache details.\nFirst run: nib, then /provider to sign in; /model picks a model.\nSetup: see README.md and docs/config.md.\n"
 
@@ -115,103 +118,49 @@ own_path_(envp: ptr) -> string {
     return found
 }
 
-// A fenced naeb will not run from inside a root its children may write:
-// a child could rebuild the launcher and widen the next run's fence.
-launcher_outside_roots_(f: ptr, envp: ptr) {
+// naeb will not run from inside a root its children may write: a child
+// could replace the binary and widen the next run's fence.
+naeb_outside_roots_(f: ptr, envp: ptr) {
     exe = own_path_(envp)
     if exe == "" { return }
     sp = fence.resolve(f, os.getcwd(), "", env.pairs(envp)) as *jail.Spec
     if jail.allows(sp.writes, exe) == 0 { return }
-    eprint_("naeb: the launcher ${exe} lies inside a root the project fence lets commands write; build it outside the project (docs/naeb/adr/0001)\n")
+    eprint_("naeb: the naeb binary ${exe} lies inside a root the project fence lets commands write; install it outside the project (docs/naeb/adr/0001)\n")
     exit(2)
 }
 
-// The build record beside a launcher binary, "<exe>.built": lines
-// "source_sha256=<hex>", "naeb_src=<checkout>", "naeb_commit=<hex>", written
-// by the build outside the project, where no fenced command can rewrite it.
-built_field_(record: string, name: string) -> string {
-    lines = string.split(record, "\n")
-    out = ""
-    i = 0
-    while i < string.array_size(lines) {
-        l = string.array_get(lines, i)
-        if string.starts_with(l, "${name}=") == 1 { out = string.trim(string.substring(l, string.length(name) + 1, string.length(l))) }
-        i = i + 1
+// The y/N of `naeb build`: true only for "y" or "yes" on stdin; EOF is no.
+confirm_() -> fn {
+    return |question: string| {
+        io.fd_write(1, string.bytes(question))
+        line, eof, err = io.fd_read_line_status(0)
+        if err != "" || (eof == true && string.length(line) == 0) {
+            io.fd_write(1, string.bytes("\n"))
+            return 0
+        }
+        t = string.to_lower(string.trim(line))
+        if t == "y" || t == "yes" { return 1 }
+        return 0
     }
-    string.array_free(lines)
-    return out
 }
 
-// A checkout's HEAD commit, read from .git without running git; "" if unknown.
-// A worktree's .git is a file naming its git dir, whose refs live in the
-// common dir.
-git_head_(dir: string) -> string {
-    git = "${dir}/.git"
-    common = git
-    link, lkerr = fs.read(git)
-    if lkerr == "" && string.starts_with(link, "gitdir: ") == 1 {
-        git = string.trim(string.substring(link, 8, string.length(link)))
-        common = git
-        cd, cderr = fs.read("${git}/commondir")
-        if cderr == "" {
-            c = string.trim(cd)
-            common = c
-            if string.starts_with(c, "/") == 0 { common = "${git}/${c}" }
+// `naeb build [-y]`: review and build this project's policy (nib.fence.policy).
+build_(envp: ptr) -> int {
+    yes = 0
+    i = 2
+    while i < os.args_count() {
+        a = os.args_get(i)
+        if a == "-y" || a == "--yes" {
+            yes = 1
+        } else {
+            eprint_("naeb: usage: naeb build [-y]\n")
+            return 1
         }
-    }
-    head, err = fs.read("${git}/HEAD")
-    if err != "" { return "" }
-    head = string.trim(head)
-    if string.starts_with(head, "ref: ") == 0 { return head }
-    ref = string.substring(head, 5, string.length(head))
-    loose, lerr = fs.read("${common}/${ref}")
-    if lerr == "" { return string.trim(loose) }
-    packed, perr = fs.read("${common}/packed-refs")
-    if perr != "" { return "" }
-    lines = string.split(packed, "\n")
-    out = ""
-    i = 0
-    while i < string.array_size(lines) {
-        l = string.array_get(lines, i)
-        if string.ends_with(l, " ${ref}") == 1 { out = string.substring(l, 0, string.index_of(l, " ")) }
         i = i + 1
     }
-    string.array_free(lines)
-    return out
-}
-
-// A fenced naeb whose launcher names its source refuses to start when that
-// source changed since the build (a pending edit, or a pull that brought one):
-// the change is reviewed and rebuilt before it can take effect. A naeb-code
-// checkout that moved on since the build is only a warning.
-launcher_source_current_(f: ptr, envp: ptr) {
-    src = fence.source_of(f)
-    if src == "" { return }
-    exe = own_path_(envp)
-    path = "${jail.project_root(os.getcwd())}/${src}"
-    record, rerr = fs.read("${exe}.built")
-    if exe == "" || rerr != "" {
-        eprint_("naeb: no build record beside the launcher (${exe}.built); build it with its build script\n")
-        exit(2)
-    }
-    text, terr = fs.read(path)
-    if terr != "" {
-        eprint_("naeb: cannot read the launcher source ${path}: ${terr}\n")
-        exit(2)
-    }
-    h, _he = cryptography.sha256_hex(string.bytes(text))
-    if h != built_field_(record, "source_sha256") {
-        eprint_("naeb: ${src} changed since this launcher was built; review the change and rebuild the launcher\n")
-        exit(2)
-    }
-    naeb_src = built_field_(record, "naeb_src")
-    built_commit = built_field_(record, "naeb_commit")
-    if naeb_src != "" && built_commit != "" {
-        now = git_head_(naeb_src)
-        if now != "" && now != built_commit {
-            eprint_("naeb: ${naeb_src} has moved on since this launcher was built; rebuild it when convenient\n")
-        }
-    }
+    src = env.get(envp, "NAEB_SRC")
+    if src == "" { src = build_info.source_dir() }
+    return policy.build(env.get(envp, "HOME"), os.getcwd(), src, yes, confirm_())
 }
 
 read_stdin_() -> string {
@@ -336,8 +285,9 @@ replay_error_message_(err: string) -> string {
 
 zero_usage_() -> string { return types.usage_json(types.usage_new()) }
 
-help_(envp: ptr) {
+help_(envp: ptr, fenced: int) {
     print(HELP)
+    if fenced == 1 { println("naeb: fenced by the project's naeb.ae; naeb build [-y] reviews and builds it.") }
     home, herr = config.home(envp)
     if herr == "" {
         cfg, err, _d = config.load(envp, home)
@@ -410,24 +360,50 @@ print_event_(ev: string) {
     jsonx.free(v)
 }
 
-// The whole program. fence: the launcher's *fence.Fence, or null.
-run(fence: @keep ptr) {
-    if fence != null { jail.scrub_environ() }
+jail_helper_() {
     n = os.args_count()
     if n >= 2 && os.args_get(1) == jail.HELPER_COMMAND {
         println("nib __jail: ${jail.helper(rest_args_(2))}")
         exit(126)
     }
-    envp = env.from_process()
-    if fence != null {
-        launcher_outside_roots_(fence, envp)
-        launcher_source_current_(fence, envp)
+}
+
+// The nib binary: upstream's behaviour, no project fence.
+run_nib() {
+    jail_helper_()
+    run_(env.from_process(), null)
+}
+
+// The naeb binary: the project's fence, always.
+run_naeb() {
+    jail_helper_()
+    if os.args_count() >= 2 && os.args_get(1) == "build" {
+        code = build_(env.from_process())
+        if code != 0 { exit(code) }
+        return
     }
+    jail.scrub_environ()
+    envp = env.from_process()
+    f, notice, err = policy.start_fence(env.get(envp, "HOME"), os.getcwd(), env.pairs(envp))
+    if err != "" {
+        eprint_("naeb: ${err}\n")
+        exit(2)
+    }
+    if notice != "" { eprint_("${notice}\n") }
+    naeb_outside_roots_(f, envp)
+    run_(envp, f)
+}
+
+// The whole program. fence: naeb's *fence.Fence, or null (nib).
+run_(envp: @keep ptr, fence: @keep ptr) {
+    n = os.args_count()
     i = 1
     while i < n {
         h = os.args_get(i)
         if h == "--help" || h == "-h" {
-            help_(envp)
+            fenced = 0
+            if fence != null { fenced = 1 }
+            help_(envp, fenced)
             return
         }
         i = i + 1

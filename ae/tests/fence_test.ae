@@ -16,8 +16,6 @@ import nib.tools.search
 import nib.tools.files
 import nib.tools.file_state
 import nib.tools.egress
-import naeb_templates.maven
-import naeb_templates.gradle
 
 tmp_() -> string {
     d, _e = fs.make_temp_dir("", "naeb-fence")
@@ -137,18 +135,6 @@ main() {
             spec.assert_eq(rules.allows(sp.reads, "${base}/home/.aws/credentials"), 0, "a missing secret")
             fs.remove_tree(base)
         }
-        spec.it("templates open a toolchain's cache and hosts, never its credentials or init scripts") callback {
-            f = fence.new("/h")
-            maven.apply(f)
-            gradle.apply(f)
-            sp = fence.resolve(f, "/tmp", "", null) as *jail.Spec
-            spec.assert_eq(rules.allows(sp.reads, "/h/.m2/repository/org/x.jar"), 1, "maven repository")
-            spec.assert_eq(rules.allows(sp.reads, "/h/.m2/settings.xml"), 0, "maven settings")
-            spec.assert_eq(rules.inside(sp.writes, "/h/.m2/settings.xml"), 0, "settings not writable")
-            spec.assert_eq(rules.inside(sp.writes, "/h/.gradle/init.d/evil.gradle"), 0, "gradle init.d not writable")
-            spec.assert_eq(rules.allows(sp.reads, "/h/.gradle/gradle.properties"), 0, "gradle properties")
-            spec.assert_eq(fence.host_allowed(f, "repo.maven.apache.org", 443), 1, "central")
-        }
         spec.it("hosts match by name and port, a *. pattern below its domain") callback {
             f = fence.new("/h")
             fence.allow_host(f, "Repo.Maven.Apache.org", 443)
@@ -174,6 +160,19 @@ main() {
             spec.assert_eq(has_(env, "LC_ALL=C"), 1, "locale")
             spec.assert_eq(has_(env, "HTTPS_PROXY=http://127.0.0.1:3128"), 1, "proxy")
             spec.assert_eq(has_(env, "JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=3128 -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=3128 -Dhttp.nonProxyHosts="), 1, "jvm")
+        }
+        spec.it("set_env gives every child a variable, in place of naeb's own") callback {
+            f = fence.new("/h")
+            fence.set_env(f, "BUNDLE_USER_HOME", "/p/.bundle/user")
+            fence.set_env(f, "LANG", "C.UTF-8")
+            base = list.list_new()
+            list.list_add(base, "LANG=en_GB.UTF-8")
+            list.list_add(base, "BUNDLE_USER_HOME=/h/.bundle")
+            env = fence.child_env(f, base, "")
+            spec.assert_eq(has_(env, "BUNDLE_USER_HOME=/p/.bundle/user"), 1, "set")
+            spec.assert_eq(has_(env, "BUNDLE_USER_HOME=/h/.bundle"), 0, "naeb's value not passed")
+            spec.assert_eq(has_(env, "LANG=C.UTF-8"), 1, "kept name replaced")
+            spec.assert_eq(has_(env, "LANG=en_GB.UTF-8"), 0, "old value dropped")
         }
     }
     spec.describe(fw, "tools.jail, a fence's Spec") {
