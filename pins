@@ -36,4 +36,8 @@
 AE_PIN=0.916.0
 
 # v0.344 (2026-11-12): aether.program and aether.program_test with lib().
-AEB_REF=v0.344
+# v0.347 (2026-11-15): `aeb .tests.ae` refuses an unclosed or nested builder
+# block and never reports PASS for tests that did not run (v0.344 printed PASS
+# with 71 of 82 test programs built). Verified: installed with get.sh at this
+# pin, aeb .build.ae and aeb .tests.ae 86/86 on macOS arm64.
+AEB_REF=v0.347
