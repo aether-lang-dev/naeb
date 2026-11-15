@@ -35,6 +35,7 @@ out.write = await show(tools.bash({command: 'echo x > ~/planted; mkdir ~/planted
 out.hook = await show(tools.bash({command: 'echo x >> .git/hooks/pre-commit; echo done', timeout_ms: 30000}));
 out.ordinary = await show(tools.bash({command: 'cat locked.txt; echo done', timeout_ms: 30000}));
 out.clean = await show(tools.bash({command: 'echo clean', timeout_ms: 30000}));
+out.curl = await show(tools.bash({command: 'curl -sS -m 5 -o /dev/null https://curl-denied.invalid/ 2>/dev/null; echo done', timeout_ms: 30000}));
 const [a, b] = await Promise.all([
   show(tools.bash({command: 'sleep 1; cat ~/.ssh/id_fake; sleep 1; echo a', timeout_ms: 30000})),
   show(tools.bash({command: 'sleep 0.5; echo b; sleep 2', timeout_ms: 30000})),
@@ -151,6 +152,11 @@ def main():
           "an ordinary EACCES was told %r" % results.get("ordinary", "")[:400])
     clean = parsed(results.get("clean", ""))
     check("clean-unchanged", clean == {"exit_code": 0, "output": "clean\n"}, "a clean command got %r" % results.get("clean", "")[:300])
+    # CoreFoundation's text-encoding preference (~/.CFUserTextEncoding, of
+    # the account's home) is not a secret; a fenced curl must not report it.
+    curl = got("curl")
+    check("cf-text-encoding-not-named", curl is not None and not [e for e in curl if e.endswith("/.CFUserTextEncoding")],
+          "a fenced curl reported reads %r" % results.get("curl", "")[:400])
     ca = got("concurrent_a")
     cb = parsed(results.get("concurrent_b", ""))
     check("concurrent-own-refusal", ca is not None and "read %s" % key in ca, "a got %r" % results.get("concurrent_a", "")[:300])

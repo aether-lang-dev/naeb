@@ -535,7 +535,8 @@ mode) the same fixtures find 15 holes on macOS.
 2. Should naeb's own provider traffic (models, web search) also be limited to
    the Fence's hosts? It is not now: the provider is naeb's, not the project's.
 3. The default home allow-list: only `~/.gitconfig` and `~/.config/git`
-   are readable by default; everything else comes from templates. Too tight?
+   (and on macOS `~/.CFUserTextEncoding`, which CoreFoundation programs
+   such as curl read) are readable by default; everything else comes from templates. Too tight?
 4. macOS loopback: keep it closed by default (tests binding localhost fail)
    or open it and accept local services as reachable?
 5. Linux below Landlock ABI 9: refusing `socket(AF_UNIX)` breaks tools that

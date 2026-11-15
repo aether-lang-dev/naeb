@@ -47,6 +47,11 @@ const SECRET_COUNT = 36
 const HOME_READS[] = [".gitconfig", ".config/git"]
 const HOME_READ_COUNT = 2
 
+// macOS only, likewise: CoreFoundation (curl, python3, git, ...) reads the
+// text-encoding preference ("0x1F5:0x0:0x0") from the account's home.
+const MACOS_HOME_READS[] = [".CFUserTextEncoding"]
+const MACOS_HOME_READ_COUNT = 1
+
 // Names a fenced child keeps from naeb's environment (plus pass_env names).
 const ENV_KEEP[] = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "COLORTERM", "NO_COLOR", "LANG",
                     "LANGUAGE", "TZ", "TMPDIR", "PWD", "JAVA_HOME", "GOPATH", "GOROOT", "CARGO_HOME",
@@ -251,6 +256,13 @@ read_rules(fp: ptr, cwd: string, nib_home: string, writes: ptr) -> ptr {
             while k < HOME_READ_COUNT {
                 add_rule_(out, "+", canon_(atomic_file.join(home, HOME_READS[k])))
                 k = k + 1
+            }
+            if jail.os_name() == "macos" {
+                k = 0
+                while k < MACOS_HOME_READ_COUNT {
+                    add_rule_(out, "+", canon_(atomic_file.join(home, MACOS_HOME_READS[k])))
+                    k = k + 1
+                }
             }
         }
         h = h + 1
