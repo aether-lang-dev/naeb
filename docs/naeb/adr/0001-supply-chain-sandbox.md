@@ -44,8 +44,9 @@ are not limited at all.
   executable per project, about 17 s to build, and every naeb update meant
   rebuilding every launcher.)
 - The policy grows by trial and error: on a denial naeb proposes a `naeb.ae`
-  diff, the user approves, naeb rebuilds the library and re-execs with
-  `--resume <id>` between Turns.
+  diff, the user approves, naeb rebuilds the library and loads it between
+  Runs, in the same process and Session ("Approval in the TUI" below; the
+  re-exec with `--resume <id>` first planned here was not needed).
 
 ## Decision
 
@@ -232,7 +233,8 @@ why: `resolves to 127.0.0.1, a loopback address`. `suggestion` is the
 `naeb.ae` line that would allow it, as text only, absent where no policy
 line can (naeb's own files, `.git/hooks`, `.git/config`, `naeb.ae`, a path
 the policy itself denies). Nothing is ever widened automatically: the user
-edits `naeb.ae` and runs `naeb build`. Where the records are:
+approves a change in the TUI (below), or edits `naeb.ae` and runs `naeb
+build`. Where the records are:
 
 - a bash result (foreground, or a background one when it is delivered),
   an MCP call's result, a failed hook's payload: `fence_denied: [...]`;
@@ -359,8 +361,88 @@ shows the same as text (listed in `/help` and the menu only under naeb), and
   scripts that show the diff themselves). Only a successful compile replaces
   the library, the approved copy and the record. A deliberate departure from
   upstream's no-approvals rule (ADR 0006): the policy is the one thing the
-  model must not widen by itself. The in-TUI approval loop (propose a diff
-  on a denial, rebuild, re-exec `--resume`) is a later phase.
+  model must not widen by itself. The same departure is now in the TUI too
+  (below).
+
+### Approval in the TUI
+
+Implemented 2026-11-15, answering open question 6: a unified diff with y/N
+now; opening the proposed change in `$EDITOR` to adjust it before applying
+is the planned next step (TODO.md).
+
+- **What is offered.** The TUI collects every refusal record with a
+  `suggestion` from Run results (`run_end`'s `fence_denied`) and delivered
+  background bash results. Records whose line is not exactly
+  `policy.allow_read(p, "path")`, `policy.allow_write(p, "path")` or
+  `policy.allow_host(p, "host", port)` with a plain argument (printable
+  ASCII, no quote, backslash, `$` or brace) are not offered.
+  Suggestions are grouped (`nib.fence.proposal`) so a build tool refused on
+  thousands of files is one line: one `allow_host` per `host:port`; paths
+  under their nearest common directory, unless that directory is `$HOME`,
+  contains it, is `/` (or, outside `$HOME`, has fewer than two components),
+  or is, contains or lies in a forbidden path (the secrets list, the
+  policy's own denials, the project, `$NIB_HOME`), in which case each
+  directory directly below it is grouped on its own. So refusals under
+  `~/.m2/repository` and `~/.m2/wrapper/dists/...` become two lines, never
+  `~/.m2` (it holds `settings.xml`). A write line also answers the read
+  refusals beneath it. Templates (`maven.apply(p)`) are not suggested.
+- **When.** Never while a Turn runs or the user is typing: once the Turn
+  ends (and the input is empty, no `/provider` flow or pinned menu is open)
+  everything collected since the last prompt is one prompt, duplicates
+  merged. Each op and resource is offered once per Session, whatever the
+  answer. `ask`, `--json` and `js` never prompt: the records stay in
+  `fence_denied` and nothing changes.
+- **The prompt.** One line per proposed line saying what it answers
+  (`refused egress 127.0.0.1:4100 · b1`, `refused read under
+  ~/.m2/repository · 2314 refusals · b3`), the unified diff of `naeb.ae`
+  (`--- naeb.ae`, `+++ naeb.ae (proposed)`, three lines of context;
+  `--- /dev/null` when the project has none yet), then `Allow? [y/N]`. Only
+  `y` or `Y` applies; any other key declines, except PgUp, PgDn and
+  Shift+Up/Down, which scroll. The lines go last in `fence(p: ptr)`'s body,
+  each after `// Approved <YYYY-MM-DD>: refused <op> <resource> (<command
+  ids>)` (UTC date). When that place is not certain (no or two `fence(p:
+  ptr)` bodies, another parameter name, the closing `}` not on a line of its
+  own, an unterminated string or comment, unbalanced braces), naeb.ae is not
+  touched: the lines are shown to add by hand and build with `naeb build`.
+- **Applying** (naeb's own unconfined code, on the user's key; `nib.fence.
+  policy.approve`, on a worker thread): refused, with naeb.ae untouched,
+  when naeb.ae on disk is no longer what the prompt was made from or its
+  SHA-256 is not the one the policy in force was built from (someone else
+  edited it: no merge). Otherwise the new text is compiled exactly as `naeb
+  build` compiles it (the same `compile_` and `commit_`), to a library named
+  for the process and the source's hash, which is dlopened under that name
+  (dlopen returns a library it already loaded by its path, so the canonical
+  `policy.dylib`/`policy.so` could not load new code twice) and run into a
+  new Fence. naeb.ae is checked once more, then written; the library is
+  renamed over the canonical one (the loaded mapping stays valid), the
+  approved copy and the record written. A failed compile, load or write
+  leaves naeb.ae byte for byte as it was (a written naeb.ae is put back),
+  the old library, record and Fence in force, and shows the error with the
+  compiler's first lines. No versioned library is left behind; superseded
+  libraries stay mapped (about 160 KB each) for the life of the process.
+- **Between Runs.** The new Fence replaces the Session's
+  (`session.swap_fence`): at once when no Run executes, else as the running
+  Run ends, so a Run never sees two fences. The Tools get a new egress proxy
+  for it; MCP servers started later get its spec. Commands still running
+  (background bash, MCP servers already started, a Run moved to the
+  background, which reads the Tools' fence on its next call) keep what they
+  started with where they hold it. Sub-agents started afterwards load the
+  rebuilt policy from disk. The Session id does not change; `/fence` shows
+  the new policy.
+- **The record.** The Session log gets `fence_approval`: `ok`, the `lines`,
+  the `diff`, naeb.ae's and the library's SHA-256 before and after, and the
+  `error` of a failed one. The transcript gets one line: `naeb.ae changed ·
+  policy rebuilt and loaded`, or `naeb.ae not changed · <why>`.
+- **The model cannot widen the fence.** It cannot write naeb.ae (read-only
+  to every fenced writer) or `~/.naeb`, and nothing it sends opens or
+  answers the prompt: the prompt is the TUI's, built from naeb's own refusal
+  records, answered only by a key. A `tools.fence_request` letting the
+  model propose lines up front was considered and left out for now: the
+  records already carry every line the prompt can offer.
+- Tests: `ae/tests/fence_proposal_test.ae` (grouping, placing, the diff),
+  `ae/tests/tui_fence_test.ae` (the prompt and its keys) and
+  `ae/tests/redteam/fence_approval.py` (y, n, an edited naeb.ae, a broken
+  build, `ask --json`, end to end on a pty with the mock provider).
 - **Sources.** naeb compiles the policy against the checkout it was built
   in (`build_info.source_dir()`, written by `.build.ae`), or `NAEB_SRC`, and
   only against its `ae/policy_lib`: `naeb.policy` and the templates. naeb's
@@ -502,8 +584,8 @@ mode) the same fixtures find 15 holes on macOS.
 5. Templates (Maven, Gradle, npm) and the location check. *Done.* The one
    `naeb` binary loading a policy library built by `naeb build`, with the
    interface version and the build record (replacing per-project launcher
-   executables). *Done.* The in-TUI approve, rebuild, re-exec `--resume`
-   loop: *not yet*.
+   executables). *Done.* The in-TUI approve, rebuild and reload loop.
+   *Done* (no re-exec needed); `$EDITOR` to adjust a proposal: next.
 6. Denial paths for children. *Done* (macOS unified log, Linux seccomp
    user notification).
 7. Later: per-command scopes, Windows.
@@ -541,6 +623,5 @@ mode) the same fixtures find 15 holes on macOS.
    or open it and accept local services as reachable?
 5. Linux below Landlock ABI 9: refusing `socket(AF_UNIX)` breaks tools that
    talk to local daemons on purpose (ssh-agent, Docker). Acceptable?
-6. Approval UX: a diff in the TUI with y/n, or open `naeb.ae` in
-   `$EDITOR` and rebuild when it is saved? (`naeb build` asks y/N on the
-   diff today.)
+6. *(Settled 2026-11-15: a unified diff with y/N in the TUI now; opening the
+   proposed change in `$EDITOR` to adjust it before applying comes later.)*

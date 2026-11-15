@@ -1,0 +1,180 @@
+// tui.fence_offer: naeb's approval prompt (docs/naeb/adr/0001). The app
+// collects the refusal records with a suggestion from Run results and
+// background results; when no Turn runs and the input is empty it asks the
+// port for a proposal (fence_propose), shows it and waits for y/N. Only y
+// or Y applies; any other key declines, except the keys that scroll. What
+// was offered once (by op and resource) is not offered again in the
+// Session, whatever the answer.
+
+import std.list
+import std.string
+import std.json
+import nib.jsonx
+
+exports(Offer, new, collect, collect_result, pending, take, reset, answer_of, text_of, applied_text,
+        ANSWER_NONE, ANSWER_YES, ANSWER_NO)
+
+// A failed build's compiler output shows its first lines only.
+const OUTPUT_LINES = 12
+
+const ANSWER_NONE = 0
+const ANSWER_YES = 1
+const ANSWER_NO = 2
+
+struct Offer {
+    records: ptr      // JSON texts of collected records not yet offered
+    keys: ptr         // "op resource" of every record collected or offered this Session
+    session: string   // the Session `keys` belong to
+    open: int         // 1: a prompt waits for its answer
+    building: int     // 1: approved, the policy is being rebuilt
+    proposal: string  // the open prompt's proposal JSON
+    entry: int        // the open prompt's transcript entry, -1 none
+}
+
+new() -> *Offer {
+    o = heap.new(Offer)
+    o.records = list.list_new()
+    o.keys = list.list_new()
+    o.session = ""
+    o.open = 0
+    o.building = 0
+    o.proposal = ""
+    o.entry = -1
+    return o
+}
+
+has_(l: ptr, s: string) -> int {
+    i = 0
+    while i < list.list_size(l) {
+        v, _g = list.get_string(l, i)
+        if v == s { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+// A new Session forgets what the old one offered.
+reset(o: *Offer, session: string) {
+    if o.session == session { return }
+    o.session = string.copy(session)
+    o.records = list.list_new()
+    o.keys = list.list_new()
+}
+
+// Adds the records of a fence_denied array (a parsed JSON value) that carry
+// a suggestion and were not collected or offered before.
+collect(o: *Offer, denied: ptr) {
+    if denied == null || json.json_type(denied) != json.JSON_ARRAY { return }
+    i = 0
+    while i < jsonx.array_size(denied) {
+        r = jsonx.array_at(denied, i)
+        if jsonx.str_or(r, "suggestion", "") != "" {
+            key = "${jsonx.str_or(r, "op", "")} ${jsonx.str_or(r, "resource", "")}"
+            if has_(o.keys, key) == 0 {
+                list.list_add(o.keys, string.copy(key))
+                list.list_add(o.records, string.copy(jsonx.encode(r)))
+            }
+        }
+        i = i + 1
+    }
+}
+
+// collect for a result text that is a JSON object (a background bash
+// result) with a fence_denied member; anything else is ignored.
+collect_result(o: *Offer, text: string) {
+    if string.starts_with(text, "{") == 0 { return }
+    v = jsonx.parse(text)
+    if v == null { return }
+    collect(o, jsonx.field(v, "fence_denied"))
+    jsonx.free(v)
+}
+
+pending(o: *Offer) -> bool { return list.list_size(o.records) > 0 && o.open == 0 && o.building == 0 }
+
+// The collected records as one JSON array, emptied.
+take(o: *Offer) -> string {
+    out = "["
+    i = 0
+    while i < list.list_size(o.records) {
+        r, _g = list.get_string(o.records, i)
+        if i > 0 { out = "${out}," }
+        out = "${out}${r}"
+        i = i + 1
+    }
+    o.records = list.list_new()
+    return "${out}]"
+}
+
+// What a key answers an open prompt: y or Y applies; a key that scrolls
+// (scrolls: true) answers nothing; anything else declines.
+answer_of(text: string, scrolls: bool) -> int {
+    if scrolls { return ANSWER_NONE }
+    if text == "y" || text == "Y" { return ANSWER_YES }
+    return ANSWER_NO
+}
+
+// The prompt for a proposal (nib.fence.policy.propose's JSON): one line per
+// proposed line saying what it answers, then the diff and the question; or,
+// when naeb cannot place the lines, the lines to add by hand.
+text_of(proposal: string) -> string {
+    v = jsonx.parse(proposal)
+    if v == null { return "" }
+    items = jsonx.field(v, "items")
+    out = ""
+    i = 0
+    while i < jsonx.array_size(items) {
+        out = "${out}${jsonx.str_or(jsonx.array_at(items, i), "summary", "")}\n"
+        i = i + 1
+    }
+    if jsonx.has(v, "diff") == 1 {
+        out = "${out}${jsonx.str_or(v, "diff", "")}Allow? [y/N]"
+    } else {
+        out = "${out}naeb.ae unchanged: ${jsonx.str_or(v, "error", "")}\nAdd to fence(p: ptr) by hand, then run: naeb build\n"
+        k = 0
+        while k < jsonx.array_size(items) {
+            out = "${out}    ${jsonx.str_or(jsonx.array_at(items, k), "line", "")}\n"
+            k = k + 1
+        }
+        out = string.substring(out, 0, string.length(out) - 1)
+    }
+    jsonx.free(v)
+    return out
+}
+
+// The transcript line after fence_applied (its JSON object as text).
+applied_text(result: string) -> (string, bool) {
+    v = jsonx.parse(result)
+    ok = jsonx.bool_or(v, "ok", 0) == 1
+    text = ""
+    if ok {
+        text = "naeb.ae changed · policy rebuilt and loaded"
+    } else {
+        e = jsonx.str_or(v, "error", "")
+        o = string.trim(jsonx.str_or(v, "output", ""))
+        text = "naeb.ae not changed · ${e}"
+        if o != "" { text = "${text}\n${preview_(o, OUTPUT_LINES)}" }
+    }
+    jsonx.free(v)
+    return text, ok
+}
+
+// The first `n` lines of `text`, then "… N more lines" for the rest.
+preview_(text: string, n: int) -> string {
+    lines = string.split(text, "\n")
+    total = string.array_size(lines)
+    if total <= n {
+        string.array_free(lines)
+        return text
+    }
+    out = ""
+    i = 0
+    while i < n {
+        if i > 0 { out = "${out}\n" }
+        out = "${out}${string.array_get(lines, i)}"
+        i = i + 1
+    }
+    string.array_free(lines)
+    more = total - n
+    plural = if more == 1 { "line" } else { "lines" }
+    return "${out}\n… ${more} more ${plural} of the compiler's output"
+}

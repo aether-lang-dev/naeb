@@ -143,6 +143,37 @@ built, so an edit or a pull that widens the fence waits for your review.
 in the default fence (the project only, no egress). Grow the policy from
 the denials: each names the path or `host:port`.
 
+In the TUI naeb grows it with you. When a Turn ends after the fence refused
+something, naeb shows the `naeb.ae` lines that would allow it (many files
+under one directory become one line, never a directory holding a secret,
+never `~`) as a diff and asks:
+
+```text
+ refused read under ~/.fixture-cache/a · 20 refusals · tool
+ refused egress 127.0.0.1:62089 · b1
+ --- naeb.ae
+ +++ naeb.ae (proposed)
+ @@ -2,4 +2,10 @@
+
+  fence(p: ptr) {
+      policy.allow_host(p, "allowed.invalid", 443)
+ +
+ +    // Approved 2026-11-15: refused read under ~/.fixture-cache/a, 20 refusals (tool)
+ +    policy.allow_read(p, "~/.fixture-cache/a")
+ +
+ +    // Approved 2026-11-15: refused egress 127.0.0.1:62089 (b1)
+ +    policy.allow_host(p, "127.0.0.1", 62089)
+  }
+ Allow? [y/N]
+```
+
+`y` writes the lines into `naeb.ae`, rebuilds the policy as `naeb build`
+does and loads it before the next Run, in the same Session; anything else
+declines, and a declined refusal is not offered again in that Session.
+Only your key does this: the model cannot write `naeb.ae` or answer the
+prompt. `naeb ask` and `naeb js` never ask; the refusals and their
+suggested lines are in their results.
+
 ## A Run
 
 ```text

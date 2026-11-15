@@ -29,7 +29,7 @@ import nib.tools.rules
 
 exports(Fence, new, open_home, allow_read, deny_read, allow_write, deny_write, allow_host, pass_env,
         set_env, allow_loopback, set_origin, describe, host_allowed, host_named, resolve, child_env, proxy_env, read_rules, write_denied, refusal, refusals_json,
-        suggestion, SECRETS)
+        suggestion, home_canonical, forbidden, SECRETS)
 
 // Relative to $HOME: denied to every fenced reader unless allowed exactly.
 const SECRETS[] = [".ssh", ".aws", ".gnupg", ".config/gh", ".config/gcloud", ".azure", ".kube", ".docker",
@@ -496,6 +496,38 @@ suggestion(fp: ptr, cwd: string, nib_home: string, op: string, resource: string)
     }
     if under_any_(f.write_deny, path) == 1 { return "" }
     return "policy.allow_write(p, ${jsonx.quote(tilde_(f, path))})"
+}
+
+// The fence's $HOME, canonical: what suggestions' "~/" stands for.
+home_canonical(fp: ptr) -> string { return canon_((fp as *Fence).home) }
+
+// Canonical paths no line approved in naeb's TUI may name, contain or lie
+// inside when it stands for several refusals (nib.fence.proposal): the
+// secrets list, what the policy denies, the project, $NIB_HOME.
+forbidden(fp: ptr, cwd: string, nib_home: string) -> ptr {
+    f = fp as *Fence
+    out = list.list_new()
+    h = canon_(f.home)
+    i = 0
+    while i < SECRET_COUNT {
+        list.list_add(out, canon_(atomic_file.join(h, SECRETS[i])))
+        i = i + 1
+    }
+    i = 0
+    while i < list.list_size(f.read_deny) {
+        r, _e = list.get_string(f.read_deny, i)
+        list.list_add(out, canon_(r))
+        i = i + 1
+    }
+    i = 0
+    while i < list.list_size(f.write_deny) {
+        w, _e2 = list.get_string(f.write_deny, i)
+        if string.starts_with(w, "/") == 1 { list.list_add(out, canon_(w)) }
+        i = i + 1
+    }
+    list.list_add(out, canon_(jail.project_root(cwd)))
+    if nib_home != "" { list.list_add(out, canon_(nib_home)) }
+    return out
 }
 
 // One refusal record (above) as JSON. entry: "op resource", or for egress

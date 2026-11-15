@@ -71,7 +71,9 @@ expect_imports $T/rules/module.ae "std.list|std.string"
 expect_imports ae/nib/fence/module.ae "nib.jsonx|nib.tools.atomic_file|nib.tools.jail|nib.tools.rules|std.fs|std.list|std.string"
 # naeb.ae: built by `naeb build` (diff, then `ae build --emit=lib` through
 # tools/process), checked against its record and dlopened at start (policy_host.c).
-expect_imports ae/nib/fence/policy/module.ae "nib.build_info|nib.fence|nib.tools.atomic_file|nib.tools.jail|nib.tools.process|std.cryptography|std.fs|std.io|std.list|std.os|std.string"
+# The naeb.ae lines the TUI offers after refusals, where they go, the diff: pure text.
+expect_imports ae/nib/fence/proposal/module.ae "std.list|std.string"
+expect_imports ae/nib/fence/policy/module.ae "nib.build_info|nib.fence|nib.fence.proposal|nib.jsonx|nib.tools.atomic_file|nib.tools.jail|nib.tools.process|std.cryptography|std.fs|std.io|std.list|std.os|std.string"
 # A fenced child's refusals, named: the macOS sandbox's reports through one
 # `log stream` and a sentinel (tools/process), the Linux helper's report file.
 expect_imports $T/denials/module.ae "nib.jsonx|nib.lock|nib.tools.egress|nib.tools.process|std.fs|std.ipc|std.list|std.os|std.string|std.sync|std.worker"
@@ -131,9 +133,9 @@ expect_imports ae/naeb_main.ae "nib.app"
 expect_imports ae/nib/app/module.ae "nib.auth|nib.build_info|nib.config|nib.config.env|nib.fence|nib.fence.policy|nib.jsonx|nib.provider.types|nib.run_replay|nib.sandbox|nib.session|nib.tools|nib.tools.agent_input|nib.tools.background|nib.tools.jail|nib.tui|nib.tui.clock|nib.tui.live|std.fs|std.io|std.list|std.os|std.signal|std.string|std.sync|std.worker|term|term.input"
 # `/model`'s listing (src/auth/models.zig): one GET of the provider's /models.
 expect_imports ae/nib/auth/models/module.ae "nib.jsonx|std.http.client|std.json|std.list|std.string|std.time"
-expect_imports $U/module.ae "nib.auth|nib.auth.models|nib.config|nib.config.env|nib.image|nib.jsonx|nib.provider.types|nib.session.skills|nib.session.tool_summary|nib.tools.changes|nib.tools.diff|nib.tui.agent_tree|nib.tui.app_queue|nib.tui.bill|nib.tui.clipboard|nib.tui.clock|nib.tui.commands|nib.tui.editor|nib.tui.entry|nib.tui.format|nib.tui.frames|nib.tui.long_text|nib.tui.menu|nib.tui.mode|nib.tui.open|nib.tui.paths|nib.tui.port|nib.tui.prediction|nib.tui.provider_flow|nib.tui.reflect|nib.tui.sel_history|nib.tui.selection|nib.tui.status|nib.tui.tasks|nib.tui.title|nib.tui.transcript|nib.tui.tui_view|nib.tui.turn|nib.tui.turn_changes|nib.tui.turn_summary|nib.tui.viewport|std.fs|std.json|std.list|std.os|std.strbuilder|std.string|std.sync|term|term.input|term.screen"
+expect_imports $U/module.ae "nib.auth|nib.auth.models|nib.config|nib.config.env|nib.image|nib.jsonx|nib.provider.types|nib.session.skills|nib.session.tool_summary|nib.tools.changes|nib.tools.diff|nib.tui.agent_tree|nib.tui.app_queue|nib.tui.bill|nib.tui.clipboard|nib.tui.clock|nib.tui.commands|nib.tui.editor|nib.tui.entry|nib.tui.fence_offer|nib.tui.format|nib.tui.frames|nib.tui.long_text|nib.tui.menu|nib.tui.mode|nib.tui.open|nib.tui.paths|nib.tui.port|nib.tui.prediction|nib.tui.provider_flow|nib.tui.reflect|nib.tui.sel_history|nib.tui.selection|nib.tui.status|nib.tui.tasks|nib.tui.title|nib.tui.transcript|nib.tui.tui_view|nib.tui.turn|nib.tui.turn_changes|nib.tui.turn_summary|nib.tui.viewport|std.fs|std.json|std.list|std.os|std.strbuilder|std.string|std.sync|term|term.input|term.screen"
 # The Session's live port: the only TUI module that imports nib.session.
-expect_imports $U/live/module.ae "nib.config|nib.jsonx|nib.mcp|nib.msg|nib.provider|nib.provider.sink as psink|nib.provider.types|nib.sandbox|nib.session|nib.session.instructions|nib.session.log|nib.session.skills|nib.tools|nib.tools.background|nib.tools.changes|nib.tools.diff|nib.tools.jail|nib.tools.progress|nib.tui.app_queue|nib.tui.port|nib.tui.prediction|nib.tui.turn|std.list|std.os|std.string|std.sync|std.worker"
+expect_imports $U/live/module.ae "nib.config|nib.fence|nib.fence.policy|nib.jsonx|nib.mcp|nib.msg|nib.provider|nib.provider.sink as psink|nib.provider.types|nib.sandbox|nib.session|nib.session.instructions|nib.session.log|nib.session.skills|nib.tools|nib.tools.background|nib.tools.changes|nib.tools.diff|nib.tools.jail|nib.tools.progress|nib.sysenv|nib.tui.app_queue|nib.tui.port|nib.tui.prediction|nib.tui.turn|std.list|std.os|std.string|std.sync|std.time|std.worker"
 expect_imports $U/port/module.ae "nib.jsonx|nib.provider.types|nib.tui.app_queue|std.list|std.string|std.sync"
 expect_imports $U/turn/module.ae "nib.jsonx|nib.tui.app_queue|std.sync"
 expect_imports $U/app_queue/module.ae "nib.lock"
@@ -161,6 +163,7 @@ expect_imports $U/tasks/module.ae "nib.tui.agent_tree|nib.tui.format|std.strbuil
 expect_imports $U/transcript/module.ae "nib.jsonx|nib.msg|nib.sandbox.timing|nib.session.tool_summary|nib.tools.changes|nib.tools.diff|nib.tui.agent_tree|nib.tui.entry|nib.tui.label|nib.tui.long_text|nib.tui.smooth|nib.tui.turn_changes|nib.tui.viewport|std.json|std.list|std.strbuilder|std.string"
 expect_imports $U/tui_view/module.ae "nib.provider.types|nib.tui.commands|nib.tui.editor|nib.tui.entry|nib.tui.format|nib.tui.sel_history|nib.tui.status|nib.tui.viewport|std.string|term.screen"
 expect_imports $U/turn_changes/module.ae "nib.tools.changes|nib.tools.diff|nib.tui.long_text|std.list|std.strbuilder|std.string"
+expect_imports $U/fence_offer/module.ae "nib.jsonx|std.json|std.list|std.string"
 expect_imports $U/turn_summary/module.ae "nib.jsonx|std.string"
 expect_imports $U/viewport/module.ae "nib.tui.entry|term.screen"
 # File system (the @ completion walk, the title's git branch).

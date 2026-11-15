@@ -63,7 +63,7 @@ import nib.mcp
 import nib.tools.agent_input
 import nib.tools.agent_sessions
 
-exports(Session, Options, Sink, Ran, new_options, new_sink, init, turn, turn_with_images, image_directory, run, compact_now, close, start_turn_end_hooks, finish_hooks, error_message, timing_json, undo,
+exports(Session, Options, Sink, Ran, new_options, new_sink, init, turn, turn_with_images, image_directory, run, compact_now, close, swap_fence, start_turn_end_hooks, finish_hooks, error_message, timing_json, undo,
         set_activity, enqueue, take_queued, switch_config, steps_logged,
         VERSION)
 
@@ -127,6 +127,9 @@ struct Session {
     bg_runs: ptr             // *RunJob of Runs in the background, until finished
     recorder: ptr            // *record.Recorder of <id>.calls.jsonl (NIB_RECORD=off: disabled)
     hook_jobs: ptr           // *HookJob of turn_end hooks still running or not yet reaped
+    fence_guard: ptr         // held around in_run and staged_fence
+    in_run: int              // 1 while a Run executes (its foreground part)
+    staged_fence: ptr        // naeb: an approved *fence.Fence waiting for the running Run to end, or null
 }
 
 // The turn_end hooks of one Turn on a thread of their own (upstream
@@ -313,6 +316,9 @@ init(cp: @keep ptr, op: @keep ptr) -> (ptr, string, string) {
     s.ticker_done = sync.atomic_new(1)
     s.bg_runs = list.list_new()
     s.hook_jobs = list.list_new()
+    s.fence_guard = lock.new()
+    s.in_run = 0
+    s.staged_fence = null
     reset_timing_(s)
     directory = atomic_file.join(o.home, "sessions")
     fs.mkdir_p(directory)
@@ -855,8 +861,10 @@ run(sp: @keep ptr, code: string, cancel: @keep ptr) -> *Ran {
     background.begin_turn(t.background)
     if background.any_pending(t.background) == 0 { progress.clear(t.progress) }
     s.run_id = s.run_id + 1
+    run_begin_(s)
     scope = tools.new_scope(s.tools, s.run_id)
     o = sandbox.eval(code, sandbox.limits(), tools.host(scope), cancel)
+    run_end_(s)
     if list.list_size(((s.cfg as *types.Config).hooks_after_edit)) > 0 {
         paths = tools.change_paths(scope)
         if list.list_size(paths) > 0 {
@@ -873,6 +881,49 @@ run(sp: @keep ptr, code: string, cancel: @keep ptr) -> *Ran {
     r.err = log.commit(s.log, s.history, list.list_size(s.history), list.list_new(), l.context_tokens, ",\"model\":${jsonx.quote((s.cfg as *types.Config).model)},\"task_ids\":${progress.task_ids_json(t.progress)}", 0)
     if canceled_(cancel) == 1 { background.stop_all(t.background) }
     return r
+}
+
+// naeb's TUI: a Fence the user approved (nib.fence.policy.approve) takes
+// the place of the Session's. Swapped in now when no Run executes, else as
+// the running Run ends: a Run never sees two fences. 1: swapped now.
+swap_fence(sp: ptr, f: @keep ptr) -> int {
+    s = sp as *Session
+    lock.acquire(s.fence_guard)
+    now = 0
+    if s.in_run == 0 {
+        apply_fence_(s, f)
+        now = 1
+    } else {
+        s.staged_fence = f
+    }
+    lock.release(s.fence_guard)
+    return now
+}
+
+apply_fence_(s: *Session, f: @keep ptr) {
+    t = s.tools as *tools.Tools
+    tools.swap_fence(s.tools, f)
+    (s.options as *Options).fence = f
+    if t.mcp_client != null && t.mcp_enabled == 1 {
+        fspec, fproxy, ferr = tools.fence_base(s.tools)
+        mcp.set_fence(t.mcp_client, fspec, fproxy, tools.fence_monitor(s.tools), ferr)
+    }
+}
+
+run_begin_(s: *Session) {
+    lock.acquire(s.fence_guard)
+    s.in_run = 1
+    lock.release(s.fence_guard)
+}
+
+run_end_(s: *Session) {
+    lock.acquire(s.fence_guard)
+    s.in_run = 0
+    if s.staged_fence != null {
+        apply_fence_(s, s.staged_fence)
+        s.staged_fence = null
+    }
+    lock.release(s.fence_guard)
 }
 
 // One `run` tool call (upstream run.zig execute + executeTimed).
@@ -1410,7 +1461,9 @@ run_steps_(s: *Session, pending: ptr, sk: @keep ptr, cancel: @keep ptr) -> (stri
         k = 0
         while k < ncalls {
             tc = list.list_get_raw(r.tool_calls, k) as *types.ToolCall
+            run_begin_(s)
             ex = execute_(s, tc, sk, cancel, run, k) as *Executed
+            run_end_(s)
             if !(ex.ok == 1 && ex.empty == 1 && ex.summary != "" && string.index_of(ex.summary, "\"counts\":[]") >= 0 && string.index_of(ex.summary, "\"omitted\":0") >= 0) { empty_runs = 0 }
             output_bytes = output_bytes + (string.length(ex.output) as long)
             run_ms = run_ms + ex.run_ms

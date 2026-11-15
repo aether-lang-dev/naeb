@@ -72,6 +72,7 @@ import nib.tui.provider_flow
 import nib.tui.reflect
 import nib.tui.long_text
 import nib.tui.clipboard
+import nib.tui.fence_offer
 import nib.image
 import nib.session.skills
 
@@ -158,6 +159,7 @@ struct App {
     list_models: fn                // provider_flow Launch.list_models
     clip: *clipboard.Clipboard     // its reader is replaceable for specs
     cwd: string
+    fence: *fence_offer.Offer      // naeb: the approval prompt
 }
 
 // ---------------------------------------------------------------- colours
@@ -239,6 +241,7 @@ refresh_of(kind: string) -> int {
         "issues_done" -> { return frames.REFRESH_IMMEDIATE }
         "flow" -> { return frames.REFRESH_IMMEDIATE }
         "prediction" -> { return frames.REFRESH_IMMEDIATE }
+        "fence_applied" -> { return frames.REFRESH_IMMEDIATE }
         _ -> { return frames.REFRESH_CONTENT }
     }
 }
@@ -334,6 +337,7 @@ new(t: @keep ptr, p: @keep ptr, clk: @keep ptr, envp: @keep ptr) -> *App {
     a.menu.reflect_enabled = if issue_repo_(a) != "" { 1 } else { 0 }
     string fj = call(a.p.fence, a.p.ctx)
     a.menu.fence_enabled = if fj != "" { 1 } else { 0 }
+    a.fence = fence_offer.new()
     a.context = stats_context_(a)
     ix = paths.new(".", |c: ptr| { return 0 as long })
     clk2 = a.clk
@@ -743,6 +747,9 @@ on_key(a: *App, k: input.Key) -> bool {
         provider_key(a, k)
         return true
     }
+    if a.fence.open != 0 && fence_key_(a, k) {
+        return true
+    }
     menu.sync(a.menu, ed)
     sel, has_sel = menu.selected(a.menu, editor.text(ed))
     before = editor.text(ed)
@@ -822,7 +829,72 @@ on_key(a: *App, k: input.Key) -> bool {
     if has_submitted {
         submit(a, submitted)
     }
+    offer_fence_(a)
     return true
+}
+
+// ---------------------------------------------------------------- naeb approval
+
+// The open prompt's answer: true when the key answered it (y applies,
+// anything but a scrolling key declines).
+fence_key_(a: *App, k: input.Key) -> bool {
+    scrolls = input.matches(k, input.PAGE_UP, 0) || input.matches(k, input.PAGE_DOWN, 0) || input.matches(k, input.UP, input.SHIFT) || input.matches(k, input.DOWN, input.SHIFT)
+    ans = fence_offer.answer_of(k.text, scrolls)
+    if ans == fence_offer.ANSWER_NONE {
+        return false
+    }
+    o = a.fence
+    o.open = 0
+    if o.entry >= 0 && o.entry < transcript.count(a.transcript) {
+        en = transcript.at(a.transcript, o.entry)
+        en.text = "${en.text} ${if ans == fence_offer.ANSWER_YES { "y" } else { "n" }}"
+        entry.invalidate(en)
+        a.transcript.revision = a.transcript.revision + 1
+    }
+    o.entry = -1
+    if ans == fence_offer.ANSWER_YES {
+        o.building = 1
+        call(a.p.fence_apply, a.p.ctx, o.proposal, a.q as ptr)
+    } else {
+        offer_fence_(a)
+    }
+    return true
+}
+
+// Collects a fence_denied array (a parsed JSON value) for the prompt.
+collect_denied_(a: *App, denied: ptr) {
+    if a.menu.fence_enabled == 0 {
+        return
+    }
+    string sid = call(a.p.session_id, a.p.ctx)
+    fence_offer.reset(a.fence, sid)
+    fence_offer.collect(a.fence, denied)
+}
+
+// Shows the prompt for what was collected, once nothing else needs the
+// user: no Turn, no flow or pinned menu, an empty input.
+offer_fence_(a: *App) {
+    if a.menu.fence_enabled == 0 || !fence_offer.pending(a.fence) || a.has_turn != 0 {
+        return
+    }
+    if provider_flow.flow_active(a.flow) != 0 || menu.is_pinned(a.menu) || string.length(editor.text(a.input)) != 0 {
+        return
+    }
+    string sid = call(a.p.session_id, a.p.ctx)
+    fence_offer.reset(a.fence, sid)
+    records = fence_offer.take(a.fence)
+    string prop = call(a.p.fence_propose, a.p.ctx, records)
+    if prop == "" {
+        return
+    }
+    transcript.add(a.transcript, entry.KIND_FENCE, fence_offer.text_of(prop))
+    v = jsonx.parse(prop)
+    if v != null && jsonx.has(v, "diff") == 1 {
+        a.fence.open = 1
+        a.fence.proposal = string.copy(prop)
+        a.fence.entry = transcript.count(a.transcript) - 1
+    }
+    jsonx.free(v)
 }
 
 // The environment as "NAME=value" strings for a child, or null (inherit).
@@ -1067,6 +1139,7 @@ handle_app(a: *App, ev: string, data: ptr) -> bool {
             sv = jsonx.field(body, "tool_summary")
             summary = if sv != null && json.json_type(sv) == json.JSON_OBJECT { transcript.summary_from_json(sv) as ptr } else { null }
             transcript.end_run_with_summary(a.transcript, jsonx.bool_or(body, "ok", 0) != 0, string.copy(jsonx.str_or(body, "output", "")), elapsed, ct, summary)
+            collect_denied_(a, jsonx.field(body, "fence_denied"))
         }
         "retry" -> {
             transcript.retry_attempt(a.transcript, a.scroll)
@@ -1098,7 +1171,16 @@ handle_app(a: *App, ev: string, data: ptr) -> bool {
             }
             transcript.progress(a.transcript, p)
         }
-        "background" -> { on_background_(a, body) }
+        "background" -> {
+            on_background_(a, body)
+            offer_fence_(a)
+        }
+        "fence_applied" -> {
+            a.fence.building = 0
+            text, ok = fence_offer.applied_text(jsonx.encode(body))
+            transcript.add(a.transcript, if ok { entry.KIND_INFO } else { entry.KIND_ERR }, text)
+            offer_fence_(a)
+        }
         "turn_end" -> {
             a.pending_bill = turn_summary.from_json(jsonx.encode(body))
             a.has_pending_bill = 1
@@ -1122,6 +1204,7 @@ handle_app(a: *App, ev: string, data: ptr) -> bool {
             if predict {
                 predict_next_(a)
             }
+            offer_fence_(a)
         }
         "issue" -> { transcript.add(a.transcript, entry.KIND_INFO, string.copy(jsonx.str_field(body))) }
         "issues_done" -> {
@@ -1144,6 +1227,7 @@ handle_app(a: *App, ev: string, data: ptr) -> bool {
             append_bill(a)
             recovery_hint_(a, reason)
             finish_queued(a, false)
+            offer_fence_(a)
         }
         _ -> {}
     }
@@ -1225,6 +1309,11 @@ on_background_(a: *App, b: ptr) {
     } else if st == "finished" {
         a.background_count = if a.background_count > 0 { a.background_count - 1 } else { 0 }
         ok = if jsonx.has(b, "ok") != 0 { jsonx.bool_or(b, "ok", 0) != 0 } else { false }
+        if has_result && a.menu.fence_enabled != 0 {
+            string sid = call(a.p.session_id, a.p.ctx)
+            fence_offer.reset(a.fence, sid)
+            fence_offer.collect_result(a.fence, result)
+        }
         transcript.background_result(a.transcript, kind, id, ok, string.copy(if has_result { result } else { "{}" }))
     } else if st == "lost" {
         a.background_count = if a.background_count > 0 { a.background_count - 1 } else { 0 }
@@ -1575,7 +1664,7 @@ render(a: *App) {
         s.notice = a.notice
     }
     s.detail = activity_detail_(a)
-    s.hint = if provider_flow.flow_active(a.flow) != 0 { provider_flow.flow_hint(a.flow) } else if menu.is_pinned(a.menu) { "Choose a service" } else { "" }
+    s.hint = if provider_flow.flow_active(a.flow) != 0 { provider_flow.flow_hint(a.flow) } else if menu.is_pinned(a.menu) { "Choose a service" } else if a.fence.open != 0 { "Allow the naeb.ae change? [y/N]" } else if a.fence.building != 0 { "Rebuilding the policy" } else { "" }
     s.signed_out = a.signed_out
     s.title = heading
     s.revision = a.transcript.revision as int

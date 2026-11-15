@@ -1,0 +1,243 @@
+// naeb's approval prompt in the TUI (docs/naeb/adr/0001), driven
+// in-process: an in-memory terminal and a scripted Session whose fence
+// answer makes the app naeb's. The proposal is the port's (scripted here;
+// nib.fence.policy.propose for real), so these specs cover when it is
+// offered, how it looks and what each key does.
+import std.spec
+import std.string
+import std.fs
+import term
+import term.screen
+import term.driver
+import nib.provider.types
+import nib.config.env
+import nib.tui
+import nib.tui.port
+import nib.tui.clock
+import nib.tui.app_queue
+import nib.tui.entry
+import nib.tui.transcript
+import nib.tui.editor
+import nib.tui.fence_offer
+
+struct Rig {
+    t: *term.Terminal
+    a: *tui.App
+    s: *port.Script
+}
+
+const DIFF = "--- naeb.ae\n+++ naeb.ae (proposed)\n@@ -3,3 +3,6 @@\n fence(p: ptr) {\n     policy.allow_host(p, \"rubygems.org\", 443)\n+\n+    // Approved 2026-11-15: refused egress 127.0.0.1:4100 (b1)\n+    policy.allow_host(p, \"127.0.0.1\", 4100)\n }\n"
+
+const DENIED = "[{\"op\":\"egress\",\"resource\":\"127.0.0.1:4100\",\"layer\":\"child\",\"command_id\":\"b1\",\"suggestion\":\"policy.allow_host(p, \\\"127.0.0.1\\\", 4100)\"},{\"op\":\"read\",\"resource\":\"/h/.ssh/id\",\"layer\":\"tool\"}]"
+
+proposal_() -> string {
+    return "{\"items\":[{\"line\":\"policy.allow_host(p, \\\"127.0.0.1\\\", 4100)\",\"summary\":\"refused egress 127.0.0.1:4100 · b1\"}],\"diff\":${json_(DIFF)},\"text\":\"t\",\"base\":\"b\",\"expected\":\"e\",\"path\":\"/h/p/naeb.ae\"}"
+}
+
+json_(s: string) -> string {
+    out = "\""
+    for i in 0..string.length(s) {
+        c = string.char_at(s, i)
+        if c == 10 {
+            out = "${out}\\n"
+        } else if c == 34 {
+            out = "${out}\\\""
+        } else {
+            out = "${out}${string.substring(s, i, i + 1)}"
+        }
+    }
+    return "${out}\""
+}
+
+rig_(fenced: bool) -> *Rig {
+    r = heap.new(Rig)
+    d, _e = fs.make_temp_dir("", "naebtui")
+    r.t = term.memory(100, 40)
+    cfg = types.new_config("custom", "http://127.0.0.1:9", "test-key", "mock")
+    p = port.scripted(cfg, d)
+    r.s = port.script_of(p)
+    if fenced { r.s.fence = "{\"policy\":null,\"project\":\"/h/p\",\"home\":\"/h\"}" }
+    r.s.proposal = proposal_()
+    ep = env.new()
+    env.set(ep, "HOME", d)
+    r.a = tui.new(r.t as ptr, p as ptr, clock.of_terminal(r.t as ptr) as ptr, ep)
+    tui.start(r.a)
+    tui.step(r.a)
+    tui.render(r.a)
+    return r
+}
+
+key_(r: *Rig, k: string) {
+    driver.press(r.t, k)
+    tui.step(r.a)
+}
+
+emit_(r: *Rig, json: string) {
+    port.emit(r.s, json)
+    tui.step(r.a)
+}
+
+// A Turn whose one Run the fence refused.
+refused_turn_(r: *Rig) {
+    driver.type_text(r.t, "fetch it")
+    tui.step(r.a)
+    key_(r, "enter")
+    emit_(r, "{\"run_start\":\"await tools.bash({command: 'curl'})\",\"step\":1}")
+    emit_(r, "{\"run_end\":{\"ok\":true,\"output\":\"refused\",\"changes\":[],\"tool_summary\":{\"counts\":[],\"omitted\":0},\"fence_denied\":${DENIED}}}")
+}
+
+col_(r: *Rig, row: int, text: string) -> int { return string.index_of(screen.row_text(term.shown(r.t), row), text) }
+
+last_(r: *Rig) -> *entry.Entry { return transcript.at(r.a.transcript, transcript.count(r.a.transcript) - 1) }
+
+main() {
+    fw = spec.init()
+    spec.describe(fw, "naeb approval prompt") {
+        spec.it("waits for the Turn's end, then shows what it answers, the diff and the question") callback {
+            r = rig_(true)
+            refused_turn_(r)
+            spec.assert_eq(r.s.proposed.len, 0, "not offered while the Turn runs")
+            port.end_turn(r.s, 1)
+            tui.settle(r.a)
+            spec.assert_eq(r.s.proposed.len, 1, "offered at the Turn's end")
+            spec.assert_true(string.contains(r.s.proposed[0], "\"command_id\":\"b1\"") == 1, "the refusal with a suggestion: ${r.s.proposed[0]}")
+            spec.assert_true(string.contains(r.s.proposed[0], ".ssh") == 0, "not the one without")
+            e = last_(r)
+            spec.assert_eq(e.kind, entry.KIND_FENCE, "a prompt entry")
+            spec.assert_str_eq(e.text, "refused egress 127.0.0.1:4100 · b1\n${DIFF}Allow? [y/N]", "summary, diff, question")
+            driver.expect_row_contains(r.t, "refused egress 127.0.0.1:4100 · b1")
+            driver.expect_row_contains(r.t, "Allow? [y/N]")
+            row = driver.find_row(r.t, "+    policy.allow_host(p, \"127.0.0.1\", 4100)")
+            spec.assert_true(row >= 0, "the added line shown")
+            driver.expect_style(r.t, col_(r, row, "+    policy"), row, screen.style(fg: screen.color_index(2)))
+            hrow = driver.find_row(r.t, "+++ naeb.ae (proposed)")
+            driver.expect_style(r.t, col_(r, hrow, "+++"), hrow, screen.style(attrs: screen.BOLD | screen.DIM))
+            crow = driver.find_row(r.t, " fence(p: ptr) {")
+            driver.expect_style(r.t, col_(r, crow, " fence(p") + 1, crow, screen.style(attrs: screen.DIM))
+        }
+        spec.it("y applies: the proposal goes to the port, the result is one line") callback {
+            r = rig_(true)
+            refused_turn_(r)
+            port.end_turn(r.s, 1)
+            tui.settle(r.a)
+            key_(r, "y")
+            spec.assert_eq(r.s.applied.len, 1, "applied once")
+            spec.assert_str_eq(r.s.applied[0], proposal_(), "the proposal shown")
+            spec.assert_true(string.ends_with(last_(r).text, "Allow? [y/N] y") == 1, "answer kept")
+            spec.assert_str_eq(editor.text(r.a.input), "", "y did not reach the input")
+            tui.settle(r.a)
+            driver.expect_row_contains(r.t, "Rebuilding the policy")
+            app_queue.post(r.a.q, "{\"fence_applied\":{\"ok\":true,\"library\":\"/h/.naeb/l/policy.dylib\"}}")
+            tui.step(r.a)
+            tui.settle(r.a)
+            spec.assert_str_eq(last_(r).text, "naeb.ae changed · policy rebuilt and loaded", "confirmation")
+            spec.assert_eq(last_(r).kind, entry.KIND_INFO, "quiet")
+            driver.expect_no_row_contains(r.t, "Rebuilding the policy")
+        }
+        spec.it("a failed rebuild is shown as an error with the compiler's words") callback {
+            r = rig_(true)
+            refused_turn_(r)
+            port.end_turn(r.s, 1)
+            tui.settle(r.a)
+            key_(r, "Y")
+            spec.assert_eq(r.s.applied.len, 1, "Y applies too")
+            app_queue.post(r.a.q, "{\"fence_applied\":{\"ok\":false,\"error\":\"the policy did not compile (exit 1)\",\"output\":\"naeb.ae:9: undefined\\n\"}}")
+            tui.step(r.a)
+            spec.assert_str_eq(last_(r).text, "naeb.ae not changed · the policy did not compile (exit 1)\nnaeb.ae:9: undefined", "error")
+            spec.assert_eq(last_(r).kind, entry.KIND_ERR, "an error")
+        }
+        spec.it("n, Enter and Esc decline; a declined refusal is not offered again") callback {
+            keys = ["n", "enter", "escape", "x"]
+            for i in 0..4 {
+                r = rig_(true)
+                refused_turn_(r)
+                port.end_turn(r.s, 1)
+                tui.settle(r.a)
+                key_(r, keys[i])
+                spec.assert_eq(r.s.applied.len, 0, "${keys[i]} declines")
+                spec.assert_true(string.ends_with(last_(r).text, "Allow? [y/N] n") == 1, "${keys[i]}: answer kept")
+                spec.assert_str_eq(editor.text(r.a.input), "", "${keys[i]} did not reach the input")
+                spec.assert_eq(r.a.has_turn, 0, "${keys[i]} sent nothing")
+                refused_turn_(r)
+                port.end_turn(r.s, 1)
+                tui.settle(r.a)
+                spec.assert_eq(r.s.proposed.len, 1, "${keys[i]}: the same refusal is not offered again")
+            }
+        }
+        spec.it("scrolling keys leave the question open") callback {
+            r = rig_(true)
+            refused_turn_(r)
+            port.end_turn(r.s, 1)
+            tui.settle(r.a)
+            key_(r, "page_up")
+            key_(r, "page_down")
+            spec.assert_eq(r.a.fence.open, 1, "still asking")
+            key_(r, "y")
+            spec.assert_eq(r.s.applied.len, 1, "then y applies")
+        }
+        spec.it("never while the user is typing: it waits for an empty input") callback {
+            r = rig_(true)
+            refused_turn_(r)
+            driver.type_text(r.t, "ok")
+            tui.step(r.a)
+            port.end_turn(r.s, 1)
+            tui.settle(r.a)
+            spec.assert_eq(r.s.proposed.len, 0, "not over a draft")
+            key_(r, "backspace")
+            spec.assert_eq(r.s.proposed.len, 0, "still a draft")
+            key_(r, "backspace")
+            spec.assert_eq(r.s.proposed.len, 1, "offered once the input is empty")
+            spec.assert_eq(r.a.fence.open, 1, "asking")
+        }
+        spec.it("refusals of several Runs make one prompt; background results count") callback {
+            r = rig_(true)
+            refused_turn_(r)
+            emit_(r, "{\"run_start\":\"x\",\"step\":2}")
+            emit_(r, "{\"run_end\":{\"ok\":true,\"output\":\"\",\"changes\":[],\"tool_summary\":{\"counts\":[],\"omitted\":0},\"fence_denied\":[{\"op\":\"write\",\"resource\":\"/h/.cache/x\",\"layer\":\"tool\",\"suggestion\":\"policy.allow_write(p, \\\"~/.cache/x\\\")\"},{\"op\":\"egress\",\"resource\":\"127.0.0.1:4100\",\"layer\":\"child\",\"command_id\":\"b2\",\"suggestion\":\"policy.allow_host(p, \\\"127.0.0.1\\\", 4100)\"}]}}")
+            port.end_turn(r.s, 1)
+            tui.settle(r.a)
+            spec.assert_eq(r.s.proposed.len, 1, "one prompt")
+            spec.assert_true(string.contains(r.s.proposed[0], "~/.cache/x") == 1, "both Runs' refusals")
+            key_(r, "n")
+            app_queue.post(r.a.q, "{\"background\":{\"id\":\"b3\",\"kind\":\"bash\",\"state\":\"finished\",\"ok\":true,\"result\":\"{\\\"output\\\":\\\"\\\",\\\"fence_denied\\\":[{\\\"op\\\":\\\"egress\\\",\\\"resource\\\":\\\"r.invalid:443\\\",\\\"layer\\\":\\\"child\\\",\\\"command_id\\\":\\\"b3\\\",\\\"suggestion\\\":\\\"policy.allow_host(p, \\\\\\\"r.invalid\\\\\\\", 443)\\\"}]}\"}}")
+            tui.step(r.a)
+            spec.assert_eq(r.s.proposed.len, 2, "a background result's refusal offered when idle")
+            spec.assert_true(string.contains(r.s.proposed[1], "r.invalid:443") == 1, "its record")
+        }
+        spec.it("lines naeb cannot place are shown to add by hand, with no question") callback {
+            r = rig_(true)
+            r.s.proposal = "{\"items\":[{\"line\":\"policy.allow_host(p, \\\"127.0.0.1\\\", 4100)\",\"summary\":\"refused egress 127.0.0.1:4100 · b1\"}],\"error\":\"naeb.ae defines fence(p: ptr) more than once\",\"path\":\"/h/p/naeb.ae\"}"
+            refused_turn_(r)
+            port.end_turn(r.s, 1)
+            tui.settle(r.a)
+            spec.assert_str_eq(last_(r).text, "refused egress 127.0.0.1:4100 · b1\nnaeb.ae unchanged: naeb.ae defines fence(p: ptr) more than once\nAdd to fence(p: ptr) by hand, then run: naeb build\n    policy.allow_host(p, \"127.0.0.1\", 4100)", "by hand")
+            spec.assert_eq(r.a.fence.open, 0, "no question")
+            driver.type_text(r.t, "y")
+            tui.step(r.a)
+            spec.assert_str_eq(editor.text(r.a.input), "y", "keys go to the input")
+        }
+        spec.it("nib (no fence) collects nothing and never asks") callback {
+            r = rig_(false)
+            refused_turn_(r)
+            port.end_turn(r.s, 1)
+            tui.settle(r.a)
+            spec.assert_eq(r.s.proposed.len, 0, "no prompt")
+        }
+        spec.it("a long compiler output shows its first lines and says how many more") callback {
+            out = ""
+            for i in 0..20 { out = "${out}line ${i}\\n" }
+            text, ok = fence_offer.applied_text("{\"ok\":false,\"error\":\"the policy did not compile (exit 1)\",\"output\":\"${out}\"}")
+            spec.assert_true(!ok, "failed")
+            spec.assert_true(string.ends_with(text, "line 11\n… 8 more lines of the compiler's output") == 1, text)
+            spec.assert_true(string.contains(text, "line 12") == 0, "cut")
+        }
+        spec.it("answers: y and Y apply, scrolling keys none, anything else declines") callback {
+            spec.assert_eq(fence_offer.answer_of("y", false), fence_offer.ANSWER_YES, "y")
+            spec.assert_eq(fence_offer.answer_of("Y", false), fence_offer.ANSWER_YES, "Y")
+            spec.assert_eq(fence_offer.answer_of("", true), fence_offer.ANSWER_NONE, "scroll")
+            spec.assert_eq(fence_offer.answer_of("yes", false), fence_offer.ANSWER_NO, "yes is not a key")
+            spec.assert_eq(fence_offer.answer_of("", false), fence_offer.ANSWER_NO, "Enter, Esc")
+        }
+    }
+    return spec.run_summary(fw)
+}

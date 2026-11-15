@@ -22,13 +22,15 @@ import std.string
 import std.cryptography
 import nib.build_info
 import nib.fence
+import nib.fence.proposal
+import nib.jsonx
 import nib.tools.atomic_file
 import nib.tools.jail
 import nib.tools.process
 
 @source("policy_host.c")
 
-exports(FILE, interface, key, dir_for, library_path, record_field, platform, load, start_fence, build)
+exports(FILE, Approval, interface, key, dir_for, library_path, record_field, platform, load, start_fence, build, approve, propose)
 
 const FILE = "naeb.ae"
 const RECORD = "policy.built"
@@ -179,14 +181,115 @@ start_fence(home: string, cwd: string, env: ptr) -> (ptr, string, string) {
     if sha_of_file_(lib) != record_field(record, "library_sha256") {
         return null, "", "the policy library ${lib} is not the one naeb build made; run: naeb build"
     }
-    before = outside_roots_(f, cwd, env, dir, "the policy library's directory")
-    if before != "" { return null, "", before }
-    lerr = load(f, lib, home, project)
+    lerr = fill_(f, cwd, env, home, project, dir, lib)
     if lerr != "" { return null, "", lerr }
-    after = outside_roots_(f, cwd, env, dir, "the policy library's directory")
-    if after != "" { return null, "", after }
     fence.set_origin(f, src, record_field(record, "source_sha256"), lib, record_field(record, "library_sha256"))
     return f, "", ""
+}
+
+// Runs the library at `lib` against `f`, from outside every root a fenced
+// command may write (checked before and after): "" or why not.
+fill_(f: ptr, cwd: string, env: ptr, home: string, project: string, dir: string, lib: string) -> string {
+    before = outside_roots_(f, cwd, env, dir, "the policy library's directory")
+    if before != "" { return before }
+    lerr = load(f, lib, home, project)
+    if lerr != "" { return lerr }
+    return outside_roots_(f, cwd, env, dir, "the policy library's directory")
+}
+
+// What approve did: the new Fence, or the error (with the compiler's
+// output when the build failed), and naeb.ae's and the library's SHA-256
+// before and after.
+struct Approval {
+    fence: ptr
+    error: string
+    output: string
+    source_before: string
+    source_after: string
+    library_before: string
+    library_after: string
+    library: string
+}
+
+// The approval in naeb's TUI (docs/naeb/adr/0001): `text` becomes naeb.ae
+// and the policy is rebuilt as `naeb build` builds it (compile_, commit_),
+// then loaded into a new Fence for the caller to swap in. Applied only when
+// naeb.ae on disk is still `base` ("" none) and still what the policy in
+// force was built from (`expected`, its SHA-256; "" for the default fence).
+// On any failure naeb.ae and the built policy stay as they were.
+approve(home: string, cwd: string, src: string, env: ptr, expected: string, base: string, text: string) -> *Approval {
+    a = heap.new(Approval)
+    a.fence = null
+    a.error = ""
+    a.output = ""
+    a.source_before = expected
+    a.source_after = ""
+    a.library_before = ""
+    a.library_after = ""
+    project = canon_(jail.project_root(cwd))
+    path = atomic_file.join(project, FILE)
+    a.library = library_path(dir_for(home, project))
+    if expected != "" { a.library_before = sha_of_file_(a.library) }
+    serr = unchanged_(path, expected, base)
+    if serr != "" {
+        a.error = serr
+        return a
+    }
+    dir, derr = work_dir_(home, project)
+    if derr != "" {
+        a.error = derr
+        return a
+    }
+    tmp_lib, output, cerr = compile_(dir, src, text)
+    if cerr != "" {
+        a.output = output
+        a.error = cerr
+        return a
+    }
+    src_sha = sha_of_text_(text)
+    lib_sha = sha_of_file_(tmp_lib)
+    f = fence.new(home)
+    fence.deny_write(f, path)
+    lerr = fill_(f, cwd, env, home, project, dir, tmp_lib)
+    if lerr == "" { lerr = unchanged_(path, expected, base) }
+    if lerr != "" {
+        discard_(dir, tmp_lib)
+        a.error = lerr
+        return a
+    }
+    werr = atomic_file.replace(path, text, 420, 0, 1)
+    if werr != "" {
+        discard_(dir, tmp_lib)
+        a.error = "cannot write ${path}: ${werr}"
+        return a
+    }
+    got_src, got_lib, merr = commit_(dir, project, src, text, tmp_lib)
+    if merr != "" {
+        if expected == "" { fs.unlink(path) } else { atomic_file.replace(path, base, 420, 0, 1) }
+        a.error = merr
+        return a
+    }
+    if got_lib != lib_sha || got_src != src_sha {
+        a.error = "the policy library changed while it was built"
+        return a
+    }
+    fence.set_origin(f, path, src_sha, a.library, lib_sha)
+    a.fence = f
+    a.source_after = src_sha
+    a.library_after = lib_sha
+    return a
+}
+
+// "" when naeb.ae at `path` is `base` ("" absent) with SHA-256 `expected`.
+unchanged_(path: string, expected: string, base: string) -> string {
+    gone = "naeb.ae changed since the policy in force was built; not applied (review it and run: naeb build)"
+    if expected == "" {
+        if fs.exists(path) == 1 { return gone }
+        return ""
+    }
+    now, rerr = fs.read(path)
+    if rerr != "" || now != base || sha_of_text_(now) != expected { return gone }
+    return ""
 }
 
 say_(fd: int, text: string) { io.fd_write(fd, string.bytes(text)) }
@@ -205,6 +308,80 @@ diff_(old_path: string, new_path: string) -> string {
     r = process.run(argv, null, null, null, 60000 as long, 16777216 as long) as *process.Result
     if r.error != "" { return "(diff unavailable: ${r.error})\n" }
     return r.output
+}
+
+// <dir> (made, owner-only above it) and its build/ for `project`, or an error.
+work_dir_(home: string, project: string) -> (string, string) {
+    dir = dir_for(home, project)
+    work = "${dir}/build"
+    mk = fs.mkdir_p(work)
+    if mk != "" { return "", "cannot create ${work}: ${mk}" }
+    fs.chmod("${home}/.naeb", 448)
+    return dir, ""
+}
+
+// Compiles `text` (a naeb.ae) against src, a naeb-code checkout, into a
+// library beside <dir>'s: (that library, compiler output, error). Nothing
+// the project's policy is made of changes until commit_.
+compile_(dir: string, src: string, text: string) -> (string, string, string) {
+    if string.contains(text, "import naeb.policy") == 0 {
+        return "", "", "naeb.ae must import naeb.policy and define fence(p: ptr)"
+    }
+    policy_mod = "${src}/ae/policy_lib/naeb/policy/module.ae"
+    if src == "" || fs.exists(policy_mod) == 0 {
+        return "", "", "no naeb-code checkout at '${src}' (looked for ${policy_mod}); set NAEB_SRC"
+    }
+    entry = entry_(dir)
+    werr = fs.write(entry, "${text}${GLUE}")
+    if werr != "" { return "", "", "cannot write ${entry}: ${werr}" }
+    // A name of its own per process and source: dlopen keeps a library it
+    // loaded by its path, so the TUI's next approval must not reuse one.
+    tmp_lib = "${library_path(dir)}.new-${os.getpid()}-${string.substring(sha_of_text_(text), 0, 16)}"
+    argv = list.list_new()
+    list.list_add(argv, "ae")
+    list.list_add(argv, "build")
+    list.list_add(argv, "--emit=lib")
+    list.list_add(argv, entry)
+    list.list_add(argv, "--lib")
+    list.list_add(argv, "${src}/ae/policy_lib")
+    list.list_add(argv, "-o")
+    list.list_add(argv, tmp_lib)
+    r = process.run(argv, null, null, null, COMPILE_TIMEOUT_MS as long, 16777216 as long) as *process.Result
+    if r.error != "" || r.exit_code != 0 || fs.exists(tmp_lib) == 0 {
+        discard_(dir, tmp_lib)
+        return "", r.output, "the policy did not compile (${r.error}exit ${r.exit_code})"
+    }
+    return tmp_lib, r.output, ""
+}
+
+// This process's compile source in <dir>/build; build/policy.ae is the one
+// the library in force was compiled from.
+entry_(dir: string) -> string { return "${dir}/build/policy-${os.getpid()}.ae" }
+
+// Removes what compile_ made, when it does not become the policy.
+discard_(dir: string, tmp_lib: string) {
+    fs.unlink(tmp_lib)
+    fs.unlink(entry_(dir))
+}
+
+// Makes the library compile_ made from `text` the project's policy: the
+// library, the approved copy and the record. (source sha256, library
+// sha256, error).
+commit_(dir: string, project: string, src: string, text: string, tmp_lib: string) -> (string, string, string) {
+    lib = library_path(dir)
+    rn = fs.rename(tmp_lib, lib)
+    if rn != "" {
+        discard_(dir, tmp_lib)
+        return "", "", rn
+    }
+    fs.rename(entry_(dir), "${dir}/build/policy.ae")
+    src_sha = sha_of_text_(text)
+    lib_sha = sha_of_file_(lib)
+    record = "interface=${interface()}\nproject=${project}\nsource_sha256=${src_sha}\nlibrary_sha256=${lib_sha}\nnaeb_src=${src}\nnaeb_commit=${build_info.commit()}\n"
+    aerr = atomic_file.replace(atomic_file.join(dir, FILE), text, 384, 1, 1)
+    rerr = atomic_file.replace(atomic_file.join(dir, RECORD), record, 384, 1, 1)
+    if aerr != "" || rerr != "" { return src_sha, lib_sha, "cannot write the build record in ${dir}: ${aerr}${rerr}" }
+    return src_sha, lib_sha, ""
 }
 
 // `naeb build [-y]` from `cwd`: shows naeb.ae's diff against the last
@@ -228,18 +405,15 @@ build(home: string, cwd: string, src: string, yes: int, confirm: fn) -> int {
         say_(2, "naeb: no naeb-code checkout at '${src}' (looked for ${policy_mod}); set NAEB_SRC\n")
         return 1
     }
-    dir = dir_for(home, project)
-    work = "${dir}/build"
-    mk = fs.mkdir_p(work)
-    if mk != "" {
-        say_(2, "naeb: cannot create ${work}: ${mk}\n")
+    dir, derr = work_dir_(home, project)
+    if derr != "" {
+        say_(2, "naeb: ${derr}\n")
         return 1
     }
-    fs.chmod("${home}/.naeb", 448)
     approved = atomic_file.join(dir, FILE)
     old, oerr = fs.read(approved)
     if oerr != "" || old != text {
-        staged = "${work}/naeb.ae.proposed"
+        staged = "${dir}/build/naeb.ae.proposed"
         fs.write(staged, text)
         before = approved
         if oerr != "" { before = "/dev/null" }
@@ -252,43 +426,61 @@ build(home: string, cwd: string, src: string, yes: int, confirm: fn) -> int {
             }
         }
     }
-    entry = "${work}/policy.ae"
-    werr = fs.write(entry, "${text}${GLUE}")
-    if werr != "" {
-        say_(2, "naeb: cannot write ${entry}: ${werr}\n")
+    tmp_lib, output, cerr = compile_(dir, src, text)
+    if cerr != "" {
+        say_(2, output)
+        say_(2, "naeb: ${cerr}; nothing changed\n")
         return 1
     }
-    lib = library_path(dir)
-    tmp_lib = "${lib}.new"
-    argv = list.list_new()
-    list.list_add(argv, "ae")
-    list.list_add(argv, "build")
-    list.list_add(argv, "--emit=lib")
-    list.list_add(argv, entry)
-    list.list_add(argv, "--lib")
-    list.list_add(argv, "${src}/ae/policy_lib")
-    list.list_add(argv, "-o")
-    list.list_add(argv, tmp_lib)
-    r = process.run(argv, null, null, null, COMPILE_TIMEOUT_MS as long, 16777216 as long) as *process.Result
-    if r.error != "" || r.exit_code != 0 || fs.exists(tmp_lib) == 0 {
-        say_(2, r.output)
-        say_(2, "naeb: the policy did not compile (${r.error}exit ${r.exit_code}); nothing changed\n")
+    src_sha, lib_sha, merr = commit_(dir, project, src, text, tmp_lib)
+    if merr != "" {
+        say_(2, "naeb: ${merr}\n")
         return 1
     }
-    rn = fs.rename(tmp_lib, lib)
-    if rn != "" {
-        say_(2, "naeb: ${rn}\n")
-        return 1
-    }
-    src_sha = sha_of_text_(text)
-    lib_sha = sha_of_file_(lib)
-    record = "interface=${interface()}\nproject=${project}\nsource_sha256=${src_sha}\nlibrary_sha256=${lib_sha}\nnaeb_src=${src}\nnaeb_commit=${build_info.commit()}\n"
-    aerr = atomic_file.replace(approved, text, 384, 1, 1)
-    rerr = atomic_file.replace(atomic_file.join(dir, RECORD), record, 384, 1, 1)
-    if aerr != "" || rerr != "" {
-        say_(2, "naeb: cannot write the build record in ${dir}: ${aerr}${rerr}\n")
-        return 1
-    }
-    say_(1, "${src_sha}  ${path}\n${lib_sha}  ${lib}\nbuilt for interface ${interface()}: naeb in ${project} now runs with this policy\n")
+    say_(1, "${src_sha}  ${path}\n${lib_sha}  ${library_path(dir)}\nbuilt for interface ${interface()}: naeb in ${project} now runs with this policy\n")
     return 0
+}
+
+// What naeb's TUI offers for the refusal records `records` (a JSON array)
+// under fence `f`: {"items":[{"line","summary"}], "diff", "text", "base",
+// "expected", "path"} to show and approve, or with "error" (no "diff") when
+// the lines cannot be placed in naeb.ae with certainty; "" when no record
+// carries a line naeb would add. date: the approval comments' YYYY-MM-DD.
+propose(f: ptr, cwd: string, nib_home: string, records: string, date: string) -> string {
+    v = jsonx.parse(records)
+    if v == null { return "" }
+    refs = list.list_new()
+    i = 0
+    while i < jsonx.array_size(v) {
+        r = jsonx.array_at(v, i)
+        sug = jsonx.str_or(r, "suggestion", "")
+        if sug != "" {
+            list.list_add(refs, proposal.new_refusal(jsonx.str_or(r, "op", ""), jsonx.str_or(r, "resource", ""), jsonx.str_or(r, "command_id", ""), sug))
+        }
+        i = i + 1
+    }
+    jsonx.free(v)
+    items = proposal.group(refs, fence.home_canonical(f), fence.forbidden(f, cwd, nib_home))
+    if list.list_size(items) == 0 { return "" }
+    out = "{\"items\":["
+    k = 0
+    while k < list.list_size(items) {
+        it = list.list_get_raw(items, k) as *proposal.Item
+        if k > 0 { out = "${out}," }
+        out = "${out}{\"line\":${jsonx.quote(it.line)},\"summary\":${jsonx.quote(proposal.summary(it as ptr))}}"
+        k = k + 1
+    }
+    project = canon_(jail.project_root(cwd))
+    path = atomic_file.join(project, FILE)
+    base = ""
+    if fs.exists(path) == 1 {
+        text, rerr = fs.read(path)
+        if rerr != "" { return "${out}],\"error\":${jsonx.quote("cannot read ${path}: ${rerr}")}}" }
+        base = text
+    }
+    pl = proposal.place(base, items, date)
+    if pl.error != "" { return "${out}],\"error\":${jsonx.quote(pl.error)},\"path\":${jsonx.quote(path)}}" }
+    fp = f as *fence.Fence
+    d = proposal.unified(base, pl.text, pl.at, pl.added)
+    return "${out}],\"diff\":${jsonx.quote(d)},\"text\":${jsonx.quote(pl.text)},\"base\":${jsonx.quote(base)},\"expected\":${jsonx.quote(fp.policy_sha256)},\"path\":${jsonx.quote(path)}}"
 }

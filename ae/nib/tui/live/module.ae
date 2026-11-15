@@ -45,8 +45,12 @@ import nib.sandbox
 import nib.tui.app_queue
 import nib.tui.port
 import nib.tui.turn
+import nib.fence
+import nib.fence.policy
+import nib.sysenv
+import std.time
 
-exports(Live, new, session_of)
+exports(Live, new, session_of, set_naeb_src)
 
 struct Live {
     sp: ptr                  // the *session.Session
@@ -58,7 +62,12 @@ struct Live {
     stops: ptr               // std.list of ids whose stop waits for the Turn's end
     q: ptr                   // the app queue of the last Turn
     skills: string           // the skills summary of the Session's start (upstream log.skills)
+    naeb_src: string         // naeb: the naeb-code checkout approvals build the policy against
 }
+
+// naeb: where approved policies are built from (NAEB_SRC or the checkout
+// naeb was built in), as `naeb build` does.
+set_naeb_src(p: *port.Port, src: string) { (p.ctx as *Live).naeb_src = string.copy(src) }
 
 session_of(p: *port.Port) -> ptr { return (p.ctx as *Live).sp }
 
@@ -109,6 +118,7 @@ new(sp: @keep ptr, cfg: @keep ptr, op: @keep ptr, home: string) -> *port.Port {
     l.stops = list.list_new()
     (tools_(l).recovery as *changes.Recovery).enabled = 1
     l.skills = skills_json_(l)
+    l.naeb_src = ""
     p = heap.new(port.Port)
     p.ctx = l as ptr
     p.start_turn = |ctx: @keep ptr, text: string, images: string, compact: int, qp: @keep ptr, cancel: @keep ptr| {
@@ -322,6 +332,22 @@ new(sp: @keep ptr, cfg: @keep ptr, op: @keep ptr, home: string) -> *port.Port {
         string out = tools.fence_json(tools_(ctx as *Live) as ptr)
         return out
     }
+    p.fence_propose = |ctx: ptr, records: string| {
+        t = tools_(ctx as *Live)
+        if t.fence == null {
+            return ""
+        }
+        string out = policy.propose(t.fence, os.getcwd(), tools.nib_home(t as ptr), records, time.strftime(time.now(), "%Y-%m-%d"))
+        return out
+    }
+    p.fence_apply = |ctx: @keep ptr, prop: string, qp: @keep ptr| {
+        text = string.copy(prop)
+        worker.run_detached(|| {
+            r = approve_(ctx as *Live, text)
+            app_queue.post(qp as *app_queue.Queue, "{\"fence_applied\":${r}}")
+            return null
+        })
+    }
     // Upstream's idle tick: the progress snapshots due while no Turn runs.
     p.drain_progress = |ctx: ptr| {
         pq = tools_(ctx as *Live).progress
@@ -454,4 +480,41 @@ sessions_json_(l: *Live) -> string {
         out = "${out}{\"id\":${jsonx.quote(f.id)},\"age_ms\":${age},\"preview\":${jsonx.quote(f.preview)}}"
     }
     return "${out}]"
+}
+
+// The user's approval of a proposal (nib.fence.policy.propose's JSON):
+// naeb.ae and the policy rebuilt and loaded, the new Fence swapped into the
+// Session between Runs, the approval in the session log. The result for
+// fence_applied: {"ok":true} or {"ok":false,"error":..,"output":..}.
+approve_(l: *Live, prop: string) -> string {
+    t = tools_(l)
+    v = jsonx.parse(prop)
+    if t.fence == null || v == null || jsonx.has(v, "diff") == 0 {
+        jsonx.free(v)
+        return "{\"ok\":false,\"error\":\"nothing to apply\"}"
+    }
+    f = t.fence as *fence.Fence
+    env = t.env
+    if env == null { env = sysenv.environ() }
+    a = policy.approve(f.home, os.getcwd(), l.naeb_src, env, jsonx.str_or(v, "expected", ""), string.copy(jsonx.str_or(v, "base", "")), string.copy(jsonx.str_or(v, "text", "")))
+    lines = "["
+    items = jsonx.field(v, "items")
+    for i in 0..jsonx.array_size(items) {
+        if i > 0 { lines = "${lines}," }
+        lines = "${lines}${jsonx.quote(jsonx.str_or(jsonx.array_at(items, i), "line", ""))}"
+    }
+    lines = "${lines}]"
+    diff = string.copy(jsonx.str_or(v, "diff", ""))
+    jsonx.free(v)
+    ok = "false"
+    if a.fence != null {
+        session.swap_fence(l.sp, a.fence)
+        (l.op as *session.Options).fence = a.fence
+        ok = "true"
+    }
+    if t.has_log == 1 {
+        call(t.log_fn, t.log_ctx, ",\"fence_approval\":{\"ok\":${ok},\"lines\":${lines},\"diff\":${jsonx.quote(diff)},\"source_sha256_before\":${jsonx.quote(a.source_before)},\"source_sha256_after\":${jsonx.quote(a.source_after)},\"library_sha256_before\":${jsonx.quote(a.library_before)},\"library_sha256_after\":${jsonx.quote(a.library_after)},\"error\":${jsonx.quote(a.error)}}")
+    }
+    if a.fence != null { return "{\"ok\":true,\"library\":${jsonx.quote(a.library)}}" }
+    return "{\"ok\":false,\"error\":${jsonx.quote(a.error)},\"output\":${jsonx.quote(a.output)}}"
 }

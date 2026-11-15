@@ -47,7 +47,7 @@ import nib.tui.smooth
 
 exports(MAX_DIFF_LINES, MAX_SEGMENTS,
         KIND_USER, KIND_ASSISTANT, KIND_RUN, KIND_BACKGROUND, KIND_INFO, KIND_ERR, KIND_BILL,
-        KIND_FAILURE, KIND_CHANGES,
+        KIND_FAILURE, KIND_CHANGES, KIND_FENCE,
         RUN_RUNNING, RUN_BACKGROUND, RUN_SUPERSEDED, RUN_OK, RUN_FAILED, RUN_WARNING, RUN_LOST,
         RUN_TIMED_OUT, RUN_CANCELED,
         Invocation, Entry, new_entry, free_entry, invalidate, display_text, refresh_label,
@@ -66,6 +66,8 @@ const KIND_ERR = 5
 const KIND_BILL = 6
 const KIND_FAILURE = 7
 const KIND_CHANGES = 8
+// naeb: a proposed naeb.ae change and its y/N (nib.tui.fence_offer)
+const KIND_FENCE = 9
 
 const RUN_RUNNING = 0
 const RUN_BACKGROUND = 1
@@ -378,7 +380,7 @@ draw(e: *Entry, win: screen.Window, commit: bool) -> int {
     wrap = screen.WRAP_WORD
     if folded {
         wrap = screen.WRAP_NONE
-    } else if e.kind == KIND_RUN || e.kind == KIND_BACKGROUND || e.kind == KIND_FAILURE {
+    } else if e.kind == KIND_RUN || e.kind == KIND_BACKGROUND || e.kind == KIND_FAILURE || e.kind == KIND_FENCE {
         wrap = screen.WRAP_GRAPHEME
     }
     shown = segments(e)
@@ -432,6 +434,30 @@ draw(e: *Entry, win: screen.Window, commit: bool) -> int {
     r = screen.draw(win, shown, wrap: wrap, commit: commit)
     if folded { return 1 }
     return rows_of_(r)
+}
+
+// A proposed naeb.ae change: what it answers, the diff in a Run's colours
+// (headers and hunk lines dim, + green, - red, context dim), the question.
+fence_segments_(b: *Segs, text: string) {
+    n = string.length(text)
+    start = 0
+    while start < n {
+        nl = string.index_of_from(text, "\n", start)
+        stop = if nl < 0 { n } else { nl + 1 }
+        line = string.substring(text, start, stop)
+        st = screen.style()
+        if string.starts_with(line, "--- ") == 1 || string.starts_with(line, "+++ ") == 1 || string.starts_with(line, "@@") == 1 {
+            st = screen.style(attrs: screen.BOLD | screen.DIM)
+        } else if string.starts_with(line, "+") == 1 {
+            st = fg_(2)
+        } else if string.starts_with(line, "-") == 1 {
+            st = fg_(1)
+        } else if string.starts_with(line, " ") == 1 {
+            st = dim_()
+        }
+        add_(b, line, st)
+        start = stop
+    }
 }
 
 // `label` is the summary line, `text` one row per file while open.
@@ -614,7 +640,9 @@ segments(e: *Entry) -> screen.Segment[] {
         add_(b, e.text, d)
         return b.items
     }
-    if e.kind == KIND_INFO || e.kind == KIND_BILL {
+    if e.kind == KIND_FENCE {
+        fence_segments_(b, e.text)
+    } else if e.kind == KIND_INFO || e.kind == KIND_BILL {
         add_(b, e.text, d)
     } else if e.kind == KIND_CHANGES {
         add_(b, e.label, d)

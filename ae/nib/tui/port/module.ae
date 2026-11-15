@@ -55,6 +55,10 @@ exports(Port, Script, scripted, script_of, emit, end_turn, fail_turn, play_next,
 //                                     run is its Run id, error the commit's ("" none)
 //   sandbox_status(ctx) -> string
 //   fence(ctx) -> string              the project fence in force (fence.describe), "" none (nib)
+//   fence_propose(ctx, records) -> string   naeb: the naeb.ae change offered for refusal
+//                                     records (a JSON array): nib.fence.policy.propose's JSON, "" none
+//   fence_apply(ctx, proposal, q)     naeb: the user approved `proposal`; applies it off the app's
+//                                     thread and posts {"fence_applied":{"ok":..,"error"?,"output"?}} to q
 //   drain_progress(ctx) -> ptr        std.list of progress JSON objects due while idle
 //   predict(ctx, instruction, input, cancel) -> string   the model's reply, "" on failure
 //   skills_summary(ctx) -> string     {"count","found","skipped","missing"} of the Session's start
@@ -86,6 +90,8 @@ struct Port {
     run_js: fn
     sandbox_status: fn
     fence: fn
+    fence_propose: fn
+    fence_apply: fn
     drain_progress: fn
     predict: fn
     skills_summary: fn
@@ -122,6 +128,9 @@ struct Script {
     mcp_ids: string[]       // mcp_state's answers, by server id
     mcp_states: string[]
     fence: string           // fence's answer: a fence.describe JSON, "" none
+    proposal: string        // fence_propose's answer
+    proposed: string[]      // the records fence_propose was asked about
+    applied: string[]       // the proposals fence_apply was given
 }
 
 struct Events {
@@ -145,6 +154,7 @@ scripted(cfg: @keep ptr, home: string) -> *Port {
     s.js_reply = "{\"ok\":true,\"text\":\"undefined\",\"logs\":\"\",\"diff\":\"\"}"
     s.hint = ""
     s.fence = ""
+    s.proposal = ""
     p = heap.new(Port)
     p.ctx = s as ptr
     p.start_turn = |ctx: ptr, text: string, images: string, compact: int, q: @keep ptr, cancel: @keep ptr| {
@@ -207,6 +217,15 @@ scripted(cfg: @keep ptr, home: string) -> *Port {
     p.run_js = |ctx: ptr, code: string| { return (ctx as *Script).js_reply }
     p.sandbox_status = |ctx: ptr| { return "off (scripted)" }
     p.fence = |ctx: ptr| { return (ctx as *Script).fence }
+    p.fence_propose = |ctx: ptr, records: string| {
+        sc = ctx as *Script
+        sc.proposed.push(string.copy(records))
+        return sc.proposal
+    }
+    p.fence_apply = |ctx: ptr, prop: string, q: ptr| {
+        sc = ctx as *Script
+        sc.applied.push(string.copy(prop))
+    }
     p.drain_progress = |ctx: ptr| {
         sc = ctx as *Script
         out = sc.idle_progress

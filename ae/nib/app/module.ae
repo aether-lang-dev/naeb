@@ -82,6 +82,11 @@ run_tui_(envp: @keep ptr, ap: ptr, fence: @keep ptr) {
     term.query_color(t, input.REPORT_BG)
     if t.cap_color_scheme_updates { term.subscribe_color_scheme(t) }
     p = live.new(sp, cfg, op, home)
+    if fence != null {
+        nsrc = env.get(envp, "NAEB_SRC")
+        if nsrc == "" { nsrc = build_info.source_dir() }
+        live.set_naeb_src(p, nsrc)
+    }
     app = tui.new(t as ptr, p as ptr, clock.of_terminal(t as ptr) as ptr, envp)
     tui.run(app)
     tui.free(app)

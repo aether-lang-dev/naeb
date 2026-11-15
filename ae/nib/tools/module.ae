@@ -48,7 +48,7 @@ import nib.image
 import nib.provider.types
 
 exports(Tools, RunScope, new, new_scope, host, call_tool, active_tool, names_json, docs, all_docs, tool_names,
-        is_ported, take_images, credential_paths, writable_roots, nib_home, take_changes, set_workspace, set_fence, fence_json, fence_spec, fence_proxy, fence_monitor, fence_base, fence_child, close_channel, child_refusals, refusals_json, take_denied,
+        is_ported, take_images, credential_paths, writable_roots, nib_home, take_changes, set_workspace, set_fence, swap_fence, fence_json, fence_spec, fence_proxy, fence_monitor, fence_base, fence_child, close_channel, child_refusals, refusals_json, take_denied,
         cancel_cell, set_log, sandbox_roots, change_paths, export_versions, import_versions, set_config, take_usage, take_jail_notice, enable_undo, begin_turn_undo, finish_turn_undo, run_undo, turn_undo_dir, attach_turn_undo_dir, close_undo)
 
 const DOC_MCP = "  // Call an enabled MCP server tool. Server/transport failures are data; argument errors reject. Full results stay in JS; images share the Run image limit.\n  async mcp(name, args = {}) {}, // → { ok, content, structured?, error? }\n"
@@ -173,6 +173,7 @@ struct Tools {
     proxy_guard: ptr
     fence_reason: string   // "?" until probed, then "" (a fenced child can be confined) or why not
     monitor: ptr           // *denials.Monitor, made on first use under a fence
+    fence_gen: int         // fences swapped in (swap_fence): names each proxy's sockets apart
 }
 
 struct RunScope {
@@ -231,12 +232,26 @@ new(home: string) -> ptr {
     t.proxy_guard = lock.new()
     t.fence_reason = "?"
     t.monitor = null
+    t.fence_gen = 0
     return t as ptr
 }
 
 // A project fence (docs/naeb/adr/0001): from here on every tool and child
 // is held to it. The Fence is naeb's, kept, not copied.
 set_fence(tp: ptr, f: @keep ptr) { (tp as *Tools).fence = f }
+
+// A fence the user approved in naeb's TUI, in place of the current one
+// (session.swap_fence, between Runs). Children started from here on run in
+// it, through a proxy of its own; those already running keep the proxy and
+// the spec they were started with.
+swap_fence(tp: ptr, f: @keep ptr) {
+    t = tp as *Tools
+    lock.acquire(t.proxy_guard)
+    t.fence = f
+    t.proxy = null
+    t.fence_gen = t.fence_gen + 1
+    lock.release(t.proxy_guard)
+}
 
 // The jail.Spec of the fence for the current directory (no network part),
 // or null without a fence.
@@ -256,6 +271,7 @@ fence_proxy(tp: ptr) -> ptr {
         prefix = ""
         if os.platform() == "linux" {
             prefix = atomic_file.join(atomic_file.join(nib_home(tp), "run"), "egress-${os.getpid()}")
+            if t.fence_gen > 0 { prefix = "${prefix}-${t.fence_gen}" }
         }
         t.proxy = egress.new(t.fence, prefix)
     }

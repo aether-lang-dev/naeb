@@ -6,7 +6,8 @@
 # attribution.py (each refusal is reported with the command that caused it),
 # named_denials.py (a child's file refusals are named), refusal_records.py
 # (one record format everywhere), fence_view.py (the policy in force, as
-# data) and naeb_policy.py (how naeb builds, checks and loads a policy).
+# data), naeb_policy.py (how naeb builds, checks and loads a policy) and
+# fence_approval.py (the TUI's approval loop).
 set -eu
 ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 cd "$ROOT"
@@ -22,5 +23,6 @@ if [ $# -eq 0 ]; then
     NAEB="$NAEB" python3 -I ae/tests/redteam/refusal_records.py || status=1
     NAEB="$NAEB" python3 -I ae/tests/redteam/fence_view.py || status=1
     NAEB="$NAEB" python3 -I ae/tests/redteam/naeb_policy.py || status=1
+    NAEB="$NAEB" python3 -I ae/tests/redteam/fence_approval.py || status=1
 fi
 exit $status

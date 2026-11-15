@@ -1,0 +1,154 @@
+// naeb's approval loop (docs/naeb/adr/0001): which naeb.ae lines are
+// offered for a set of refusals, where they go in naeb.ae, and the diff the
+// user approves. Pure text; nib.fence.policy does the files and the build.
+
+import std.spec
+import std.list
+import std.string
+import nib.fence.proposal
+
+const HOME = "/h"
+
+ref_(op: string, resource: string, command: string, line: string) -> ptr {
+    return proposal.new_refusal(op, resource, command, line)
+}
+
+forbidden_() -> ptr {
+    f = list.list_new()
+    list.list_add(f, "/h/.ssh")
+    list.list_add(f, "/h/.m2/settings.xml")
+    list.list_add(f, "/h/.m2/settings-security.xml")
+    list.list_add(f, "/h/.nib")
+    list.list_add(f, "/h/work/proj")
+    return f
+}
+
+lines_of_(items: ptr) -> string {
+    out = ""
+    i = 0
+    while i < list.list_size(items) {
+        it = list.list_get_raw(items, i) as *proposal.Item
+        out = "${out}${it.line} [${list.list_size(it.refusals)}]\n"
+        i = i + 1
+    }
+    return out
+}
+
+one_(items: ptr) -> *proposal.Item { return list.list_get_raw(items, 0) as *proposal.Item }
+
+const POLICY = "// The fixture's policy.\n\nimport naeb.policy\n\nfence(p: ptr) {\n    // Bundler: a home in the project.\n    policy.set_env(p, \"BUNDLE_USER_HOME\", \"\${policy.project_root(p)}/.bundle/user\")\n    policy.allow_host(p, \"rubygems.org\", 443) // { not a brace }\n    /* } nor this */\n}\n\nhelper() -> int { return 1 }\n"
+
+main() {
+    fw = spec.init()
+    spec.describe(fw, "fence.proposal lines") {
+        spec.it("accepts only the three line shapes naeb suggests") callback {
+            spec.assert_eq(proposal.valid_line("policy.allow_read(p, \"~/.npmrc\")"), 1, "read")
+            spec.assert_eq(proposal.valid_line("policy.allow_write(p, \"/opt/cache\")"), 1, "write")
+            spec.assert_eq(proposal.valid_line("policy.allow_host(p, \"127.0.0.1\", 8080)"), 1, "host")
+            spec.assert_eq(proposal.valid_line("policy.open_home(p)"), 0, "not a suggestion")
+            spec.assert_eq(proposal.valid_line("policy.allow_read(p, \"~/\${x}\")"), 0, "interpolation")
+            spec.assert_eq(proposal.valid_line("policy.allow_read(p, \"a\\\"b\")"), 0, "escapes")
+            spec.assert_eq(proposal.valid_line("policy.allow_read(p, \"a\"); policy.open_home(p)"), 0, "a second statement")
+            spec.assert_eq(proposal.valid_line("policy.allow_host(p, \"h\", 44x)"), 0, "port digits")
+            spec.assert_eq(proposal.valid_line("policy.allow_read(p, \"a\nb\")"), 0, "a newline")
+        }
+    }
+    spec.describe(fw, "fence.proposal grouping") {
+        spec.it("many files under one directory are one line, never wider than they need") callback {
+            rs = list.list_new()
+            i = 0
+            while i < 300 {
+                list.list_add(rs, ref_("write", "/h/.m2/repository/org/x/a${i}.jar", "b3", "policy.allow_write(p, \"~/.m2/repository/org/x/a${i}.jar\")"))
+                list.list_add(rs, ref_("write", "/h/.m2/repository/com/y/b${i}.pom", "b3", "policy.allow_write(p, \"~/.m2/repository/com/y/b${i}.pom\")"))
+                i = i + 1
+            }
+            items = proposal.group(rs, HOME, forbidden_())
+            spec.assert_str_eq(lines_of_(items), "policy.allow_write(p, \"~/.m2/repository\") [600]\n", "one line")
+            spec.assert_str_eq(proposal.summary(one_(items) as ptr), "refused write under ~/.m2/repository · 600 refusals · b3", "the count shown")
+        }
+        spec.it("a directory holding a secret is split below it; $HOME never") callback {
+            rs = list.list_new()
+            list.list_add(rs, ref_("write", "/h/.m2/repository/a.jar", "b1", "policy.allow_write(p, \"~/.m2/repository/a.jar\")"))
+            list.list_add(rs, ref_("write", "/h/.m2/repository/b/c.jar", "b1", "policy.allow_write(p, \"~/.m2/repository/b/c.jar\")"))
+            list.list_add(rs, ref_("write", "/h/.m2/wrapper/dists/m/1/x.zip", "b2", "policy.allow_write(p, \"~/.m2/wrapper/dists/m/1/x.zip\")"))
+            list.list_add(rs, ref_("write", "/h/.m2/wrapper/dists/m/1/y.zip", "b2", "policy.allow_write(p, \"~/.m2/wrapper/dists/m/1/y.zip\")"))
+            list.list_add(rs, ref_("read", "/h/.cache/k/one", "", "policy.allow_read(p, \"~/.cache/k/one\")"))
+            list.list_add(rs, ref_("read", "/h/.config/k/two", "", "policy.allow_read(p, \"~/.config/k/two\")"))
+            items = proposal.group(rs, HOME, forbidden_())
+            spec.assert_str_eq(lines_of_(items), "policy.allow_write(p, \"~/.m2/repository\") [2]\npolicy.allow_write(p, \"~/.m2/wrapper/dists/m/1\") [2]\npolicy.allow_read(p, \"~/.cache/k/one\") [1]\npolicy.allow_read(p, \"~/.config/k/two\") [1]\n", "~/.m2 and ~ are too wide")
+        }
+        spec.it("never the project, nor a directory containing it") callback {
+            rs = list.list_new()
+            list.list_add(rs, ref_("write", "/h/work/a", "b1", "policy.allow_write(p, \"~/work/a\")"))
+            list.list_add(rs, ref_("write", "/h/work/b", "b1", "policy.allow_write(p, \"~/work/b\")"))
+            items = proposal.group(rs, HOME, forbidden_())
+            spec.assert_eq(list.list_size(items), 2, "~/work holds the project: two lines")
+        }
+        spec.it("outside $HOME a group needs two components") callback {
+            rs = list.list_new()
+            list.list_add(rs, ref_("write", "/opt/a", "b1", "policy.allow_write(p, \"/opt/a\")"))
+            list.list_add(rs, ref_("write", "/srv/b", "b1", "policy.allow_write(p, \"/srv/b\")"))
+            list.list_add(rs, ref_("write", "/var/cache/t/x", "b1", "policy.allow_write(p, \"/var/cache/t/x\")"))
+            list.list_add(rs, ref_("write", "/var/cache/t/y", "b1", "policy.allow_write(p, \"/var/cache/t/y\")"))
+            items = proposal.group(rs, HOME, forbidden_())
+            spec.assert_str_eq(lines_of_(items), "policy.allow_write(p, \"/opt/a\") [1]\npolicy.allow_write(p, \"/srv/b\") [1]\npolicy.allow_write(p, \"/var/cache/t\") [2]\n", "/ is never a group")
+        }
+        spec.it("a write line answers the reads beneath it; one line per host:port") callback {
+            rs = list.list_new()
+            list.list_add(rs, ref_("read", "/h/.gradle/caches/x", "b1", "policy.allow_read(p, \"~/.gradle/caches/x\")"))
+            list.list_add(rs, ref_("write", "/h/.gradle/caches/y", "b1", "policy.allow_write(p, \"~/.gradle/caches/y\")"))
+            list.list_add(rs, ref_("write", "/h/.gradle/caches/z", "b2", "policy.allow_write(p, \"~/.gradle/caches/z\")"))
+            list.list_add(rs, ref_("egress", "repo.invalid:443", "b1", "policy.allow_host(p, \"repo.invalid\", 443)"))
+            list.list_add(rs, ref_("egress", "repo.invalid:443", "b2", "policy.allow_host(p, \"repo.invalid\", 443)"))
+            list.list_add(rs, ref_("egress", "repo.invalid:80", "b2", "policy.allow_host(p, \"repo.invalid\", 80)"))
+            list.list_add(rs, ref_("read", "/h/x", "b2", "policy.open_home(p)"))
+            items = proposal.group(rs, HOME, forbidden_())
+            spec.assert_str_eq(lines_of_(items), "policy.allow_write(p, \"~/.gradle/caches\") [3]\npolicy.allow_host(p, \"repo.invalid\", 443) [2]\npolicy.allow_host(p, \"repo.invalid\", 80) [1]\n", "grouped, the odd line dropped")
+            spec.assert_str_eq(proposal.summary(list.list_get_raw(items, 1)), "refused egress repo.invalid:443 · 2 refusals · b1, b2", "host summary")
+            spec.assert_str_eq(proposal.summary(list.list_get_raw(items, 2)), "refused egress repo.invalid:80 · b2", "single")
+        }
+    }
+    spec.describe(fw, "fence.proposal placing") {
+        spec.it("puts the lines last in fence(p: ptr), each after its comment, and diffs it") callback {
+            rs = list.list_new()
+            list.list_add(rs, ref_("egress", "127.0.0.1:4100", "b3", "policy.allow_host(p, \"127.0.0.1\", 4100)"))
+            items = proposal.group(rs, HOME, forbidden_())
+            pl = proposal.place(POLICY, items, "2026-11-15")
+            spec.assert_str_eq(pl.error, "", "placed")
+            want = "// The fixture's policy.\n\nimport naeb.policy\n\nfence(p: ptr) {\n    // Bundler: a home in the project.\n    policy.set_env(p, \"BUNDLE_USER_HOME\", \"\${policy.project_root(p)}/.bundle/user\")\n    policy.allow_host(p, \"rubygems.org\", 443) // { not a brace }\n    /* } nor this */\n\n    // Approved 2026-11-15: refused egress 127.0.0.1:4100 (b3)\n    policy.allow_host(p, \"127.0.0.1\", 4100)\n}\n\nhelper() -> int { return 1 }\n"
+            spec.assert_str_eq(pl.text, want, "the new naeb.ae")
+            d = proposal.unified(POLICY, pl.text, pl.at, pl.added)
+            spec.assert_str_eq(d, "--- naeb.ae\n+++ naeb.ae (proposed)\n@@ -7,6 +7,9 @@\n     policy.set_env(p, \"BUNDLE_USER_HOME\", \"\${policy.project_root(p)}/.bundle/user\")\n     policy.allow_host(p, \"rubygems.org\", 443) // { not a brace }\n     /* } nor this */\n+\n+    // Approved 2026-11-15: refused egress 127.0.0.1:4100 (b3)\n+    policy.allow_host(p, \"127.0.0.1\", 4100)\n }\n \n helper() -> int { return 1 }\n", "diff -u's form")
+        }
+        spec.it("an empty body gets no blank line first; tabs are kept") callback {
+            rs = list.list_new()
+            list.list_add(rs, ref_("read", "/h/.npmrc", "", "policy.allow_read(p, \"~/.npmrc\")"))
+            list.list_add(rs, ref_("egress", "r.invalid:443", "b1", "policy.allow_host(p, \"r.invalid\", 443)"))
+            pl = proposal.place("import naeb.policy\n\nfence(p: ptr) {\n}\n", proposal.group(rs, HOME, forbidden_()), "2026-01-02")
+            spec.assert_str_eq(pl.text, "import naeb.policy\n\nfence(p: ptr) {\n    // Approved 2026-01-02: refused read /h/.npmrc (tool)\n    policy.allow_read(p, \"~/.npmrc\")\n\n    // Approved 2026-01-02: refused egress r.invalid:443 (b1)\n    policy.allow_host(p, \"r.invalid\", 443)\n}\n", "empty body")
+            pl2 = proposal.place("import naeb.policy\nfence(p: ptr)\n{\n\tpolicy.open_home(p)\n}\n", proposal.group(rs, HOME, forbidden_()), "d")
+            spec.assert_true(string.contains(pl2.text, "\n\tpolicy.open_home(p)\n\n\t// Approved d: refused read /h/.npmrc (tool)\n\tpolicy.allow_read(p, \"~/.npmrc\")\n") == 1, "tab indent kept: ${pl2.text}")
+        }
+        spec.it("a project without naeb.ae gets a new one, all of it added") callback {
+            rs = list.list_new()
+            list.list_add(rs, ref_("egress", "r.invalid:443", "b1", "policy.allow_host(p, \"r.invalid\", 443)"))
+            pl = proposal.place("", proposal.group(rs, HOME, forbidden_()), "d")
+            spec.assert_str_eq(pl.error, "", "placed")
+            spec.assert_true(string.starts_with(pl.text, proposal.NEW_POLICY) == 0, "lines inside the body")
+            d = proposal.unified("", pl.text, pl.at, pl.added)
+            spec.assert_true(string.starts_with(d, "--- /dev/null\n+++ naeb.ae (proposed)\n@@ -0,0 +1,8 @@\n+// naeb's policy") == 1, "a new file: ${d}")
+        }
+        spec.it("refuses to guess where to put them") callback {
+            rs = list.list_new()
+            list.list_add(rs, ref_("egress", "r.invalid:443", "b1", "policy.allow_host(p, \"r.invalid\", 443)"))
+            items = proposal.group(rs, HOME, forbidden_())
+            spec.assert_true(proposal.place("import naeb.policy\nfence(p: ptr) { policy.open_home(p) }\n", items, "d").error != "", "} not on its own line")
+            spec.assert_true(proposal.place("import naeb.policy\nfence(q: ptr) {\n}\n", items, "d").error != "", "another parameter name")
+            spec.assert_true(proposal.place("import naeb.policy\nfence(p: ptr) {\n}\nfence(p: ptr) {\n}\n", items, "d").error != "", "two bodies")
+            spec.assert_true(proposal.place("import naeb.policy\nfence(p: ptr) {\n    x = \"unterminated\n}\n", items, "d").error != "", "an unterminated string")
+            spec.assert_true(proposal.place("import naeb.policy\nother() {\n}\n", items, "d").error != "", "no fence")
+            spec.assert_true(proposal.place("import naeb.policy\nfence(p: ptr) {\n    if x {\n}\n", items, "d").error != "", "unbalanced")
+        }
+    }
+    return spec.run_summary(fw)
+}

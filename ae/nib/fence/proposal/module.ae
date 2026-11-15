@@ -1,0 +1,702 @@
+// fence.proposal: the naeb.ae lines naeb offers the user after the fence
+// refused something (docs/naeb/adr/0001, "Approval in the TUI"). Pure text:
+// the refusal records' suggestions grouped into as few lines as are safe,
+// where they go in naeb.ae, and the unified diff the user approves. Reading
+// and writing naeb.ae, the build and the reload are nib.fence.policy's.
+//
+// Grouping: one allow_host line per host:port; read and write paths under
+// their nearest common directory, unless that directory is $HOME, contains
+// $HOME, is or contains a forbidden path (the secrets list, the policy's
+// own denials, the project, $NIB_HOME) or lies inside one; then each
+// subdirectory below it is grouped on its own. A write line also answers
+// the read refusals beneath it (a writable root is readable).
+
+import std.list
+import std.string
+
+exports(Refusal, Item, Placed, new_refusal, valid_line, group, summary, comment, place, unified, NEW_POLICY)
+
+// A naeb.ae for a project that has none, before its first lines.
+const NEW_POLICY = "// naeb's policy for this project (docs/naeb/adr/0001).\n\nimport naeb.policy\n\nfence(p: ptr) {\n}\n"
+
+const READ = "allow_read"
+const WRITE = "allow_write"
+const HOST = "allow_host"
+
+// One refusal record with a suggestion.
+struct Refusal {
+    op: string          // read, write, egress, ...
+    resource: string
+    command: string     // command_id; "" for naeb's in-process tools
+    line: string        // its suggestion: one naeb.ae line
+}
+
+// One proposed naeb.ae line and the refusals it answers.
+struct Item {
+    line: string
+    kind: string        // allow_read, allow_write, allow_host
+    target: string      // the path or "host:port" as the line names it
+    refusals: ptr       // list of *Refusal
+}
+
+// Where the lines went: the new text, the line index they start at in the
+// old text, and how many lines were added; or why they could not be placed.
+struct Placed {
+    text: string
+    at: int
+    added: int
+    error: string
+}
+
+new_refusal(op: string, resource: string, command: string, line: string) -> ptr {
+    r = heap.new(Refusal)
+    r.op = string.copy(op)
+    r.resource = string.copy(resource)
+    r.command = string.copy(command)
+    r.line = string.copy(line)
+    return r as ptr
+}
+
+new_item_(line: string, kind: string, target: string) -> *Item {
+    it = heap.new(Item)
+    it.line = line
+    it.kind = kind
+    it.target = target
+    it.refusals = list.list_new()
+    return it
+}
+
+// A quoted argument naeb may write into Aether source as it is: printable
+// ASCII without quotes, backslashes or interpolation.
+plain_arg_(s: string) -> int {
+    n = string.length(s)
+    if n == 0 { return 0 }
+    i = 0
+    while i < n {
+        c = string.char_at(s, i)
+        if c < 32 || c > 126 || c == 34 || c == 92 || c == 36 || c == 123 || c == 125 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+digits_(s: string) -> int {
+    n = string.length(s)
+    if n == 0 || n > 5 { return 0 }
+    i = 0
+    while i < n {
+        c = string.char_at(s, i)
+        if c < 48 || c > 57 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+// (kind, argument, port): the parts of a line naeb would add, or kind ""
+// when it is not exactly policy.allow_read(p, "path"),
+// policy.allow_write(p, "path") or policy.allow_host(p, "host", port).
+parse_(line: string) -> (string, string, string) {
+    kinds = [READ, WRITE, HOST]
+    for i in 0..3 {
+        head = "policy.${kinds[i]}(p, \""
+        if string.starts_with(line, head) == 1 {
+            rest = string.substring(line, string.length(head), string.length(line))
+            q = string.index_of(rest, "\"")
+            if q < 0 { return "", "", "" }
+            arg = string.substring(rest, 0, q)
+            tail = string.substring(rest, q + 1, string.length(rest))
+            if plain_arg_(arg) == 0 { return "", "", "" }
+            if kinds[i] == HOST {
+                if string.starts_with(tail, ", ") == 0 || string.ends_with(tail, ")") == 0 { return "", "", "" }
+                port = string.substring(tail, 2, string.length(tail) - 1)
+                if digits_(port) == 0 { return "", "", "" }
+                return HOST, arg, port
+            }
+            if tail != ")" { return "", "", "" }
+            return kinds[i], arg, ""
+        }
+    }
+    return "", "", ""
+}
+
+// 1 when `line` is one naeb would add to naeb.ae (parse_).
+valid_line(line: string) -> int {
+    k, _a, _p = parse_(line)
+    if k == "" { return 0 }
+    return 1
+}
+
+expand_(home: string, path: string) -> string {
+    if path == "~" { return home }
+    if string.starts_with(path, "~/") == 1 { return "${home}${string.substring(path, 1, string.length(path))}" }
+    return path
+}
+
+tilde_(home: string, path: string) -> string {
+    if path == home { return "~" }
+    if string.starts_with(path, "${home}/") == 1 { return "~${string.substring(path, string.length(home), string.length(path))}" }
+    return path
+}
+
+// 1 when `path` is `parent` or below it.
+under_(parent: string, path: string) -> int {
+    if parent == "/" { return 1 }
+    if path == parent { return 1 }
+    if string.starts_with(path, "${parent}/") == 1 { return 1 }
+    return 0
+}
+
+// The longest directory every path in `paths` is or lies under.
+common_(paths: ptr) -> string {
+    first, _g = list.get_string(paths, 0)
+    c = first
+    i = 1
+    while i < list.list_size(paths) {
+        p, _g2 = list.get_string(paths, i)
+        while under_(c, p) == 0 {
+            slash = last_slash_(c)
+            if slash <= 0 {
+                c = "/"
+            } else {
+                c = string.substring(c, 0, slash)
+            }
+        }
+        i = i + 1
+    }
+    return c
+}
+
+last_slash_(s: string) -> int {
+    i = string.length(s) - 1
+    while i >= 0 && string.char_at(s, i) != 47 { i = i - 1 }
+    return i
+}
+
+components_(path: string) -> int {
+    n = 0
+    i = 0
+    while i < string.length(path) {
+        if string.char_at(path, i) == 47 && i + 1 < string.length(path) { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+// Whether a directory standing for several refusals may be granted.
+allowed_dir_(d: string, home: string, forbidden: ptr) -> int {
+    if d == "/" || under_(d, home) == 1 { return 0 }
+    if under_(home, d) == 0 && components_(d) < 2 { return 0 }
+    i = 0
+    while i < list.list_size(forbidden) {
+        f, _g = list.get_string(forbidden, i)
+        if f != "" && (under_(d, f) == 1 || under_(f, d) == 1) { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+// Paths ("abs\trefusal index") into items of `kind`, appended to `out`.
+cluster_(kind: string, paths: ptr, refs: ptr, home: string, forbidden: ptr, out: ptr) {
+    distinct = list.list_new()
+    i = 0
+    while i < list.list_size(paths) {
+        p, _g = list.get_string(paths, i)
+        if has_(distinct, p) == 0 { list.list_add(distinct, p) }
+        i = i + 1
+    }
+    d = common_(distinct)
+    if list.list_size(distinct) == 1 || allowed_dir_(d, home, forbidden) == 1 {
+        if list.list_size(distinct) == 1 {
+            // A single path: the refusal's own suggestion, as it was made.
+            r0 = list.list_get_raw(refs, 0) as *Refusal
+            it = new_item_(r0.line, kind, tilde_(home, d))
+        } else {
+            t = tilde_(home, d)
+            it = new_item_("policy.${kind}(p, \"${t}\")", kind, t)
+        }
+        k = 0
+        while k < list.list_size(refs) {
+            list.list_add(it.refusals, list.list_get_raw(refs, k))
+            k = k + 1
+        }
+        list.list_add(out, it as ptr)
+        return
+    }
+    // Too wide: each entry directly below d on its own.
+    heads = list.list_new()
+    j = 0
+    while j < list.list_size(paths) {
+        p, _g3 = list.get_string(paths, j)
+        list.list_add(heads, head_below_(d, p))
+        j = j + 1
+    }
+    order = list.list_new()
+    j = 0
+    while j < list.list_size(heads) {
+        h, _g4 = list.get_string(heads, j)
+        if has_(order, h) == 0 { list.list_add(order, h) }
+        j = j + 1
+    }
+    m = 0
+    while m < list.list_size(order) {
+        h, _g5 = list.get_string(order, m)
+        sub = list.list_new()
+        subrefs = list.list_new()
+        j = 0
+        while j < list.list_size(paths) {
+            hj, _g6 = list.get_string(heads, j)
+            if hj == h {
+                pj, _g7 = list.get_string(paths, j)
+                list.list_add(sub, pj)
+                list.list_add(subrefs, list.list_get_raw(refs, j))
+            }
+            j = j + 1
+        }
+        cluster_(kind, sub, subrefs, home, forbidden, out)
+        m = m + 1
+    }
+}
+
+// The path of `d`'s child that `p` lies in (p itself when it is d).
+head_below_(d: string, p: string) -> string {
+    if p == d { return p }
+    start = string.length(d) + 1
+    if d == "/" { start = 1 }
+    rest = string.substring(p, start, string.length(p))
+    slash = string.index_of(rest, "/")
+    if slash < 0 { return p }
+    return string.substring(p, 0, start + slash)
+}
+
+has_(l: ptr, s: string) -> int {
+    i = 0
+    while i < list.list_size(l) {
+        v, _g = list.get_string(l, i)
+        if v == s { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+// The refusals (*Refusal) as items, writes first, then reads, then hosts;
+// refusals whose line naeb would not add are left out. home: the fence's
+// $HOME; forbidden: absolute paths no grouped line may be, contain or lie in.
+group(refusals: ptr, home: string, forbidden: ptr) -> ptr {
+    out = list.list_new()
+    wpaths = list.list_new()
+    wrefs = list.list_new()
+    rpaths = list.list_new()
+    rrefs = list.list_new()
+    hosts = list.list_new()
+    i = 0
+    while i < list.list_size(refusals) {
+        r = list.list_get_raw(refusals, i) as *Refusal
+        kind, arg, port = parse_(r.line)
+        if kind == WRITE {
+            list.list_add(wpaths, expand_(home, arg))
+            list.list_add(wrefs, r as ptr)
+        } else if kind == READ {
+            list.list_add(rpaths, expand_(home, arg))
+            list.list_add(rrefs, r as ptr)
+        } else if kind == HOST {
+            found = null
+            k = 0
+            while k < list.list_size(hosts) {
+                h = list.list_get_raw(hosts, k) as *Item
+                if h.line == r.line { found = h as ptr }
+                k = k + 1
+            }
+            if found == null {
+                hi = new_item_(r.line, HOST, "${arg}:${port}")
+                list.list_add(hosts, hi as ptr)
+                found = hi as ptr
+            }
+            list.list_add((found as *Item).refusals, r as ptr)
+        }
+        i = i + 1
+    }
+    if list.list_size(wpaths) > 0 { cluster_(WRITE, wpaths, wrefs, home, forbidden, out) }
+    writes = list.list_size(out)
+    if list.list_size(rpaths) > 0 {
+        left = list.list_new()
+        leftrefs = list.list_new()
+        j = 0
+        while j < list.list_size(rpaths) {
+            p, _g = list.get_string(rpaths, j)
+            covered = null
+            w = 0
+            while w < writes {
+                wi = list.list_get_raw(out, w) as *Item
+                if under_(expand_(home, wi.target), p) == 1 { covered = wi as ptr }
+                w = w + 1
+            }
+            if covered != null {
+                list.list_add((covered as *Item).refusals, list.list_get_raw(rrefs, j))
+            } else {
+                list.list_add(left, p)
+                list.list_add(leftrefs, list.list_get_raw(rrefs, j))
+            }
+            j = j + 1
+        }
+        if list.list_size(left) > 0 { cluster_(READ, left, leftrefs, home, forbidden, out) }
+    }
+    k2 = 0
+    while k2 < list.list_size(hosts) {
+        list.list_add(out, list.list_get_raw(hosts, k2))
+        k2 = k2 + 1
+    }
+    return out
+}
+
+// The command ids of an item's refusals, distinct, at most five then "…";
+// "tool" for naeb's in-process tools.
+commands_(it: *Item) -> string {
+    seen = list.list_new()
+    i = 0
+    more = 0
+    while i < list.list_size(it.refusals) {
+        r = list.list_get_raw(it.refusals, i) as *Refusal
+        c = r.command
+        if c == "" { c = "tool" }
+        if has_(seen, c) == 0 {
+            if list.list_size(seen) < 5 { list.list_add(seen, c) } else { more = 1 }
+        }
+        i = i + 1
+    }
+    out = ""
+    j = 0
+    while j < list.list_size(seen) {
+        c2, _g = list.get_string(seen, j)
+        if j > 0 { out = "${out}, " }
+        out = "${out}${c2}"
+        j = j + 1
+    }
+    if more == 1 { out = "${out}, …" }
+    return out
+}
+
+printable_(s: string) -> string {
+    out = ""
+    i = 0
+    start = 0
+    while i < string.length(s) {
+        c = string.char_at(s, i)
+        if c < 32 || c == 127 {
+            out = "${out}${string.substring(s, start, i)}?"
+            start = i + 1
+        }
+        i = i + 1
+    }
+    return "${out}${string.substring(s, start, string.length(s))}"
+}
+
+// What an item answers, for the prompt: "refused egress h:443 · b1", or
+// "refused write under ~/.m2/repository · 2314 refusals · b3".
+summary(itp: ptr) -> string {
+    it = itp as *Item
+    n = list.list_size(it.refusals)
+    r0 = list.list_get_raw(it.refusals, 0) as *Refusal
+    if n == 1 { return printable_("refused ${r0.op} ${r0.resource} · ${commands_(it)}") }
+    ops = r0.op
+    i = 1
+    while i < n {
+        r = list.list_get_raw(it.refusals, i) as *Refusal
+        if string.contains(ops, r.op) == 0 { ops = "${ops}/${r.op}" }
+        i = i + 1
+    }
+    if it.kind == HOST { return printable_("refused ${ops} ${it.target} · ${n} refusals · ${commands_(it)}") }
+    return printable_("refused ${ops} under ${it.target} · ${n} refusals · ${commands_(it)}")
+}
+
+// The comment naeb.ae gets above an approved line.
+comment(itp: ptr, date: string) -> string {
+    it = itp as *Item
+    n = list.list_size(it.refusals)
+    r0 = list.list_get_raw(it.refusals, 0) as *Refusal
+    if n == 1 { return printable_("// Approved ${date}: refused ${r0.op} ${r0.resource} (${commands_(it)})") }
+    if it.kind == HOST { return printable_("// Approved ${date}: refused ${r0.op} ${it.target}, ${n} times (${commands_(it)})") }
+    return printable_("// Approved ${date}: refused ${r0.op} under ${it.target}, ${n} refusals (${commands_(it)})")
+}
+
+lines_(text: string) -> ptr {
+    out = list.list_new()
+    if text == "" { return out }
+    start = 0
+    while true {
+        nl = string.index_of_from(text, "\n", start)
+        if nl < 0 {
+            if start < string.length(text) { list.list_add(out, string.substring(text, start, string.length(text))) }
+            break
+        }
+        list.list_add(out, string.substring(text, start, nl))
+        start = nl + 1
+    }
+    return out
+}
+
+ident_char_(c: int) -> int {
+    if (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 95 { return 1 }
+    return 0
+}
+
+// The index just after the comment, string or char literal starting at i
+// (i itself when none starts there), or -1 when it does not end.
+skip_(t: string, i: int) -> int {
+    n = string.length(t)
+    c = string.char_at(t, i)
+    if c == 47 && i + 1 < n && string.char_at(t, i + 1) == 47 {
+        nl = string.index_of_from(t, "\n", i)
+        if nl < 0 { return n }
+        return nl
+    }
+    if c == 47 && i + 1 < n && string.char_at(t, i + 1) == 42 {
+        e = string.index_of_from(t, "*/", i + 2)
+        if e < 0 { return -1 }
+        return e + 2
+    }
+    if c == 34 {
+        if i + 2 < n && string.char_at(t, i + 1) == 34 && string.char_at(t, i + 2) == 34 {
+            e3 = string.index_of_from(t, "\"\"\"", i + 3)
+            if e3 < 0 { return -1 }
+            return e3 + 3
+        }
+        j = i + 1
+        while j < n {
+            d = string.char_at(t, j)
+            if d == 92 {
+                j = j + 2
+            } else if d == 34 {
+                return j + 1
+            } else if d == 36 && j + 1 < n && string.char_at(t, j + 1) == 123 {
+                j = close_(t, j + 2)
+                if j < 0 { return -1 }
+                j = j + 1
+            } else if d == 10 {
+                return -1
+            } else {
+                j = j + 1
+            }
+        }
+        return -1
+    }
+    if c == 39 {
+        j2 = i + 1
+        while j2 < n {
+            d2 = string.char_at(t, j2)
+            if d2 == 92 {
+                j2 = j2 + 2
+            } else if d2 == 39 {
+                return j2 + 1
+            } else if d2 == 10 {
+                return -1
+            } else {
+                j2 = j2 + 1
+            }
+        }
+        return -1
+    }
+    return i
+}
+
+// The index of the `}` closing a block whose body starts at i, or -1.
+close_(t: string, i: int) -> int {
+    n = string.length(t)
+    depth = 0
+    j = i
+    while j < n {
+        s = skip_(t, j)
+        if s < 0 { return -1 }
+        if s != j {
+            j = s
+        } else {
+            c = string.char_at(t, j)
+            if c == 123 {
+                depth = depth + 1
+            } else if c == 125 {
+                if depth == 0 { return j }
+                depth = depth - 1
+            }
+            j = j + 1
+        }
+    }
+    return -1
+}
+
+line_start_(t: string, i: int) -> int {
+    j = i
+    while j > 0 && string.char_at(t, j - 1) != 10 { j = j - 1 }
+    return j
+}
+
+blank_(s: string) -> int {
+    i = 0
+    while i < string.length(s) {
+        c = string.char_at(s, i)
+        if c != 32 && c != 9 && c != 13 && c != 10 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+// (open, close): the braces of naeb.ae's one top-level `fence(p: ptr) {`
+// body, or an error.
+fence_body_(t: string) -> (int, int, string) {
+    n = string.length(t)
+    depth = 0
+    open = -1
+    close = -1
+    found = 0
+    i = 0
+    while i < n {
+        s = skip_(t, i)
+        if s < 0 { return -1, -1, "naeb.ae has a comment or string that does not end" }
+        if s != i {
+            i = s
+        } else {
+            c = string.char_at(t, i)
+            if c == 123 {
+                depth = depth + 1
+                i = i + 1
+            } else if c == 125 {
+                depth = depth - 1
+                if depth < 0 { return -1, -1, "naeb.ae's braces do not match" }
+                i = i + 1
+            } else if depth == 0 && (i == 0 || string.char_at(t, i - 1) == 10) && string.starts_with(string.substring(t, i, n), "fence") == 1 && (i + 5 >= n || ident_char_(string.char_at(t, i + 5)) == 0) {
+                lp = string.index_of_from(t, "(", i)
+                rp = string.index_of_from(t, ")", i)
+                if lp != i + 5 || rp < 0 { return -1, -1, "naeb.ae's fence( is not fence(p: ptr) {" }
+                if string.trim(string.substring(t, lp + 1, rp)) != "p: ptr" { return -1, -1, "naeb.ae's fence( does not take p: ptr" }
+                j = rp + 1
+                while j < n && (string.char_at(t, j) == 32 || string.char_at(t, j) == 9 || string.char_at(t, j) == 10 || string.char_at(t, j) == 13) { j = j + 1 }
+                if j >= n || string.char_at(t, j) != 123 { return -1, -1, "naeb.ae's fence(p: ptr) has no { body" }
+                e = close_(t, j + 1)
+                if e < 0 { return -1, -1, "naeb.ae's fence(p: ptr) body does not end" }
+                found = found + 1
+                open = j
+                close = e
+                i = e + 1
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    if depth != 0 { return -1, -1, "naeb.ae's braces do not match" }
+    if found == 0 { return -1, -1, "naeb.ae has no fence(p: ptr) { body" }
+    if found > 1 { return -1, -1, "naeb.ae defines fence(p: ptr) more than once" }
+    return open, close, ""
+}
+
+// Inserts the items' lines, each after its comment, as the last statements
+// of naeb.ae's fence(p: ptr) body; text "" is a project without naeb.ae
+// (NEW_POLICY first). An error when that place is not certain.
+place(text: string, items: ptr, date: string) -> *Placed {
+    pl = heap.new(Placed)
+    pl.text = ""
+    pl.at = 0
+    pl.added = 0
+    pl.error = ""
+    base = text
+    if base == "" { base = NEW_POLICY }
+    k = 0
+    while k < list.list_size(items) {
+        it = list.list_get_raw(items, k) as *Item
+        if valid_line(it.line) == 0 {
+            pl.error = "not a line naeb adds: ${printable_(it.line)}"
+            return pl
+        }
+        k = k + 1
+    }
+    open, close, err = fence_body_(base)
+    if err != "" {
+        pl.error = err
+        return pl
+    }
+    ls = line_start_(base, close)
+    if blank_(string.substring(base, ls, close)) == 0 {
+        pl.error = "naeb.ae's fence(p: ptr) body does not end with } on a line of its own"
+        return pl
+    }
+    body = string.substring(base, open + 1, ls)
+    indent = "    "
+    bl = lines_(body)
+    m = 0
+    while m < list.list_size(bl) {
+        l, _g = list.get_string(bl, m)
+        if blank_(l) == 0 {
+            w = 0
+            while w < string.length(l) && (string.char_at(l, w) == 32 || string.char_at(l, w) == 9) { w = w + 1 }
+            indent = string.substring(l, 0, w)
+            break
+        }
+        m = m + 1
+    }
+    if ls <= open {
+        pl.error = "naeb.ae's fence(p: ptr) body does not end with } on a line of its own"
+        return pl
+    }
+    block = ""
+    added = 0
+    k = 0
+    while k < list.list_size(items) {
+        it2 = list.list_get_raw(items, k) as *Item
+        if k > 0 || blank_(body) == 0 {
+            block = "${block}\n"
+            added = added + 1
+        }
+        block = "${block}${indent}${comment(it2 as ptr, date)}\n${indent}${it2.line}\n"
+        added = added + 2
+        k = k + 1
+    }
+    pl.text = "${string.substring(base, 0, ls)}${block}${string.substring(base, ls, string.length(base))}"
+    pl.at = list.list_size(lines_(string.substring(base, 0, ls)))
+    if text == "" {
+        // A new file: every line of it is added.
+        pl.at = 0
+        pl.added = list.list_size(lines_(pl.text))
+        return pl
+    }
+    pl.added = added
+    return pl
+}
+
+range_(start: int, count: int) -> string {
+    if count == 1 { return "${start}" }
+    return "${start},${count}"
+}
+
+// The unified diff (diff -u, three lines of context) of inserting `added`
+// lines at line index `at` of `old` ("" for a new file) to make `new_text`.
+unified(old: string, new_text: string, at: int, added: int) -> string {
+    ol = lines_(old)
+    nl = lines_(new_text)
+    from = "naeb.ae"
+    if old == "" { from = "/dev/null" }
+    out = "--- ${from}\n+++ naeb.ae (proposed)\n"
+    s = at - 3
+    if s < 0 { s = 0 }
+    e = at + 3
+    if e > list.list_size(ol) { e = list.list_size(ol) }
+    ocount = e - s
+    ostart = s + 1
+    if ocount == 0 { ostart = s }
+    out = "${out}@@ -${range_(ostart, ocount)} +${range_(s + 1, ocount + added)} @@\n"
+    i = s
+    while i < at {
+        l, _g = list.get_string(ol, i)
+        out = "${out} ${l}\n"
+        i = i + 1
+    }
+    j = at
+    while j < at + added {
+        l2, _g2 = list.get_string(nl, j)
+        out = "${out}+${l2}\n"
+        j = j + 1
+    }
+    i = at
+    while i < e {
+        l3, _g3 = list.get_string(ol, i)
+        out = "${out} ${l3}\n"
+        i = i + 1
+    }
+    return out
+}

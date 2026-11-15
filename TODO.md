@@ -11,10 +11,22 @@ MCP stdio, Maven/Gradle/npm templates, `ae/tests/redteam/`; then one `naeb`
 binary loading the project's `naeb.ae` as a policy library built by
 `naeb build` (interface version 1, build record, location checks).
 
-- **Approve, rebuild, re-exec:** on a `fence_denied` (or a read the model
-  reports), propose a `naeb.ae` diff in the TUI, rebuild the policy library
-  (`naeb build`'s path), record the source and library SHA-256 in the
-  Session log and re-exec with `--resume <id>` between Turns.
+Landed 2026-11-15 too: the in-TUI approval loop (a `naeb.ae` diff offered
+when a Turn ends, y/N, the policy rebuilt and loaded between Runs in the same
+Session, grouped suggestions, the approval in the Session log).
+
+- **Adjust a proposal in `$EDITOR`** (Paul, 2026-11-15): open the proposed
+  `naeb.ae` change in `$EDITOR` before applying, then rebuild as the y/N path
+  does. The y/N diff stays for the plain case.
+- **Templates as suggestions:** offer `maven.apply(p)` (gradle, npm) when a
+  cluster of refusals matches a template, instead of plain lines.
+- **A write refused as a read:** `tools.write` into a closed directory of
+  `$HOME` is refused as `read` (it opens the directory first), so the
+  suggestion is `allow_read` and the write needs a second round. Name it a
+  `write` with an `allow_write` suggestion.
+- **`tools.fence_request({ lines, reason })`:** a model proposing lines up
+  front, through the same y/N prompt with its reason shown as the model's
+  words. Left out of the first cut.
 - **Policy libraries on Windows:** `LoadLibrary` for `policy.dll` (and
   `--shared-runtime` questions there), once a Windows jail exists at all.
 - **A prebuilt `naeb.policy`:** `naeb build` compiles against a naeb-code

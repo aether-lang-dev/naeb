@@ -341,6 +341,14 @@ aeb(cap) {
             source("ae/tests/fence_test.ae")
             lib("ae")
         }
+        aether.program_test() {
+            source("ae/tests/fence_proposal_test.ae")
+            lib("ae")
+        }
+        aether.program_test() {
+            source("ae/tests/tui_fence_test.ae")
+            lib("ae")
+        }
         // Workspace mode end to end, through the built binary.
         dep(".build.ae")
         bash.test() {
