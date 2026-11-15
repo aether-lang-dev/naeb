@@ -5,15 +5,20 @@ still owes upstream is in [PORT_STATUS.md](PORT_STATUS.md).
 
 ## The project fence: what is left (docs/naeb/adr/0001)
 
-Landed 2026-11-15: `nib.fence` built by a launcher (`nib.app.run(fence)`),
-in-process checks, the egress proxy, Linux namespace + Landlock + seccomp
-and macOS SBPL confinement of bash, hooks and MCP stdio, the launcher
-location check, Maven/Gradle/npm templates, `ae/tests/redteam/`.
+Landed 2026-11-15: `nib.fence`, in-process checks, the egress proxy, Linux
+namespace + Landlock + seccomp and macOS SBPL confinement of bash, hooks and
+MCP stdio, Maven/Gradle/npm templates, `ae/tests/redteam/`; then one `naeb`
+binary loading the project's `naeb.ae` as a policy library built by
+`naeb build` (interface version 1, build record, location checks).
 
 - **Approve, rebuild, re-exec:** on a `fence_denied` (or a read the model
-  reports), propose a launcher diff in the TUI, rebuild it outside the
-  project, record the source and binary SHA-256 in the Session log and
-  re-exec with `--resume <id>` between Turns.
+  reports), propose a `naeb.ae` diff in the TUI, rebuild the policy library
+  (`naeb build`'s path), record the source and library SHA-256 in the
+  Session log and re-exec with `--resume <id>` between Turns.
+- **Policy libraries on Windows:** `LoadLibrary` for `policy.dll` (and
+  `--shared-runtime` questions there), once a Windows jail exists at all.
+- **A prebuilt `naeb.policy`:** `naeb build` compiles against a naeb-code
+  checkout; a release could ship `ae/policy_lib` beside the binary instead.
 - **naeb confining itself** after start-up (Linux, file rules only), once
   the TUI's `open` and clipboard helpers start from an unconfined helper.
 - **A child's denied path, named:** macOS sandbox log after a failed

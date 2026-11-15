@@ -8,8 +8,8 @@ date: 2026-11-15
 naeb's own ADR series, separate from upstream's `docs/adr/` numbering. It
 extends upstream's [ADR 0004](../../adr/0004-two-layer-isolation.md) (write-only
 workspace sandbox) and [0006](../../adr/0006-deny-dangerous-commands.md)
-(deny-list, credential paths) without changing them: everything here is off
-unless a project's launcher gives naeb a policy.
+(deny-list, credential paths) without changing them: `nib` stays as upstream,
+and everything here is `naeb`'s, the second binary.
 
 ## Threat
 
@@ -31,31 +31,41 @@ are not limited at all.
 
 ## The direction (decided by Paul, not reopened here)
 
-- A per-project **launcher** in Aether (`naeb.ae`) declares the policy as
-  code and starts naeb. Templates for toolchains (Maven, Gradle, npm, ...)
-  are ordinary Aether modules the launcher imports.
-- The policy grows by trial and error: on a denial naeb proposes a launcher
-  diff, the user approves, naeb rebuilds and re-execs with `--resume <id>`
-  between Turns. The launcher sits outside every writable root.
-- Enforcement first. A prebuilt naeb library/binary is deferred: for now the
-  launcher is compiled together with naeb's sources.
+- A per-project **policy** in Aether (`naeb.ae` at the project root) declares
+  the fence as code. Templates for toolchains (Maven, Gradle, npm, ...) are
+  ordinary Aether modules the policy imports.
+- **One `naeb` binary** on `PATH` (2026-11-15). `naeb build` compiles the
+  project's policy into a small shared library under
+  `~/.naeb/launchers/<key>/`, outside every writable root; `naeb` dlopens it
+  at start and calls it to build the Fence. One process, no shell, no exec
+  chain. A policy rebuild takes about a second (one small file); a naeb
+  update needs none unless the interface version changed. (Until then each
+  project's launcher was compiled together with all of naeb: a 4.4 MB
+  executable per project, about 17 s to build, and every naeb update meant
+  rebuilding every launcher.)
+- The policy grows by trial and error: on a denial naeb proposes a `naeb.ae`
+  diff, the user approves, naeb rebuilds the library and re-execs with
+  `--resume <id>` between Turns.
 
 ## Decision
 
-**One policy object, two layers.** The launcher builds a `Fence`
-(`nib.fence`): reads allowed and denied, extra writable roots, paths
-inside the roots that stay read-only, egress `host:port` pairs, environment
-variables passed to children. It is an instance handed to
-`nib.app.run(fence)` and from there to the Session's Tools; nothing is
-module state. The in-process tools check it (layer 1); the same Fence
+**One policy object, two layers.** naeb builds a `Fence` (`nib.fence`)
+from the policy library (`nib.fence.policy`): reads allowed and denied,
+extra writable roots, paths inside the roots that stay read-only, egress
+`host:port` pairs, environment variables passed to or set for children. It
+is an instance handed from `nib.app.run_naeb` to the Session's Tools;
+nothing is module state. The in-process tools check it (layer 1); the same Fence
 becomes a jail spec for every child process naeb starts: bash, background
-bash, hooks, MCP stdio servers (layer 2). Sub-agents are naeb itself, re-run
-through the launcher binary, so they rebuild the same Fence from code.
+bash, hooks, MCP stdio servers (layer 2). Sub-agents are naeb itself, re-run from
+the same binary in the same project, so they load the same policy and pass
+the same checks.
 
-**Fail closed.** With a Fence, a child is never started unconfined: where
-the OS jail cannot be applied, the command is refused with the reason.
-Without a Fence nothing changes (upstream's off/workspace behaviour and its
-tests stay as they are).
+**Fail closed.** naeb always has a Fence: a project without `naeb.ae` gets
+the default one (the project only, no egress) and a one-line notice. There
+is no `naeb --unfenced`; that is `nib`. A child is never started
+unconfined: where the OS jail cannot be applied, the command is refused with
+the reason. `nib` has no Fence and nothing changes there (upstream's
+off/workspace behaviour and its tests stay as they are).
 
 ### Reads
 
@@ -139,7 +149,7 @@ localhost on macOS and is a named hole.
 | Abstract Unix sockets | network namespace (abstract names are per netns); also Landlock scope (ABI 6) | n/a |
 | Daemons, `setsid`, double fork | the restriction is inherited by every descendant; no unconfined process is reachable (sockets above) | same; `launchctl submit` fails inside `sandbox-exec` (observed, not explained); `(deny lsopen)` stops `open` (verified) |
 | Apple events (`osascript` driving Terminal) | n/a | `(deny appleevent-send)`, **unverified** (testing it would prompt) |
-| ptrace, `/proc/<naeb>/environ`, signals | Landlock limits ptrace and sensitive `/proc` files to the domain; the user namespace too; signal scope (ABI 6) | a child *can* read naeb's initial environment through `KERN_PROCARGS2` (verified; no SBPL operation stops it without breaking the child): under a Fence naeb moves its environment to the heap and zeroes the initial area first thing (`jail.scrub_environ`). Pointers `os.getenv` returned before then are zeroed too, so `nib.fence` copies every string a launcher hands it |
+| ptrace, `/proc/<naeb>/environ`, signals | Landlock limits ptrace and sensitive `/proc` files to the domain; the user namespace too; signal scope (ABI 6) | a child *can* read naeb's initial environment through `KERN_PROCARGS2` (verified; no SBPL operation stops it without breaking the child): under a Fence naeb moves its environment to the heap and zeroes the initial area first thing (`jail.scrub_environ`). Pointers `os.getenv` returned before then are zeroed too, so `nib.fence` copies every string it is handed |
 | Secrets in the environment | children get an allow-list environment (`PATH`, `HOME`, locale, terminal, temp, user/shell names, toolchain homes) plus `Fence.pass_env` names plus the proxy variables | same |
 | Clipboard, TUI `open` | run from naeb's own unconfined process, on the user's action; the model can no longer read secrets in-process, so it has nothing secret to place there | same |
 | MCP stdio servers, hooks | started inside the same jail spec | same |
@@ -178,43 +188,113 @@ started through a pre-forked unconfined helper.
 
 ### Policy integrity
 
-The launcher and its compiled binary live outside every writable root
-(`~/.naeb/launchers/<project>/`); naeb's in-process tools and children are
-refused writes there by the same Fence (`~/.naeb` is on the secrets list),
-and `$NIB_HOME` is read-denied to children. A fenced naeb refuses to start
-when its own binary lies inside a writable root (exit 2, the path named).
-A launcher may name its own source inside the project
-(`fence.launcher_source(f, "naeb-launcher/naeb.ae")`): its build records the
-source's SHA-256 beside the binary (`<exe>.built`, with the naeb-code checkout
-and commit it was built from), and naeb exits 2 at start when the source no
-longer matches, so an edit or a pull that widens the fence cannot take effect
-before the build script has shown the diff and rebuilt. A naeb-code checkout
-that moved on since the build is a warning only. A re-exec after approval runs the binary the launcher rebuilt;
-the approved build is identified by the SHA-256 of the launcher source and
-binary recorded in the Session log before the re-exec and checked after it.
-Approval is a TUI prompt showing the launcher diff, a deliberate departure
-from upstream's no-approvals rule (ADR 0006) because the policy is the one
-thing the model must not widen by itself. The approval loop is a later
-phase; the first round ships the launcher hook only.
+- **Where.** The policy's source is `naeb.ae` at the project root
+  (`jail.project_root(cwd)`). `naeb build` keeps everything else in
+  `~/.naeb/launchers/<key>/`: the library (`policy.dylib` on macOS,
+  `policy.so` on Linux), the build record (`policy.built`), the approved
+  copy of `naeb.ae`, and `build/` (the source it compiled). `<key>` is the
+  project's basename and the first 12 hex digits of the SHA-256 of its
+  canonical path, so two projects named `app` do not share one.
+- **Read-only to the fenced.** naeb itself (not the policy) makes `naeb.ae`
+  read-only to every fenced writer, in-process tools and children alike.
+  `~/.naeb` is on the secrets list (no fenced reads) and in no writable root.
+- **Outside every writable root.** naeb refuses to start (exit 2, the path
+  named) when the library's directory lies inside a root its commands may
+  write: checked against the default fence before the library is loaded and
+  against the full fence after (a policy cannot `allow_write("~/.naeb")`),
+  and likewise when the `naeb` binary itself does.
+- **The record.** `naeb build` writes `interface`, `project` (canonical),
+  `source_sha256` (of `naeb.ae`), `library_sha256`, `naeb_src` (the
+  naeb-code checkout compiled against) and `naeb_commit`. At start naeb
+  refuses (exit 2) a missing record ("naeb.ae has not been built; review it
+  and run: naeb build"), a `naeb.ae` that no longer matches ("naeb.ae
+  changed since it was built; review it and run: naeb build"), a library
+  that is not the one built, a record for another project, and another
+  interface. An edit or a pull that widens the fence cannot take effect
+  before `naeb build` has shown it.
+- **Approval.** `naeb build [-y]` shows the unified diff of `naeb.ae`
+  against the approved copy (against nothing, the first time) and asks y/N
+  on stdin; EOF is no, and nothing changes. `-y` skips the question (for
+  scripts that show the diff themselves). Only a successful compile replaces
+  the library, the approved copy and the record. A deliberate departure from
+  upstream's no-approvals rule (ADR 0006): the policy is the one thing the
+  model must not widen by itself. The in-TUI approval loop (propose a diff
+  on a denial, rebuild, re-exec `--resume`) is a later phase.
+- **Sources.** naeb compiles the policy against the checkout it was built
+  in (`build_info.source_dir()`, written by `.build.ae`), or `NAEB_SRC`, and
+  only against its `ae/policy_lib`: `naeb.policy` and the templates. naeb's
+  own modules are not on that path.
 
-## How a launcher looks
+### The policy interface
+
+The library carries no copy of `nib.fence` or of anything whose memory
+layout naeb owns, so a naeb update cannot meet a policy built against
+other layouts. naeb passes a table of C function pointers and its version:
+
+```c
+int32_t aether_naeb_policy_interface(void);            /* the version built for */
+int32_t aether_naeb_policy_v1(const struct naeb_fence_api *api, void *fence);
+
+struct naeb_fence_api {                                 /* version 1 */
+    int64_t version;
+    void (*allow_read)(void *fence, const char *path);
+    void (*deny_read)(void *fence, const char *path);
+    void (*allow_write)(void *fence, const char *path);
+    void (*deny_write)(void *fence, const char *path);
+    void (*allow_host)(void *fence, const char *host, int32_t port);
+    void (*pass_env)(void *fence, const char *name);
+    void (*set_env)(void *fence, const char *name, const char *value);
+    void (*allow_loopback)(void *fence);
+    void (*open_home)(void *fence);
+    const char *(*home)(void *fence);
+    const char *(*project_root)(void *fence);
+    const char *(*platform)(void *fence);              /* "macos", "linux" */
+};
+```
+
+- naeb's side is `ae/nib/fence/policy/policy_host.c`: `dlopen(RTLD_NOW |
+  RTLD_LOCAL)`, `dlsym` of the two exports, the version check, the call. Each
+  call through the table is copied (`strdup`) into a list of operations
+  that `nib.fence.policy` then applies to the Fence in Aether; the policy's
+  strings never outlive its call.
+- The policy's side is the `naeb.policy` module (`ae/policy_lib/naeb/policy`),
+  which declares the table field for field and calls through it. `naeb
+  build` appends the two exports to the compiled copy of `naeb.ae`; the
+  author writes only `fence(p: ptr)`.
+- **The interface-version rule.** The table is append-only and its layout is
+  the interface. Any change to it (a new field, a changed signature) bumps
+  `NAEB_POLICY_INTERFACE` in `policy_host.c` and `INTERFACE` in `naeb.policy`
+  together. naeb refuses a library built for another version, from the
+  record before loading it and from the library's own export after
+  ("rebuild the policy: naeb build"); the policy refuses a table of another
+  version (it returns non-zero). Nothing else about naeb is part of the
+  interface, so any other naeb update needs no policy rebuild.
+- The library is built with `ae build --emit=lib`, capability-empty: a
+  policy cannot import `std.fs`, `std.os`, `std.net` or declare an `extern`,
+  so loading it can only declare a fence, not act. It carries an Aether
+  runtime of its own (macOS's two-level namespace and `ae`'s `-Bsymbolic` on
+  ELF keep the two apart), about 160 KB, and stays loaded for the process's
+  life.
+- Windows: not yet (`LoadLibrary`, and no jail to apply anyway; naeb with a
+  Fence refuses commands there).
+
+## How a policy looks
 
 ```aether
-import nib.app
-import nib.fence
+import naeb.policy
 import naeb_templates.maven
 
-main() {
-    f = fence.new("/home/me")
-    maven.apply(f)
-    fence.allow_host(f, "repo.example.com", 443)
-    app.run(f)
+fence(p: ptr) {
+    maven.apply(p)
+    policy.allow_host(p, "repo.example.com", 443)
+    policy.set_env(p, "BUNDLE_USER_HOME", "${policy.project_root(p)}/.bundle/user")
 }
 ```
 
-Built from source for now: `ae build naeb.ae --lib <naeb checkout>/ae -o
-~/.naeb/launchers/<project>/naeb`. Templates live under
-`ae/naeb_templates/` (`maven`, `gradle`, `npm`), outside `nib.*`.
+Paths may start with `~/`; `deny_write` paths may be relative to the
+project. `naeb build` compiles it (`ae build --emit=lib --lib
+<checkout>/ae/policy_lib`). Templates live under
+`ae/policy_lib/naeb_templates/` (`maven`, `gradle`, `npm`), outside `nib.*`.
 
 ## Red-team plan
 
@@ -235,13 +315,21 @@ case asserts refusal on macOS and Linux.
 | `c-unix` | child | connect to the planted socket |
 | `c-env`, `c-parent-env` | child | find the canary in its own environment, and in naeb's |
 | `i-read`, `i-grep`, `i-glob` | in-process | read the key, grep `$HOME` for the canary, glob `~/.ssh` |
-| `i-write-rc`, `i-write-hook`, `i-write-launcher` | in-process | write `~/.zshrc`, the hook, the launcher |
+| `c-write-policy`, `c-write-library` | child | append to `naeb.ae`, to the built policy library |
+| `i-write-rc`, `i-write-hook`, `i-write-policy`, `i-write-library` | in-process | write `~/.zshrc`, the hook, `naeb.ae`, the policy library |
 | `i-fetch-exfil`, `i-fetch-allowed` | in-process | fetch the exfil URL; positive control |
-| `x-launcher-in-root` | start-up | run naeb from a copy inside the project |
+| `x-naeb-in-root` | start-up | run naeb from a copy inside the project |
 
-`ae/tests/redteam/attribution.py` (run by `run.sh`) checks that each
-refusal reaches only the command that caused it: a fetch, two concurrent
-commands, a background command and an MCP server.
+The fixture project's policy (`naeb.ae`, allowing the allowed listener) is
+built with `naeb build -y` into the fixture `HOME`. `ae/tests/redteam/attribution.py`
+(run by `run.sh`) checks that each refusal reaches only the command that
+caused it: a fetch, two concurrent commands, a background command and an
+MCP server. `ae/tests/redteam/naeb_policy.py` (also run by `run.sh`) checks
+the policy's life: the default fence without `naeb.ae`, a refused changed
+`naeb.ae`, `naeb build` with EOF or `n` changing nothing, two projects named
+alike getting two keys, another interface refused (in the record and in the
+library), a changed library refused, a library inside a writable root
+refused, the templates, `set_env`, and a sub-agent loading the same policy.
 
 Status (2026-11-15): every case refused on macOS 27.3, ae-x64 (Ubuntu
 22.04, kernel 6.8, Landlock ABI 4: the seccomp path for Unix sockets) and
@@ -251,23 +339,28 @@ mode) the same fixtures find 15 holes on macOS.
 ## Implementation order
 
 1. Red-team fixtures, failing on today's code. *Done.*
-2. `nib.fence` and the launcher entry (`nib.app.run(fence)`), consulted by
-   the in-process tools; the egress proxy for `tools.fetch`. *Done.*
+2. `nib.fence`, consulted by the in-process tools; the egress proxy for
+   `tools.fetch`. *Done.*
 3. Child enforcement: reads, writes, read-only paths, the proxy and its
    confinement, Unix sockets, the environment; bash, hooks, MCP stdio.
    *Done.*
 4. naeb confining itself: deferred (above).
-5. Launcher templates (Maven, Gradle, npm) and the launcher location check.
-   *Done.* The approve, rebuild, re-exec `--resume` loop: *not yet*.
+5. Templates (Maven, Gradle, npm) and the location check. *Done.* The one
+   `naeb` binary loading a policy library built by `naeb build`, with the
+   interface version and the build record (replacing per-project launcher
+   executables). *Done.* The in-TUI approve, rebuild, re-exec `--resume`
+   loop: *not yet*.
 6. Later: per-command scopes, denial paths for children, Windows.
 
 ## Consequences
 
-- A project with a launcher gets reads, writes and egress confined on Linux
-  (kernel with user namespaces; Landlock ABI 1+) and macOS. Without one,
-  naeb behaves as upstream.
+- Under naeb every project gets reads, writes and egress confined on Linux
+  (kernel with user namespaces; Landlock ABI 1+) and macOS; `naeb.ae` widens
+  the default fence. `nib` behaves as upstream.
 - Toolchains need their `$HOME` paths and hosts declared; the first runs
-  of a new project hit denials until the launcher has them.
+  of a new project hit denials until `naeb.ae` has them.
+- `naeb build` needs `ae` on `PATH` and the naeb-code checkout naeb was
+  built in (or `NAEB_SRC`); running a built policy needs neither.
 - Per-command tightening (say, Maven Central only for `mvn`) is matched on
   command text, so it is convenience, not a boundary: the boundary is the
   union of every scope. It is left for later.
@@ -281,8 +374,8 @@ mode) the same fixtures find 15 holes on macOS.
 
 ## Open questions for Paul
 
-1. Launcher location: `~/.naeb/launchers/<project>/naeb.ae`, or beside the
-   project but outside its root (`../<project>.naeb.ae`)?
+1. *(Settled 2026-11-15: `naeb.ae` at the project root, read-only to the
+   fenced; its build outside, under `~/.naeb/launchers/<key>/`.)*
 2. Should naeb's own provider traffic (models, web search) also be limited to
    the Fence's hosts? It is not now: the provider is naeb's, not the project's.
 3. The default home allow-list: only `~/.gitconfig` and `~/.config/git`
@@ -291,5 +384,6 @@ mode) the same fixtures find 15 holes on macOS.
    or open it and accept local services as reachable?
 5. Linux below Landlock ABI 9: refusing `socket(AF_UNIX)` breaks tools that
    talk to local daemons on purpose (ssh-agent, Docker). Acceptable?
-6. Approval UX: a diff in the TUI with y/n, or open the launcher in
-   `$EDITOR` and rebuild when it is saved?
+6. Approval UX: a diff in the TUI with y/n, or open `naeb.ae` in
+   `$EDITOR` and rebuild when it is saved? (`naeb build` asks y/N on the
+   diff today.)

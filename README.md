@@ -11,8 +11,9 @@
 
 A small, focused, quiet coding agent. naeb is the Aether port of
 [nib](https://github.com/yyydddkkk/nib-code) (Zig, MIT, © jackyyy): the same
-agent, feature for feature, built from Aether instead of Zig. The command is
-still `nib` for now.
+agent, feature for feature, built from Aether instead of Zig. It builds two
+commands: `nib`, upstream's behaviour, and `naeb`, the same agent inside a
+project fence (below).
 
 nib works in Runs: the model writes one JavaScript script that reads, edits
 and checks your project in a single step. In naeb that script runs on
@@ -66,18 +67,21 @@ on Linux) and OpenSSL 3 or later:
 ```sh
 git clone -b aether-port https://github.com/paul-hammant/naeb-code.git naeb
 cd naeb
-aeb .build.ae          # builds target/build/bin/nib
+aeb .build.ae          # builds target/build/bin/nib and target/build/bin/naeb
 ```
 
 ### 3. Install
 
 ```sh
 install -m 755 target/build/bin/nib ~/.local/bin/nib
+install -m 755 target/build/bin/naeb ~/.local/bin/naeb
 nib --version          # nib 0.13.0-ae
 ```
 
-To update, run `git pull`, then `aeb .build.ae`, then the `install` line
-again.
+To update, run `git pull`, then `aeb .build.ae`, then the `install` lines
+again. Project policies need no rebuild unless naeb says so. Keep the
+checkout: `naeb build` compiles policies against its `ae/policy_lib`
+(`NAEB_SRC` points elsewhere).
 
 ## Use
 
@@ -103,6 +107,41 @@ a model. Your own endpoint: [providers](docs/providers.md).
   [hooks](docs/config.md#hooks).
 - **Conventions:** project ones go in `AGENTS.md`, personal ones in
   `~/.nib/AGENTS.md`.
+
+## Fenced: naeb
+
+`naeb` runs the agent inside a project fence against supply-chain attacks
+([ADR 0001](docs/naeb/adr/0001-supply-chain-sandbox.md)): its commands
+(bash, hooks, MCP servers) and its own tools cannot read your home outside
+the project, write outside it, or reach any host the project has not
+allowed, and get no secrets from naeb's environment. Linux (Landlock and
+namespaces) and macOS (`sandbox-exec`).
+
+The project says what it needs in `naeb.ae` at its root, in Aether:
+
+```aether
+import naeb.policy
+import naeb_templates.maven
+
+fence(p: ptr) {
+    maven.apply(p)                                  // ~/.m2/repository, Maven Central
+    policy.allow_host(p, "repo.example.com", 443)
+    policy.set_env(p, "BUNDLE_USER_HOME", "${policy.project_root(p)}/.bundle/user")
+}
+```
+
+```sh
+naeb build        # shows naeb.ae's diff since the last build, asks, compiles it
+naeb              # the TUI, fenced; also naeb ask, naeb js
+```
+
+`naeb build` compiles the policy (about a second) into
+`~/.naeb/launchers/<project>-<hash>/`, outside everything the fence lets
+commands write. naeb refuses to start when `naeb.ae` changed since it was
+built, so an edit or a pull that widens the fence waits for your review.
+`naeb.ae` itself is read-only inside the fence. A project without one runs
+in the default fence (the project only, no egress). Grow the policy from
+the denials: each names the path or `host:port`.
 
 ## A Run
 
