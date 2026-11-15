@@ -19,6 +19,14 @@ if [ ! -x "$BIN" ]; then
     echo "build first: aeb .build.ae" >&2
     exit 2
 fi
+# tests/ must be upstream's, byte for byte: a port of an upstream change is
+# not done until its tests come across too. Skipped where there is no git
+# (a lab lane's synced copy).
+if git rev-parse --verify -q main >/dev/null 2>&1 && ! git diff --quiet main -- tests/; then
+    echo "tests/ differs from main (upstream); copy upstream's files: git checkout main -- tests/" >&2
+    git diff --stat main -- tests/ >&2
+    exit 2
+fi
 mkdir -p zig-out/bin
 ln -sf ../../target/build/bin/nib zig-out/bin/nib
 
