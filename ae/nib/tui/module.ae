@@ -876,6 +876,19 @@ collect_denied_(a: *App, denied: ptr) {
     fence_offer.collect(a.fence, denied)
 }
 
+// naeb: a dim hint when a fenced command's output says it found no Java.
+java_hint_(a: *App, output: string) {
+    if a.menu.fence_enabled == 0 {
+        return
+    }
+    string sid = call(a.p.session_id, a.p.ctx)
+    fence_offer.reset(a.fence, sid)
+    hint = fence_offer.java_hint(a.fence, output)
+    if hint != "" {
+        transcript.add(a.transcript, entry.KIND_INFO, hint)
+    }
+}
+
 // Shows the prompt for what was collected, once nothing else needs the
 // user: no Turn, no flow or pinned menu, an empty input.
 offer_fence_(a: *App) {
@@ -905,9 +918,18 @@ offer_fence_(a: *App) {
         offer_fence_(a)
         return
     }
-    transcript.add(a.transcript, entry.KIND_FENCE, fence_offer.text_of(prop))
+    notes = fence_offer.notes_text(prop)
+    if notes != "" {
+        transcript.add(a.transcript, entry.KIND_INFO, notes)
+    }
     v = jsonx.parse(prop)
-    if v != null && jsonx.has(v, "diff") == 1 {
+    if v == null || (jsonx.array_size(jsonx.field(v, "items")) == 0 && jsonx.has(v, "error") == 0) {
+        jsonx.free(v)
+        offer_fence_(a)
+        return
+    }
+    transcript.add(a.transcript, entry.KIND_FENCE, fence_offer.text_of(prop))
+    if jsonx.has(v, "diff") == 1 {
         a.fence.kind = fence_offer.KIND_POLICY
         a.fence.open = 1
         a.fence.proposal = string.copy(prop)
@@ -1163,6 +1185,7 @@ handle_app(a: *App, ev: string, data: ptr) -> bool {
             summary = if sv != null && json.json_type(sv) == json.JSON_OBJECT { transcript.summary_from_json(sv) as ptr } else { null }
             transcript.end_run_with_summary(a.transcript, jsonx.bool_or(body, "ok", 0) != 0, string.copy(jsonx.str_or(body, "output", "")), elapsed, ct, summary)
             collect_denied_(a, jsonx.field(body, "fence_denied"))
+            java_hint_(a, jsonx.str_or(body, "output", ""))
         }
         "retry" -> {
             transcript.retry_attempt(a.transcript, a.scroll)
@@ -1342,6 +1365,7 @@ on_background_(a: *App, b: ptr) {
             string sid = call(a.p.session_id, a.p.ctx)
             fence_offer.reset(a.fence, sid)
             fence_offer.collect_result(a.fence, result)
+            java_hint_(a, result)
         }
         transcript.background_result(a.transcript, kind, id, ok, string.copy(if has_result { result } else { "{}" }))
     } else if st == "lost" {

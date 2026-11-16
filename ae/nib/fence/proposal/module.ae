@@ -10,11 +10,19 @@
 // own denials, the project, $NIB_HOME) or lies inside one; then each
 // subdirectory below it is grouped on its own. A write line also answers
 // the read refusals beneath it (a writable root is readable).
+//
+// Vetting (vet) comes first, for a single path too: no line names a
+// forbidden path, lies in one or contains one; such a refusal becomes a
+// note saying why. In a Maven project (pom.xml or mvnw at its root, which
+// the caller detects) a write at or under ~/.m2 is answered by the broker
+// line instead; with the broker already on it is a note pointing at
+// tools.maven_fetch.
 
 import std.list
 import std.string
 
-exports(Refusal, Item, Placed, new_refusal, valid_line, group, summary, comment, place, unified, NEW_POLICY)
+exports(Refusal, Item, Placed, Scope, new_refusal, new_scope, vet, valid_line, group, lines_of, notes_of, summary, comment, place,
+        unified, NEW_POLICY, BROKER_LINE, BROKER_REASON, KIND_NOTE, KIND_BROKER)
 
 // A naeb.ae for a project that has none, before its first lines.
 const NEW_POLICY = "// naeb's policy for this project (docs/naeb/adr/0001).\n\nimport naeb.policy\n\nfence(p: ptr) {\n}\n"
@@ -22,21 +30,41 @@ const NEW_POLICY = "// naeb's policy for this project (docs/naeb/adr/0001).\n\ni
 const READ = "allow_read"
 const WRITE = "allow_write"
 const HOST = "allow_host"
+const KIND_BROKER = "maven_broker"
+// An item with no line: a refusal naeb will not offer, and why.
+const KIND_NOTE = "note"
+
+// The one line that answers a Maven project's refused writes under ~/.m2.
+const BROKER_LINE = "policy.maven_broker(p)"
+const BROKER_REASON = "a Maven project: naeb's broker fetches its dependencies into ~/.m2 after checks, builds run offline"
 
 // One refusal record with a suggestion.
 struct Refusal {
     op: string          // read, write, egress, ...
     resource: string
     command: string     // command_id; "" for naeb's in-process tools
-    line: string        // its suggestion: one naeb.ae line
+    line: string        // its suggestion: one naeb.ae line, or ""
+    note: string        // why there is no line (the record's note), or ""
+}
+
+// What vetting needs to know besides the refusal: the fence's $HOME
+// (canonical), the absolute paths no line may be, contain or lie in, and
+// the project's shape.
+struct Scope {
+    home: string
+    forbidden: ptr
+    maven_project: int  // 1: pom.xml or mvnw at the project root
+    broker: int         // 1: the policy in force has the Maven broker on
+    wrapper_gav: string // the Maven wrapper's distribution as a coordinate, "" none
 }
 
 // One proposed naeb.ae line and the refusals it answers.
 struct Item {
-    line: string
-    kind: string        // allow_read, allow_write, allow_host
+    line: string        // "" for a note
+    kind: string        // allow_read, allow_write, allow_host, maven_broker, note
     target: string      // the path or "host:port" as the line names it
     refusals: ptr       // list of *Refusal
+    note: string        // KIND_NOTE: why no line is offered
 }
 
 // Where the lines went: the new text, the line index they start at in the
@@ -48,13 +76,24 @@ struct Placed {
     error: string
 }
 
-new_refusal(op: string, resource: string, command: string, line: string) -> ptr {
+new_refusal(op: string, resource: string, command: string, line: string, note: string) -> ptr {
     r = heap.new(Refusal)
     r.op = string.copy(op)
     r.resource = string.copy(resource)
     r.command = string.copy(command)
     r.line = string.copy(line)
+    r.note = string.copy(note)
     return r as ptr
+}
+
+new_scope(home: string, forbidden: @keep ptr, maven_project: int, broker: int, wrapper_gav: string) -> ptr {
+    sc = heap.new(Scope)
+    sc.home = string.copy(home)
+    sc.forbidden = forbidden
+    sc.maven_project = maven_project
+    sc.broker = broker
+    sc.wrapper_gav = string.copy(wrapper_gav)
+    return sc as ptr
 }
 
 new_item_(line: string, kind: string, target: string) -> *Item {
@@ -63,7 +102,58 @@ new_item_(line: string, kind: string, target: string) -> *Item {
     it.kind = kind
     it.target = target
     it.refusals = list.list_new()
+    it.note = ""
     return it
+}
+
+// The forbidden path `path` is or lies in, "" none.
+inside_forbidden_(forbidden: ptr, path: string) -> string {
+    i = 0
+    while i < list.list_size(forbidden) {
+        f, _g = list.get_string(forbidden, i)
+        if f != "" && under_(f, path) == 1 { return f }
+        i = i + 1
+    }
+    return ""
+}
+
+// A forbidden path lying below `path`, "" none.
+holds_forbidden_(forbidden: ptr, path: string) -> string {
+    i = 0
+    while i < list.list_size(forbidden) {
+        f, _g = list.get_string(forbidden, i)
+        if f != "" && f != path && under_(path, f) == 1 { return f }
+        i = i + 1
+    }
+    return ""
+}
+
+// The note for a refused write under ~/.m2 with the broker on.
+broker_owned_note_(sc: *Scope) -> string {
+    out = "not offered: ~/.m2 is the Maven broker's, commands only read it; build offline and fetch what is missing with tools.maven_fetch"
+    if sc.wrapper_gav != "" { out = "${out}, the wrapper's Maven too (${sc.wrapper_gav})" }
+    return out
+}
+
+// What naeb offers for one refusal: (line, note). A line naeb would add
+// (maybe the broker's instead of the refusal's own), or "" and a note
+// saying why none is offered; ("", "") when the refusal had no line and
+// there is nothing to say. Hosts and other ops keep their line.
+vet(scp: ptr, op: string, resource: string, line: string) -> (string, string) {
+    sc = scp as *Scope
+    if (op != "read" && op != "write") || string.starts_with(resource, "/") == 0 { return line, "" }
+    path = resource
+    inside = inside_forbidden_(sc.forbidden, path)
+    if inside != "" && line != "" { return "", "not offered: naeb keeps ${tilde_(sc.home, inside)} closed; open it only by editing naeb.ae yourself" }
+    m2 = "${sc.home}/.m2"
+    if op == "write" && under_(m2, path) == 1 && inside == "" {
+        if sc.broker == 1 { return "", broker_owned_note_(sc) }
+        if sc.maven_project == 1 { return BROKER_LINE, BROKER_REASON }
+    }
+    if line == "" { return "", "" }
+    holds = holds_forbidden_(sc.forbidden, path)
+    if holds != "" { return "", "not offered: ${tilde_(sc.home, path)} holds ${tilde_(sc.home, holds)}, which naeb keeps closed; open a narrower path, or edit naeb.ae yourself" }
+    return line, ""
 }
 
 // A quoted argument naeb may write into Aether source as it is: printable
@@ -94,8 +184,10 @@ digits_(s: string) -> int {
 
 // (kind, argument, port): the parts of a line naeb would add, or kind ""
 // when it is not exactly policy.allow_read(p, "path"),
-// policy.allow_write(p, "path") or policy.allow_host(p, "host", port).
+// policy.allow_write(p, "path"), policy.allow_host(p, "host", port) or
+// policy.maven_broker(p).
 parse_(line: string) -> (string, string, string) {
+    if line == BROKER_LINE { return KIND_BROKER, "", "" }
     kinds = [READ, WRITE, HOST]
     for i in 0..3 {
         head = "policy.${kinds[i]}(p, \""
@@ -278,21 +370,51 @@ has_(l: ptr, s: string) -> int {
     return 0
 }
 
-// The refusals (*Refusal) as items, writes first, then reads, then hosts;
-// refusals whose line naeb would not add are left out. home: the fence's
-// $HOME; forbidden: absolute paths no grouped line may be, contain or lie in.
-group(refusals: ptr, home: string, forbidden: ptr) -> ptr {
+// The refusals (*Refusal) as items: the broker line, writes, reads, hosts,
+// then notes (KIND_NOTE, no line: lines_of leaves them out). Each refusal
+// is vetted first (vet); refusals with neither a line naeb would add nor a
+// note are left out. scope: a Scope (new_scope).
+group(refusals: ptr, scope: ptr) -> ptr {
+    sc = scope as *Scope
+    home = sc.home
+    forbidden = sc.forbidden
     out = list.list_new()
     wpaths = list.list_new()
     wrefs = list.list_new()
     rpaths = list.list_new()
     rrefs = list.list_new()
     hosts = list.list_new()
+    notes = list.list_new()
+    brk = null
     i = 0
     while i < list.list_size(refusals) {
         r = list.list_get_raw(refusals, i) as *Refusal
-        kind, arg, port = parse_(r.line)
-        if kind == WRITE {
+        line, note = vet(scope, r.op, r.resource, r.line)
+        if line == "" && note == "" { note = r.note }
+        kind, arg, port = parse_(line)
+        if kind == "" && note != "" {
+            found_n = null
+            k0 = 0
+            while k0 < list.list_size(notes) {
+                ni = list.list_get_raw(notes, k0) as *Item
+                if ni.note == note { found_n = ni as ptr }
+                k0 = k0 + 1
+            }
+            if found_n == null {
+                nn = new_item_("", KIND_NOTE, "")
+                nn.note = string.copy(note)
+                list.list_add(notes, nn as ptr)
+                found_n = nn as ptr
+            }
+            list.list_add((found_n as *Item).refusals, r as ptr)
+        } else if kind == KIND_BROKER {
+            if brk == null {
+                bi = new_item_(BROKER_LINE, KIND_BROKER, "~/.m2")
+                list.list_add(out, bi as ptr)
+                brk = bi as ptr
+            }
+            list.list_add((brk as *Item).refusals, r as ptr)
+        } else if kind == WRITE {
             list.list_add(wpaths, expand_(home, arg))
             list.list_add(wrefs, r as ptr)
         } else if kind == READ {
@@ -315,6 +437,7 @@ group(refusals: ptr, home: string, forbidden: ptr) -> ptr {
         }
         i = i + 1
     }
+    first_write = list.list_size(out)
     if list.list_size(wpaths) > 0 { cluster_(WRITE, wpaths, wrefs, home, forbidden, out) }
     writes = list.list_size(out)
     if list.list_size(rpaths) > 0 {
@@ -324,7 +447,7 @@ group(refusals: ptr, home: string, forbidden: ptr) -> ptr {
         while j < list.list_size(rpaths) {
             p, _g = list.get_string(rpaths, j)
             covered = null
-            w = 0
+            w = first_write
             while w < writes {
                 wi = list.list_get_raw(out, w) as *Item
                 if under_(expand_(home, wi.target), p) == 1 { covered = wi as ptr }
@@ -344,6 +467,35 @@ group(refusals: ptr, home: string, forbidden: ptr) -> ptr {
     while k2 < list.list_size(hosts) {
         list.list_add(out, list.list_get_raw(hosts, k2))
         k2 = k2 + 1
+    }
+    k3 = 0
+    while k3 < list.list_size(notes) {
+        list.list_add(out, list.list_get_raw(notes, k3))
+        k3 = k3 + 1
+    }
+    return out
+}
+
+// The items that carry a line (group's), in order.
+lines_of(items: ptr) -> ptr {
+    out = list.list_new()
+    i = 0
+    while i < list.list_size(items) {
+        it = list.list_get_raw(items, i) as *Item
+        if it.kind != KIND_NOTE { list.list_add(out, it as ptr) }
+        i = i + 1
+    }
+    return out
+}
+
+// The notes among group's items: refusals naeb does not offer, and why.
+notes_of(items: ptr) -> ptr {
+    out = list.list_new()
+    i = 0
+    while i < list.list_size(items) {
+        it = list.list_get_raw(items, i) as *Item
+        if it.kind == KIND_NOTE { list.list_add(out, it as ptr) }
+        i = i + 1
     }
     return out
 }
@@ -391,9 +543,17 @@ printable_(s: string) -> string {
 }
 
 // What an item answers, for the prompt: "refused egress h:443 · b1", or
-// "refused write under ~/.m2/repository · 2314 refusals · b3".
+// "refused write under ~/.m2/repository · 2314 refusals · b3"; the broker
+// line and a note add why.
 summary(itp: ptr) -> string {
     it = itp as *Item
+    base = summary_(it)
+    if it.kind == KIND_BROKER { return "${base} · ${BROKER_REASON}" }
+    if it.kind == KIND_NOTE { return printable_("${base} · ${it.note}") }
+    return base
+}
+
+summary_(it: *Item) -> string {
     n = list.list_size(it.refusals)
     r0 = list.list_get_raw(it.refusals, 0) as *Refusal
     if n == 1 { return printable_("refused ${r0.op} ${r0.resource} · ${commands_(it)}") }
@@ -405,6 +565,7 @@ summary(itp: ptr) -> string {
         i = i + 1
     }
     if it.kind == HOST { return printable_("refused ${ops} ${it.target} · ${n} refusals · ${commands_(it)}") }
+    if it.kind == KIND_NOTE { return printable_("refused ${ops} ${r0.resource} and ${n - 1} more · ${commands_(it)}") }
     return printable_("refused ${ops} under ${it.target} · ${n} refusals · ${commands_(it)}")
 }
 
@@ -413,6 +574,10 @@ comment(itp: ptr, date: string) -> string {
     it = itp as *Item
     n = list.list_size(it.refusals)
     r0 = list.list_get_raw(it.refusals, 0) as *Refusal
+    if it.kind == KIND_BROKER {
+        what = if n == 1 { "${r0.op} ${r0.resource}" } else { "${r0.op} under ~/.m2, ${n} refusals" }
+        return printable_("// Approved ${date}: refused ${what} (${commands_(it)}); ${BROKER_REASON}")
+    }
     if n == 1 { return printable_("// Approved ${date}: refused ${r0.op} ${r0.resource} (${commands_(it)})") }
     if it.kind == HOST { return printable_("// Approved ${date}: refused ${r0.op} ${it.target}, ${n} times (${commands_(it)})") }
     return printable_("// Approved ${date}: refused ${r0.op} under ${it.target}, ${n} refusals (${commands_(it)})")
@@ -586,10 +751,11 @@ fence_body_(t: string) -> (int, int, string) {
     return open, close, ""
 }
 
-// Inserts the items' lines, each after its comment, as the last statements
-// of naeb.ae's fence(p: ptr) body; text "" is a project without naeb.ae
-// (NEW_POLICY first). An error when that place is not certain.
-place(text: string, items: ptr, date: string) -> *Placed {
+// Inserts the items' lines (notes are skipped), each after its comment, as
+// the last statements of naeb.ae's fence(p: ptr) body; text "" is a project
+// without naeb.ae (NEW_POLICY first). An error when that place is not
+// certain.
+place(text: string, all: ptr, date: string) -> *Placed {
     pl = heap.new(Placed)
     pl.text = ""
     pl.at = 0
@@ -597,6 +763,11 @@ place(text: string, items: ptr, date: string) -> *Placed {
     pl.error = ""
     base = text
     if base == "" { base = NEW_POLICY }
+    items = lines_of(all)
+    if list.list_size(items) == 0 {
+        pl.error = "no line to add"
+        return pl
+    }
     k = 0
     while k < list.list_size(items) {
         it = list.list_get_raw(items, k) as *Item

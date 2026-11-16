@@ -9,14 +9,19 @@
 // The Maven broker's too-young refusals (op "maven_age", no suggestion)
 // are offered too, one coordinate per prompt, after any naeb.ae change:
 // y fetches exactly the versions the refusal named (maven_override).
+//
+// A record with a note and no suggestion (a path naeb never opens by a
+// prompt) is shown as a dim line saying why, with nothing to answer.
+// A fenced command that found no Java gets a dim hint once per Session.
 
 import std.list
 import std.string
 import std.json
 import nib.jsonx
 
-exports(Offer, new, collect, collect_result, pending, take, reset, answer_of, text_of, applied_text,
-        has_policy, take_young, young_text, fetched_text, KIND_POLICY, KIND_MAVEN, ANSWER_NONE, ANSWER_YES, ANSWER_NO)
+exports(Offer, new, collect, collect_result, pending, take, reset, answer_of, text_of, notes_text, applied_text,
+        has_policy, take_young, young_text, fetched_text, java_missing, java_hint, JAVA_HINT, KIND_POLICY, KIND_MAVEN,
+        ANSWER_NONE, ANSWER_YES, ANSWER_NO)
 
 // A failed build's compiler output shows its first lines only.
 const OUTPUT_LINES = 12
@@ -29,6 +34,15 @@ const ANSWER_NO = 2
 const KIND_POLICY = 0
 const KIND_MAVEN = 1
 
+// What a fenced command prints when it finds no Java (the macOS stub, mvnw,
+// a shell).
+const JAVA_MISSING[] = ["Unable to locate a Java Runtime", "JAVA_HOME is not defined correctly",
+                        "JAVA_HOME environment variable is not defined correctly", "java: command not found",
+                        "java/javac command does not exist in PATH nor is JAVA_HOME set"]
+const JAVA_MISSING_COUNT = 5
+
+const JAVA_HINT = "No Java inside the fence: start naeb with JAVA_HOME set to a JDK (naeb passes JAVA_HOME into the fence; a JDK under $HOME also needs policy.allow_read)"
+
 struct Offer {
     records: ptr      // JSON texts of collected records not yet offered
     keys: ptr         // "op resource" of every record collected or offered this Session
@@ -39,6 +53,7 @@ struct Offer {
     entry: int        // the open prompt's transcript entry, -1 none
     young: ptr        // JSON texts of the broker's too-young refusals not yet offered
     kind: int         // KIND_*: what the open prompt (or the build/fetch after it) is
+    java_hinted: int  // 1: the no-Java hint was shown this Session
 }
 
 new() -> *Offer {
@@ -52,6 +67,7 @@ new() -> *Offer {
     o.entry = -1
     o.young = list.list_new()
     o.kind = KIND_POLICY
+    o.java_hinted = 0
     return o
 }
 
@@ -72,10 +88,11 @@ reset(o: *Offer, session: string) {
     o.records = list.list_new()
     o.keys = list.list_new()
     o.young = list.list_new()
+    o.java_hinted = 0
 }
 
 // Adds the records of a fence_denied array (a parsed JSON value) that carry
-// a suggestion and were not collected or offered before.
+// a suggestion or a note and were not collected or offered before.
 collect(o: *Offer, denied: ptr) {
     if denied == null || json.json_type(denied) != json.JSON_ARRAY { return }
     i = 0
@@ -87,7 +104,7 @@ collect(o: *Offer, denied: ptr) {
                 list.list_add(o.keys, string.copy(ykey))
                 list.list_add(o.young, string.copy(jsonx.encode(r)))
             }
-        } else if jsonx.str_or(r, "suggestion", "") != "" {
+        } else if jsonx.str_or(r, "suggestion", "") != "" || jsonx.str_or(r, "note", "") != "" {
             key = "${jsonx.str_or(r, "op", "")} ${jsonx.str_or(r, "resource", "")}"
             if has_(o.keys, key) == 0 {
                 list.list_add(o.keys, string.copy(key))
@@ -193,9 +210,45 @@ answer_of(text: string, scrolls: bool) -> int {
     return ANSWER_NO
 }
 
+// The refusals a proposal (nib.fence.policy.propose's JSON) offers no line
+// for, one per line with why; "" none.
+notes_text(proposal: string) -> string {
+    v = jsonx.parse(proposal)
+    if v == null { return "" }
+    notes = jsonx.field(v, "notes")
+    out = ""
+    i = 0
+    while i < jsonx.array_size(notes) {
+        if i > 0 { out = "${out}\n" }
+        out = "${out}${jsonx.str_or(jsonx.array_at(notes, i), "summary", "")}"
+        i = i + 1
+    }
+    jsonx.free(v)
+    return out
+}
+
+// Whether a fenced command's output says it found no Java.
+java_missing(text: string) -> bool {
+    k = 0
+    while k < JAVA_MISSING_COUNT {
+        if string.contains(text, JAVA_MISSING[k]) == 1 { return true }
+        k = k + 1
+    }
+    return false
+}
+
+// The no-Java hint for `text` (a Run's or background command's output),
+// once per Session: JAVA_HINT, or "".
+java_hint(o: *Offer, text: string) -> string {
+    if o.java_hinted != 0 || !java_missing(text) { return "" }
+    o.java_hinted = 1
+    return JAVA_HINT
+}
+
 // The prompt for a proposal (nib.fence.policy.propose's JSON): one line per
 // proposed line saying what it answers, then the diff and the question; or,
-// when naeb cannot place the lines, the lines to add by hand.
+// when naeb cannot place the lines, the lines to add by hand. Notes are
+// notes_text's, not part of it.
 text_of(proposal: string) -> string {
     v = jsonx.parse(proposal)
     if v == null { return "" }

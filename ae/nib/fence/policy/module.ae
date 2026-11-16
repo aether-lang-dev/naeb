@@ -455,10 +455,12 @@ build(home: string, cwd: string, src: string, yes: int, confirm: fn) -> int {
 }
 
 // What naeb's TUI offers for the refusal records `records` (a JSON array)
-// under fence `f`: {"items":[{"line","summary"}], "diff", "text", "base",
-// "expected", "path"} to show and approve, or with "error" (no "diff") when
-// the lines cannot be placed in naeb.ae with certainty; "" when no record
-// carries a line naeb would add. date: the approval comments' YYYY-MM-DD.
+// under fence `f`: {"items":[{"line","summary"}], "notes":[{"summary"}],
+// "diff", "text", "base", "expected", "path"} to show and approve, or with
+// "error" (no "diff") when the lines cannot be placed in naeb.ae with
+// certainty; without "diff" or "error" when only notes (refusals naeb will
+// not offer a line for, and why) are left; "" when nothing is to be shown.
+// date: the approval comments' YYYY-MM-DD.
 propose(f: ptr, cwd: string, nib_home: string, records: string, date: string) -> string {
     v = jsonx.parse(records)
     if v == null { return "" }
@@ -467,14 +469,17 @@ propose(f: ptr, cwd: string, nib_home: string, records: string, date: string) ->
     while i < jsonx.array_size(v) {
         r = jsonx.array_at(v, i)
         sug = jsonx.str_or(r, "suggestion", "")
-        if sug != "" {
-            list.list_add(refs, proposal.new_refusal(jsonx.str_or(r, "op", ""), jsonx.str_or(r, "resource", ""), jsonx.str_or(r, "command_id", ""), sug))
+        note = jsonx.str_or(r, "note", "")
+        if sug != "" || note != "" {
+            list.list_add(refs, proposal.new_refusal(jsonx.str_or(r, "op", ""), jsonx.str_or(r, "resource", ""), jsonx.str_or(r, "command_id", ""), sug, note))
         }
         i = i + 1
     }
     jsonx.free(v)
-    items = proposal.group(refs, fence.home_canonical(f), fence.forbidden(f, cwd, nib_home))
-    if list.list_size(items) == 0 { return "" }
+    all = proposal.group(refs, fence.scope(f, cwd, nib_home))
+    items = proposal.lines_of(all)
+    notes = proposal.notes_of(all)
+    if list.list_size(all) == 0 { return "" }
     out = "{\"items\":["
     k = 0
     while k < list.list_size(items) {
@@ -483,6 +488,15 @@ propose(f: ptr, cwd: string, nib_home: string, records: string, date: string) ->
         out = "${out}{\"line\":${jsonx.quote(it.line)},\"summary\":${jsonx.quote(proposal.summary(it as ptr))}}"
         k = k + 1
     }
+    out = "${out}],\"notes\":["
+    k = 0
+    while k < list.list_size(notes) {
+        nt = list.list_get_raw(notes, k) as *proposal.Item
+        if k > 0 { out = "${out}," }
+        out = "${out}{\"summary\":${jsonx.quote(proposal.summary(nt as ptr))}}"
+        k = k + 1
+    }
+    if list.list_size(items) == 0 { return "${out}]}" }
     project = canon_(jail.project_root(cwd))
     path = atomic_file.join(project, FILE)
     base = ""

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """One refusal record everywhere (docs/naeb/adr/0001, "Denials reaching the
 model"): in-process tools, bash, hooks, MCP stdio servers and sub-agents all
-report a fence refusal as {op, resource, layer, command_id?, reason?, suggestion?},
-the suggestion a naeb.ae line as text; without a fence (nib) the shapes are
-upstream's.
+report a fence refusal as {op, resource, layer, command_id?, reason?, suggestion?,
+note?}, the suggestion a naeb.ae line as text, the note why there is none (a
+secret is never offered); without a fence (nib) the shapes are upstream's.
 
 Local only: a fixture HOME of fake files, a fixture project with no naeb.ae
 (the default fence), hosts under `.invalid` (the proxy refuses them before
@@ -28,6 +28,7 @@ from mock_providers import Mock  # noqa: E402
 
 NAEB = os.environ.get("NAEB", os.path.join(ROOT, "target/build/bin/naeb"))
 NIB = os.environ.get("NIB", os.path.join(os.path.dirname(NAEB), "nib"))
+SECRET_NOTE = "not offered: naeb keeps ~/.ssh closed; open it only by editing naeb.ae yourself"
 
 SCRIPT = r'''
 const out = {};
@@ -134,7 +135,7 @@ def main():
     r = get("read")
     rec = find(r.get("fence_denied"), "read", key)
     check("bash-read-record", rec == {"op": "read", "resource": key, "layer": "child", "command_id": rec and rec.get("command_id"),
-                                      "suggestion": 'policy.allow_read(p, "~/.ssh/id_fake")'} and str(rec.get("command_id", "")).startswith("b"),
+                                      "note": SECRET_NOTE} and str(rec.get("command_id", "")).startswith("b"),
           "the record was %r" % r.get("fence_denied"))
     rec = find(r.get("fence_denied"), "write", planted)
     check("bash-write-record", rec is not None and rec.get("suggestion") == 'policy.allow_write(p, "~/planted")', "the records were %r" % r.get("fence_denied"))
@@ -146,7 +147,7 @@ def main():
           "the records were %r" % e.get("fence_denied"))
     t = get("tool_read")
     check("tool-read-record", t.get("error") == "read: denied by the project fence: read %s" % key and
-          t.get("fence_denied") == [{"op": "read", "resource": key, "layer": "tool", "suggestion": 'policy.allow_read(p, "~/.ssh/id_fake")'}],
+          t.get("fence_denied") == [{"op": "read", "resource": key, "layer": "tool", "note": SECRET_NOTE}],
           "the error was %r" % t)
     t = get("tool_fetch")
     check("tool-fetch-record", t.get("error") == "fetch: denied by the project fence: egress fetch-denied.invalid:443" and
@@ -189,7 +190,7 @@ def main():
     rec = find((payload or {}).get("fence_denied"), "read", key)
     check("hook-record", rec is not None and rec.get("command_id") == "hook:after_edit" and rec.get("layer") == "child", "the payload was %r" % payload)
     docs = "".join(system) + tools_desc
-    check("docs-name-the-field", "fence_denied: [{ op, resource, layer, command_id?, reason?, suggestion? }]" in docs, "the model was not told about fence_denied")
+    check("docs-name-the-field", "fence_denied: [{ op, resource, layer, command_id?, reason?, suggestion?, note? }]" in docs, "the model was not told about fence_denied")
 
     server = os.path.join(proj, "rr_mcp.py")
     with open(server, "w") as f:
@@ -221,7 +222,7 @@ def main():
             if line.startswith('{"ok"') and '"changes"' in line:
                 ares = json.loads(line)
     rec = find((ares or {}).get("fence_denied"), "read", key)
-    check("sub-agent-record", rec is not None and rec.get("layer") == "child" and rec.get("suggestion") == 'policy.allow_read(p, "~/.ssh/id_fake")',
+    check("sub-agent-record", rec is not None and rec.get("layer") == "child" and rec.get("note") == SECRET_NOTE and "suggestion" not in rec,
           "the agent result was %r (exit %d, %s)" % (ares, a.returncode, a.stderr[-300:]))
     shutil.rmtree(work, ignore_errors=True)
     print("%d failure(s)" % fails)

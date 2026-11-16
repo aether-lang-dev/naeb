@@ -194,7 +194,7 @@ main() {
             t = new_tools_(d)
             tools.set_fence(t, fence.new(d))
             docs = tools.docs(t)
-            spec.assert_eq(contains_(docs, "fence_denied: [{ op, resource, layer, command_id?, reason?, suggestion? }]"), 1, "records named")
+            spec.assert_eq(contains_(docs, "fence_denied: [{ op, resource, layer, command_id?, reason?, suggestion?, note? }]"), 1, "records named")
             spec.assert_eq(contains_(tools.names_json(t), "\"fence\""), 1, "in the API")
             r = sandbox.eval("() => {\n${docs}}", sandbox.limits(), null, null) as *sandbox.Outcome
             spec.assert_eq(r.ok, 1, "fenced docs parse: ${r.text}")

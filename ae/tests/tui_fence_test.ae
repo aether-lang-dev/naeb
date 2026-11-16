@@ -218,6 +218,70 @@ main() {
             tui.step(r.a)
             spec.assert_str_eq(editor.text(r.a.input), "y", "keys go to the input")
         }
+        spec.it("a refusal naeb offers no line for is a dim line saying why, with no question") callback {
+            r = rig_(true)
+            r.s.proposal = "{\"items\":[],\"notes\":[{\"summary\":\"refused write /h/.m2 · b2 · not offered: ~/.m2 holds ~/.m2/settings.xml, which naeb keeps closed; open a narrower path, or edit naeb.ae yourself\"}]}"
+            driver.type_text(r.t, "build")
+            tui.step(r.a)
+            key_(r, "enter")
+            emit_(r, "{\"run_end\":{\"ok\":false,\"output\":\"mkdir: /h/.m2: Operation not permitted\",\"changes\":[],\"tool_summary\":{\"counts\":[],\"omitted\":0},\"fence_denied\":[{\"op\":\"write\",\"resource\":\"/h/.m2\",\"layer\":\"child\",\"command_id\":\"b2\",\"note\":\"not offered: ~/.m2 holds ~/.m2/settings.xml, which naeb keeps closed; open a narrower path, or edit naeb.ae yourself\"}]}}")
+            port.end_turn(r.s, 1)
+            tui.settle(r.a)
+            spec.assert_eq(r.s.proposed.len, 1, "a record with only a note is collected")
+            e = last_(r)
+            spec.assert_eq(e.kind, entry.KIND_INFO, "dim, not a prompt")
+            spec.assert_str_eq(e.text, "refused write /h/.m2 · b2 · not offered: ~/.m2 holds ~/.m2/settings.xml, which naeb keeps closed; open a narrower path, or edit naeb.ae yourself", "why")
+            spec.assert_eq(r.a.fence.open, 0, "no question")
+            driver.expect_no_row_contains(r.t, "[y/N]")
+            driver.type_text(r.t, "y")
+            tui.step(r.a)
+            spec.assert_str_eq(editor.text(r.a.input), "y", "keys go to the input")
+        }
+        spec.it("notes come before the prompt for the lines that are offered") callback {
+            r = rig_(true)
+            r.s.proposal = "{\"items\":[{\"line\":\"policy.maven_broker(p)\",\"summary\":\"refused write /h/.m2 · b2 · a Maven project: naeb's broker fetches its dependencies into ~/.m2 after checks, builds run offline\"}],\"notes\":[{\"summary\":\"refused read /h/.ssh/id · b2 · not offered: naeb keeps ~/.ssh closed; open it only by editing naeb.ae yourself\"}],\"diff\":${json_(DIFF)},\"text\":\"t\",\"base\":\"b\",\"expected\":\"e\",\"path\":\"/h/p/naeb.ae\"}"
+            refused_turn_(r)
+            port.end_turn(r.s, 1)
+            tui.settle(r.a)
+            n = transcript.count(r.a.transcript)
+            note = transcript.at(r.a.transcript, n - 2)
+            spec.assert_eq(note.kind, entry.KIND_INFO, "the note, dim")
+            spec.assert_true(string.contains(note.text, "naeb keeps ~/.ssh closed") == 1, note.text)
+            spec.assert_true(string.starts_with(last_(r).text, "refused write /h/.m2 · b2 · a Maven project: naeb's broker") == 1 && string.contains(last_(r).text, "~/.ssh") == 0, "the prompt holds only what it offers: ${last_(r).text}")
+            spec.assert_eq(r.a.fence.open, 1, "asking")
+        }
+        spec.it("a fenced command that found no Java gets a dim hint, once per Session") callback {
+            outs = ["The operation couldn't be completed. Unable to locate a Java Runtime.", "The JAVA_HOME environment variable is not defined correctly, so mvnw cannot run.", "bash: java: command not found"]
+            for i in 0..3 {
+                r = rig_(true)
+                driver.type_text(r.t, "build")
+                tui.step(r.a)
+                key_(r, "enter")
+                emit_(r, "{\"run_end\":{\"ok\":false,\"output\":${json_(outs[i])},\"changes\":[],\"tool_summary\":{\"counts\":[],\"omitted\":0}}}")
+                hinted = 0
+                for k in 0..transcript.count(r.a.transcript) {
+                    en = transcript.at(r.a.transcript, k)
+                    if en.kind == entry.KIND_INFO && en.text == fence_offer.JAVA_HINT { hinted = hinted + 1 }
+                }
+                spec.assert_eq(hinted, 1, "hinted: ${outs[i]}")
+                emit_(r, "{\"run_end\":{\"ok\":false,\"output\":${json_(outs[i])},\"changes\":[],\"tool_summary\":{\"counts\":[],\"omitted\":0}}}")
+                again = 0
+                for k2 in 0..transcript.count(r.a.transcript) {
+                    en2 = transcript.at(r.a.transcript, k2)
+                    if en2.text == fence_offer.JAVA_HINT { again = again + 1 }
+                }
+                spec.assert_eq(again, 1, "once")
+                spec.assert_eq(r.a.fence.open, 0, "nothing to approve")
+            }
+            spec.assert_true(string.contains(fence_offer.JAVA_HINT, "JAVA_HOME") == 1, "names JAVA_HOME")
+            spec.assert_true(!fence_offer.java_missing("BUILD SUCCESS"), "not on a build that ran")
+            r2 = rig_(false)
+            driver.type_text(r2.t, "build")
+            tui.step(r2.a)
+            key_(r2, "enter")
+            emit_(r2, "{\"run_end\":{\"ok\":false,\"output\":\"Unable to locate a Java Runtime\",\"changes\":[],\"tool_summary\":{\"counts\":[],\"omitted\":0}}}")
+            spec.assert_eq(r2.a.fence.java_hinted, 0, "nib: no fence, no hint")
+        }
         spec.it("nib (no fence) collects nothing and never asks") callback {
             r = rig_(false)
             refused_turn_(r)

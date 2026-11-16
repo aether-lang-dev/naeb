@@ -23,14 +23,16 @@ import std.fs
 import std.list
 import std.string
 import nib.jsonx
+import nib.fence.proposal
+import nib.maven.wrapper
 import nib.tools.atomic_file
 import nib.tools.jail
 import nib.tools.rules
 
 exports(Fence, new, open_home, allow_read, deny_read, allow_write, deny_write, allow_host, pass_env,
         set_env, allow_loopback, set_origin, setting, maven_on, maven_repos, maven_min_age, maven_keyring,
-        maven_require_signatures, maven_m2, describe, host_allowed, host_named, resolve, child_env, proxy_env, read_rules, write_denied, refusal, refusals_json,
-        suggestion, home_canonical, forbidden, SECRETS)
+        maven_require_signatures, maven_m2, maven_wrapper, maven_project, wrapper_dist, describe, host_allowed, host_named, resolve, child_env, proxy_env, read_rules, write_denied, refusal, refusals_json,
+        suggestion, home_canonical, forbidden, scope, SECRETS)
 
 // Relative to $HOME: denied to every fenced reader unless allowed exactly.
 const SECRETS[] = [".ssh", ".aws", ".gnupg", ".config/gh", ".config/gcloud", ".azure", ".kube", ".docker",
@@ -160,6 +162,26 @@ maven_require_signatures(fp: ptr) -> int { return (fp as *Fence).maven_require_s
 
 // ~/.m2/repository: read-only to the fenced while the broker is on.
 maven_m2(fp: ptr) -> string { return atomic_file.join((fp as *Fence).home, ".m2/repository") }
+
+// Where mvnw keeps the Maven distributions it runs; the broker's too, like
+// ~/.m2/repository: readable, never writable to fenced writers.
+maven_wrapper(fp: ptr) -> string { return atomic_file.join((fp as *Fence).home, ".m2/wrapper") }
+
+// 1 when the project at `cwd` is a Maven project: pom.xml or mvnw at its root.
+maven_project(cwd: string) -> int {
+    project = jail.project_root(cwd)
+    if fs.exists(atomic_file.join(project, "pom.xml")) == 1 || fs.exists(atomic_file.join(project, "mvnw")) == 1 { return 1 }
+    return 0
+}
+
+// The Maven distribution the project's wrapper names (maven.wrapper), or
+// null when the project has no .mvn/wrapper/maven-wrapper.properties.
+wrapper_dist(cwd: string) -> ptr {
+    path = atomic_file.join(jail.project_root(cwd), wrapper.PROPERTIES)
+    text, err = fs.read(path)
+    if err != "" { return null }
+    return wrapper.parse(text) as ptr
+}
 
 // Copies: a caller may pass getenv() results, which naeb zeroes at start-up.
 expand_(f: *Fence, path: string) -> string { return string.copy(jail.expand_home(f.home, path)) }
@@ -317,7 +339,10 @@ read_rules(fp: ptr, cwd: string, nib_home: string, writes: ptr) -> ptr {
         list.list_add(allowed, canon_(a))
         i = i + 1
     }
-    if f.maven == 1 { list.list_add(allowed, canon_(maven_m2(fp))) }
+    if f.maven == 1 {
+        list.list_add(allowed, canon_(maven_m2(fp)))
+        list.list_add(allowed, canon_(maven_wrapper(fp)))
+    }
     homes = homes_(f)
     h = 0
     while h < list.list_size(homes) {
@@ -407,11 +432,12 @@ resolve(fp: ptr, cwd: string, nib_home: string, env: ptr) -> ptr {
     f = fp as *Fence
     extra = list.list_new()
     m2 = canon_(maven_m2(fp))
+    mw = canon_(maven_wrapper(fp))
     i = 0
     while i < list.list_size(f.write_allow) {
         w, _e = list.get_string(f.write_allow, i)
-        // With the broker on, ~/.m2/repository is naeb's to write, never a fenced writer's.
-        if f.maven == 0 || under_(m2, canon_(w)) == 0 { list.list_add(extra, w) }
+        // With the broker on, ~/.m2/repository and ~/.m2/wrapper are naeb's to write, never a fenced writer's.
+        if f.maven == 0 || (under_(m2, canon_(w)) == 0 && under_(mw, canon_(w)) == 0) { list.list_add(extra, w) }
         i = i + 1
     }
     writes = jail.base_roots(cwd, env, extra)
@@ -419,6 +445,7 @@ resolve(fp: ptr, cwd: string, nib_home: string, env: ptr) -> ptr {
     s = sp as *jail.Spec
     s.write_deny = write_denied(fp, cwd)
     if f.maven == 1 && jail.allows(writes, m2) == 1 { list.list_add(s.write_deny, m2) }
+    if f.maven == 1 && jail.allows(writes, mw) == 1 { list.list_add(s.write_deny, mw) }
     s.reads = read_rules(fp, cwd, nib_home, writes)
     s.loopback = f.loopback
     return sp
@@ -587,8 +614,8 @@ suggestion(fp: ptr, cwd: string, nib_home: string, op: string, resource: string)
         return ""
     }
     if under_any_(f.write_deny, path) == 1 { return "" }
-    // The broker writes ~/.m2/repository; tools.maven_fetch is the way in.
-    if f.maven == 1 && under_(canon_(maven_m2(fp)), path) == 1 { return "" }
+    // The broker writes ~/.m2/repository and ~/.m2/wrapper; tools.maven_fetch is the way in.
+    if f.maven == 1 && (under_(canon_(maven_m2(fp)), path) == 1 || under_(canon_(maven_wrapper(fp)), path) == 1) { return "" }
     return "policy.allow_write(p, ${jsonx.quote(tilde_(f, path))})"
 }
 
@@ -624,11 +651,28 @@ forbidden(fp: ptr, cwd: string, nib_home: string) -> ptr {
     return out
 }
 
+// What vetting a suggestion needs (nib.fence.proposal.Scope): $HOME, the
+// forbidden paths, whether the project at `cwd` is a Maven project, the
+// broker, and the wrapper's distribution as a coordinate.
+scope(fp: ptr, cwd: string, nib_home: string) -> ptr {
+    f = fp as *Fence
+    gav = ""
+    d = wrapper_dist(cwd)
+    if d != null && (d as *wrapper.Dist).error == "" { gav = (d as *wrapper.Dist).gav }
+    return proposal.new_scope(canon_(f.home), forbidden(fp, cwd, nib_home), maven_project(cwd), f.maven, gav)
+}
+
 // One refusal record (above) as JSON. entry: "op resource", or for egress
 // "egress host:port <reason>" when the pair is allowed but where it
 // resolves is not: the record then carries "reason", and the suggestion
-// names the address ("resolves to <address>, ...").
+// names the address ("resolves to <address>, ..."). A suggestion naeb would
+// not offer (nib.fence.proposal.vet) becomes a "note" saying why; in a
+// Maven project a write under ~/.m2 suggests the broker, with its reason.
 refusal(fp: ptr, cwd: string, nib_home: string, entry: string, layer: string, command_id: string) -> string {
+    return refusal_(fp, cwd, nib_home, entry, layer, command_id, scope(fp, cwd, nib_home))
+}
+
+refusal_(fp: ptr, cwd: string, nib_home: string, entry: string, layer: string, command_id: string, sc: ptr) -> string {
     sp = string.index_of(entry, " ")
     op = entry
     resource = ""
@@ -660,7 +704,19 @@ refusal(fp: ptr, cwd: string, nib_home: string, entry: string, layer: string, co
             }
         }
     } else {
-        sug = suggestion(fp, cwd, nib_home, op, resource)
+        raw = suggestion(fp, cwd, nib_home, op, resource)
+        res = resource
+        if (op == "read" || op == "write") && string.starts_with(resource, "/") == 1 { res = canon_(resource) }
+        line, note = proposal.vet(sc, op, res, raw)
+        sug = line
+        if note != "" {
+            if sug != "" {
+                out = "${out},\"suggestion\":${jsonx.quote(sug)},\"note\":${jsonx.quote(note)}"
+            } else {
+                out = "${out},\"note\":${jsonx.quote(note)}"
+            }
+            return "${out}}"
+        }
     }
     if sug != "" { out = "${out},\"suggestion\":${jsonx.quote(sug)}" }
     return "${out}}"
@@ -670,12 +726,13 @@ refusal(fp: ptr, cwd: string, nib_home: string, entry: string, layer: string, co
 refusals_json(fp: ptr, cwd: string, nib_home: string, entries: ptr, layer: string, command_id: string) -> string {
     n = list.list_size(entries)
     if n == 0 { return "" }
+    sc = scope(fp, cwd, nib_home)
     out = "["
     i = 0
     while i < n {
         e, _e = list.get_string(entries, i)
         if i > 0 { out = "${out}," }
-        out = "${out}${refusal(fp, cwd, nib_home, e, layer, command_id)}"
+        out = "${out}${refusal_(fp, cwd, nib_home, e, layer, command_id, sc)}"
         i = i + 1
     }
     return "${out}]"

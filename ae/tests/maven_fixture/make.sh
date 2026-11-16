@@ -21,6 +21,10 @@
 #   fx-maven-plugin:1.0        a build extension whose class would create
 #                              $NAEB_FX_MARKER if it were ever loaded
 #   lib-elsewhere:1.0          only in repo-other/ (a repository naeb.ae does not allow)
+#
+# And org.apache.maven:apache-maven:3.9.16 (pom, bin.zip), a fake Maven
+# distribution for the wrapper (project/mvnw, project/.mvn/wrapper): its
+# bin/mvn only prints MAVEN_ARGS and its arguments. A stand-in, not Maven.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 JAVA_HOME=${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}
@@ -143,4 +147,24 @@ sign "<rsa@naeb.invalid>" "$R/$GP/fx-maven-plugin/1.0/fx-maven-plugin-1.0.pom"
 sign "<rsa@naeb.invalid>" "$R/$GP/fx-maven-plugin/1.0/fx-maven-plugin-1.0.jar"
 
 artifact "$here/repo-other" lib-elsewhere 1.0 "<rsa@naeb.invalid>" ""
+
+# The wrapper's distribution: apache-maven-3.9.16/ at the archive's top, as
+# Maven's own -bin.zip has it.
+MV=3.9.16
+MD="$R/org/apache/maven/apache-maven/$MV"
+mkdir -p "$MD" "$work/dist/apache-maven-$MV/bin" "$work/dist/apache-maven-$MV/conf" "$work/dist/apache-maven-$MV/lib"
+printf '#!/bin/sh\necho "fixture maven %s: MAVEN_ARGS=${MAVEN_ARGS-} args=$*"\n' "$MV" > "$work/dist/apache-maven-$MV/bin/mvn"
+printf '@echo fixture maven %s\r\n' "$MV" > "$work/dist/apache-maven-$MV/bin/mvn.cmd"
+printf '<settings/>\n' > "$work/dist/apache-maven-$MV/conf/settings.xml"
+printf 'a fixture, not Maven\n' > "$work/dist/apache-maven-$MV/lib/README"
+chmod 755 "$work/dist/apache-maven-$MV/bin/mvn"
+(cd "$work/dist" && zip -q -r -X "$work/dist.zip" "apache-maven-$MV")
+printf '<?xml version="1.0" encoding="UTF-8"?>\n<project xmlns="http://maven.apache.org/POM/4.0.0">\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>org.apache.maven</groupId>\n  <artifactId>apache-maven</artifactId>\n  <version>%s</version>\n  <packaging>pom</packaging>\n</project>\n' "$MV" > "$work/p.pom"
+for f in "apache-maven-$MV.pom:$work/p.pom" "apache-maven-$MV-bin.zip:$work/dist.zip"; do
+    name=${f%%:*}
+    cp "${f#*:}" "$MD/$name"
+    shasum -a 1 "$MD/$name" | cut -c1-40 | tr -d '\n' > "$MD/$name.sha1"
+    shasum -a 512 "$MD/$name" | cut -c1-128 | tr -d '\n' > "$MD/$name.sha512"
+    sign "<rsa@naeb.invalid>" "$MD/$name"
+done
 echo "fixture repository written under $here/repo"

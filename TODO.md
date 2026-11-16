@@ -43,7 +43,16 @@ Session, grouped suggestions, the approval in the Session log).
 
 Landed 2026-11-15, experimental: the Maven broker (`policy.maven_broker`,
 `tools.maven_fetch`, naeb's own resolver in `ae/nib/maven/`, the TUI's y/N
-for a too-young version). Still to do there:
+for a too-young version). Landed 2026-11-16, after Paul's petclinic run was
+offered `allow_write ~/.m2`: no line for a forbidden path, single or grouped
+(a note says why); `policy.maven_broker(p)` offered for a Maven project's
+writes under `~/.m2`; the wrapper's Maven distribution fetched through the
+broker into mvnw's directory; a no-Java hint. Still to do there:
+
+- **An existing `~/.m2/settings.xml`:** Maven reads it whenever it exists,
+  and the fence refuses that read (a secret). Unverified what Maven 3.9
+  then does (an error, or a warning and on); if an error, pass
+  `-s`/`--global-settings` of an empty settings file in `MAVEN_ARGS`.
 
 - **A real Maven build in the tests:** a fixture project built offline by a
   Maven whose distribution comes from the fixture repository (none is

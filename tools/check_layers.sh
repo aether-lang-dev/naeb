@@ -68,7 +68,7 @@ expect_imports $T/jail/module.ae "nib.tools.atomic_file|nib.tools.rules|std.dir|
 # Fence resolves paths (file system) into a jail.Spec; the egress proxy is
 # the fenced children's and tools.fetch's only way out.
 expect_imports $T/rules/module.ae "std.list|std.string"
-expect_imports ae/nib/fence/module.ae "nib.jsonx|nib.tools.atomic_file|nib.tools.jail|nib.tools.rules|std.fs|std.list|std.string"
+expect_imports ae/nib/fence/module.ae "nib.fence.proposal|nib.jsonx|nib.maven.wrapper|nib.tools.atomic_file|nib.tools.jail|nib.tools.rules|std.fs|std.list|std.string"
 # naeb.ae: built by `naeb build` (diff, then `ae build --emit=lib` through
 # tools/process), checked against its record and dlopened at start (policy_host.c).
 # The naeb.ae lines the TUI offers after refusals, where they go, the diff: pure text.
@@ -90,12 +90,14 @@ expect_imports $T/llm_call/module.ae "nib.jsonx|nib.lock|nib.msg|nib.provider|ni
 expect_imports $T/web_search/module.ae "nib.jsonx|nib.lock|nib.provider.sse|nib.provider.types|std.http.client|std.json|std.list|std.string|std.sync|std.time|std.worker"
 # naeb's Maven broker (experimental; docs/naeb/adr/0001, "The Maven broker"):
 # coordinates, POMs and OpenPGP are pure logic; repo is its one GET; the
-# broker writes only into ~/.m2/repository (atomic_file) and starts no process.
+# broker writes only into ~/.m2/repository and ~/.m2/wrapper/dists (atomic_file;
+# std.zip only reads the wrapper's distribution in memory) and starts no process.
 expect_imports ae/nib/maven/gav/module.ae "std.list|std.string|std.time"
 expect_imports ae/nib/maven/pom/module.ae "std.list|std.string|std.xml"
 expect_imports ae/nib/maven/pgp/module.ae "std.bytes|std.cryptography|std.cryptography.ed25519|std.cryptography.rsa|std.encoding|std.list|std.string"
 expect_imports ae/nib/maven/repo/module.ae "std.http.client|std.string"
-expect_imports ae/nib/maven/broker/module.ae "nib.jsonx|nib.lock|nib.maven.gav|nib.maven.pgp|nib.maven.pom|nib.maven.repo|nib.tools.atomic_file|std.cryptography|std.fs|std.list|std.map|std.string|std.time"
+expect_imports ae/nib/maven/wrapper/module.ae "std.string"
+expect_imports ae/nib/maven/broker/module.ae "nib.jsonx|nib.lock|nib.maven.gav|nib.maven.pgp|nib.maven.pom|nib.maven.repo|nib.maven.wrapper|nib.tools.atomic_file|std.cryptography|std.fs|std.list|std.map|std.string|std.time|std.zip"
 expect_imports $T/module.ae "nib.fence|nib.image|nib.jsonx|nib.lock|nib.maven.broker|nib.provider.types|nib.sandbox|nib.sysenv|nib.tools.agent|nib.tools.agent_input|nib.tools.agent_sessions|nib.tools.atomic_file|nib.tools.background|nib.tools.bash|nib.tools.changes|nib.tools.denials|nib.tools.egress|nib.tools.file_state|nib.tools.files|nib.tools.jail|nib.tools.llm_call|nib.tools.mcp_tool|nib.tools.progress|nib.tools.registry|nib.tools.search|nib.tools.undo|nib.tools.view|nib.tools.web|nib.tools.web_search|std.list|std.os|std.strbuilder|std.string|std.sync"
 
 # The Session + provider slice.

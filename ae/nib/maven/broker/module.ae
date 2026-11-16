@@ -22,6 +22,12 @@
 // file renamed over the leaf) inside the canonical repository root, its
 // directories opened component by component, so a symlink planted inside
 // the repository cannot redirect a write, and a symlink leaf is refused.
+//
+// The Maven distribution the project's wrapper names (maven.wrapper,
+// org.apache.maven:apache-maven:zip:bin:<v>) is fetched the same way, with
+// the same checks (its POM's age), and unpacked into the directory mvnw
+// runs it from under ~/.m2/wrapper/dists instead of the repository; it is
+// reachable when, and only when, the wrapper's properties name it.
 
 import std.fs
 import std.list
@@ -29,6 +35,7 @@ import std.map
 import std.string
 import std.time
 import std.cryptography
+import std.zip
 import nib.jsonx
 import nib.lock
 import nib.tools.atomic_file
@@ -36,8 +43,9 @@ import nib.maven.gav
 import nib.maven.pom
 import nib.maven.pgp
 import nib.maven.repo
+import nib.maven.wrapper
 
-exports(Broker, new, set_now, fetch, records_json, reachable, repo_root, checksum_check, sha256_of, MAX_POMS, DEFAULT_PLUGINS)
+exports(Broker, new, set_now, fetch, records_json, reachable, repo_root, checksum_check, sha256_of, dists_dir, MAX_POMS, DEFAULT_PLUGINS)
 
 // The most POMs one reachability walk reads.
 const MAX_POMS = 3000
@@ -50,6 +58,10 @@ const DEFAULT_PLUGINS[] = ["maven-clean-plugin", "maven-resources-plugin", "mave
                            "maven-source-plugin", "maven-javadoc-plugin", "maven-shade-plugin", "maven-assembly-plugin",
                            "maven-antrun-plugin", "maven-help-plugin", "maven-wrapper-plugin", "maven-release-plugin"]
 const DEFAULT_PLUGIN_COUNT = 20
+
+// Limits on unpacking a wrapper distribution (Maven's is about 10 MB, 170 files).
+const DIST_MAX_ENTRIES = 5000
+const DIST_MAX_BYTES = 536870912
 
 struct Broker {
     home: string
@@ -1023,9 +1035,221 @@ repos_hint_(b: *Broker) -> string {
     return "; the project's POMs also name ${out}, which naeb.ae does not allow (policy.maven_repository(p, \"<url>\") would)"
 }
 
+// ---- the wrapper's distribution ---------------------------------------
+
+// "org.apache.maven:apache-maven:<v>:bin:zip" (version first, as people
+// write it) in Maven's order, g:a:ext:classifier:v; anything else as it is.
+dist_order_(req: string) -> string {
+    t = string.trim(req)
+    parts = string.split(t, ":")
+    out = t
+    if string.array_size(parts) == 5 && string.array_get(parts, 0) == wrapper.GROUP && string.array_get(parts, 1) == wrapper.ARTIFACT && string.array_get(parts, 3) == "bin" && string.array_get(parts, 4) == "zip" {
+        out = "${wrapper.GROUP}:${wrapper.ARTIFACT}:zip:bin:${string.array_get(parts, 2)}"
+    }
+    string.array_free(parts)
+    return out
+}
+
+// ~/.m2/wrapper/dists, where mvnw looks for the distributions it runs.
+dists_dir(b: *Broker) -> string { return atomic_file.join(b.home, ".m2/wrapper/dists") }
+
+refuse_(b: *Broker, refused: ptr, shown: string, reason: string) {
+    list.list_add(refused, refusal_json_(shown, reason))
+    list.list_add(b.records, "{\"requested\":${jsonx.quote(shown)},\"ok\":false,\"reason\":${jsonx.quote(reason)}}")
+}
+
+// An entry name of the distribution: (path below its top directory, "") or
+// ("", why). Relative, "/"-separated, printable ASCII, no "." or "..".
+dist_rel_(name: string, top: string) -> (string, string) {
+    if string.starts_with(name, "${top}/") == 0 { return "", "an entry outside ${top}/: ${name}" }
+    rel = string.substring(name, string.length(top) + 1, string.length(name))
+    if string.ends_with(rel, "/") == 1 { rel = string.substring(rel, 0, string.length(rel) - 1) }
+    if rel == "" { return "", "" }
+    i = 0
+    while i < string.length(rel) {
+        c = string.char_at(rel, i)
+        if c < 32 || c > 126 || c == 92 || c == 58 { return "", "an entry name naeb will not write: ${name}" }
+        i = i + 1
+    }
+    comps = string.split(rel, "/")
+    bad = 0
+    k = 0
+    while k < string.array_size(comps) {
+        c2 = string.array_get(comps, k)
+        if c2 == "" || c2 == "." || c2 == ".." { bad = 1 }
+        k = k + 1
+    }
+    string.array_free(comps)
+    if bad == 1 { return "", "an entry name naeb will not write: ${name}" }
+    return rel, ""
+}
+
+// Unpacks the distribution `data` (a -bin.zip whose entries lie under
+// apache-maven-<v>/) into `stage`, a new directory inside `root`, every
+// directory opened from its parent without following a symlink and checked
+// to lie in `root`; bin/ files executable; then mvnw.url. "" or why not.
+unpack_(root: string, stage: string, top: string, data: string, url: string) -> string {
+    ar, oerr = zip.open(string.bytes(data)[0..string.length(data)])
+    if oerr != "" { return oerr }
+    inside = |d: string, f: int| {
+        if under_(root, d, f) == 0 { return "${d} lies outside ${root}" }
+        return ""
+    }
+    n = zip.count(ar)
+    if n > DIST_MAX_ENTRIES {
+        zip.close(ar)
+        return "more than ${DIST_MAX_ENTRIES} entries"
+    }
+    total = 0 as long
+    err = ""
+    i = 0
+    while i < n && err == "" {
+        name = zip.entry_name(ar, i)
+        rel, rerr = dist_rel_(name, top)
+        if rerr != "" {
+            err = rerr
+        } else if rel != "" {
+            if zip.entry_is_dir(ar, i) == 1 {
+                dfd, _d, _f, derr = atomic_file.open_dir(atomic_file.join(stage, rel), 1, inside)
+                if derr != "" { err = derr } else { atomic_file.close_fd(dfd) }
+            } else {
+                total = total + zip.entry_size(ar, i)
+                if total > (DIST_MAX_BYTES as long) {
+                    err = "larger than ${DIST_MAX_BYTES} bytes unpacked"
+                } else {
+                    body, blen, berr = zip.entry_read(ar, i)
+                    if berr != "" {
+                        err = berr
+                    } else {
+                        mode = 420
+                        if string.starts_with(rel, "bin/") == 1 && string.ends_with(rel, ".cmd") == 0 { mode = 493 }
+                        target = atomic_file.join(stage, rel)
+                        fd, opened, _fold, ferr = atomic_file.open_dir(atomic_file.dirname(target), 1, inside)
+                        if ferr != "" {
+                            err = ferr
+                        } else {
+                            _st, werr = atomic_file.replace_at(fd, opened, atomic_file.basename(target), string.substring(body, 0, blen), mode, 1, 0)
+                            atomic_file.close_fd(fd)
+                            if werr != "" { err = "${rel}: ${werr}" }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    zip.close(ar)
+    if err != "" { return err }
+    if fs.exists(atomic_file.join(stage, "bin/mvn")) == 0 { return "the archive has no ${top}/bin/mvn" }
+    ufd, uopened, _uf, uerr = atomic_file.open_dir(stage, 0, inside)
+    if uerr != "" { return uerr }
+    _ust, uwerr = atomic_file.replace_at(ufd, uopened, "mvnw.url", "${url}\n", 420, 1, 0)
+    atomic_file.close_fd(ufd)
+    return uwerr
+}
+
+// The wrapper's distribution, requested as `x`: fetched and checked like
+// an artifact, then unpacked where mvnw runs it from.
+dist_(b: *Broker, x: *gav.Gav, shown: string, overrides: ptr, fetched: ptr, present: ptr, refused: ptr, denied: ptr) {
+    props = atomic_file.join(b.project, wrapper.PROPERTIES)
+    text, rerr = fs.read(props)
+    if rerr != "" {
+        refuse_(b, refused, shown, "not reachable: the project has no ${wrapper.PROPERTIES} naming a Maven distribution")
+        return
+    }
+    d = wrapper.parse(text)
+    if d.error != "" {
+        refuse_(b, refused, shown, d.error)
+        return
+    }
+    if d.gav != shown {
+        refuse_(b, refused, shown, "not reachable: the project's ${wrapper.PROPERTIES} names ${d.gav}")
+        return
+    }
+    home = atomic_file.join(dists_dir(b), d.dir)
+    st, k, _m = fs.stat(home, 0)
+    if k == fs.KIND_OK && st.kind == fs.STAT_KIND_DIR {
+        list.list_add(present, jsonx.quote(shown))
+        return
+    }
+    if k == fs.KIND_OK {
+        refuse_(b, refused, shown, "${home} exists and is not a directory")
+        return
+    }
+    v = x.version
+    dir = gav.dir_of(x.group, x.artifact, v)
+    ps, perr = locate_(b, "${dir}/${gav.file_of(x.artifact, v, "", "pom")}")
+    if ps == null {
+        refuse_(b, refused, shown, "${shown}: ${perr}")
+        return
+    }
+    zs, zerr = locate_(b, "${dir}/${gav.file_of(x.artifact, v, "bin", "zip")}")
+    if zs == null {
+        refuse_(b, refused, shown, "${shown}: ${zerr}")
+        return
+    }
+    key = "${x.group}:${x.artifact}:${v}"
+    art = heap.new(Art)
+    art.group = x.group
+    art.artifact = x.artifact
+    art.version = v
+    art.files = list.list_new()
+    list.list_add(art.files, ps as ptr)
+    list.list_add(art.files, zs as ptr)
+    art.present = 0
+    art.age = age_of_(b, ps)
+    if art.age < 0 && b.min_age > 0 && has_(overrides, key) == 0 {
+        refuse_(b, refused, shown, "${key}: the repository gives no publish date (Last-Modified) for its POM")
+        return
+    }
+    if art.age >= 0 && art.age < b.min_age && has_(overrides, key) == 0 {
+        young = list.list_new()
+        list.list_add(young, "${key} ${art.age}")
+        why = young_text_(young, b.min_age)
+        yj = young_json_(young)
+        list.list_add(refused, "{\"gav\":${jsonx.quote(shown)},\"reason\":${jsonx.quote(why)},\"young\":${yj}}")
+        list.list_add(denied, "{\"op\":\"maven_age\",\"resource\":${jsonx.quote(shown)},\"layer\":\"tool\",\"reason\":${jsonx.quote(why)},\"young\":${yj},\"min_age_days\":${b.min_age}}")
+        list.list_add(b.records, "{\"requested\":${jsonx.quote(shown)},\"ok\":false,\"reason\":${jsonx.quote(why)},\"young\":${yj}}")
+        return
+    }
+    zsha = sha256_of(zs.data)
+    if d.sha256 != "" && d.sha256 != zsha {
+        refuse_(b, refused, shown, "checksum mismatch (distributionSha256Sum in ${wrapper.PROPERTIES} is ${d.sha256}, the archive is ${zsha})")
+        return
+    }
+    parent = atomic_file.dirname(home)
+    if fs.exists(parent) == 0 { fs.mkdir_p(parent) }
+    root, cerr = atomic_file.canonical_path(dists_dir(b))
+    if cerr != "" {
+        refuse_(b, refused, shown, "not installed: ${dists_dir(b)}: ${cerr}")
+        return
+    }
+    cparent, cperr = atomic_file.canonical_path(parent)
+    if cperr != "" || under_(root, cparent, 0) == 0 {
+        refuse_(b, refused, shown, "not installed: ${parent} lies outside ${root}")
+        return
+    }
+    stage = atomic_file.join(cparent, ".naeb-${atomic_file.basename(home)}-${now_(b)}-${list.list_size(b.records)}")
+    if fs.exists(stage) == 1 { fs.remove_tree(stage) }
+    uerr = unpack_(root, stage, "apache-maven-${v}", zs.data, d.url)
+    if uerr == "" {
+        rn = fs.rename(stage, atomic_file.join(cparent, atomic_file.basename(home)))
+        if rn != "" { uerr = rn }
+    }
+    if uerr != "" {
+        fs.remove_tree(stage)
+        refuse_(b, refused, shown, "not installed: ${uerr}")
+        return
+    }
+    j = jsonx.with_member(art_json_(art, shown, overrides), "installed", jsonx.quote(home))
+    list.list_add(fetched, j)
+    list.list_add(b.records, j)
+}
+
 // One requested coordinate: appends to fetched/refused (JSON texts) and
 // denied (fence_denied records for the TUI's y/N), records to b.records.
-one_(b: *Broker, req: string, overrides: ptr, fetched: ptr, present: ptr, refused: ptr, denied: ptr) {
+one_(b: *Broker, req0: string, overrides: ptr, fetched: ptr, present: ptr, refused: ptr, denied: ptr) {
+    req = dist_order_(req0)
     x, perr = gav.parse(req)
     if x == null {
         list.list_add(refused, refusal_json_(req, perr))
@@ -1033,6 +1257,10 @@ one_(b: *Broker, req: string, overrides: ptr, fetched: ptr, present: ptr, refuse
         return
     }
     shown = gav.text_of(x)
+    if x.group == wrapper.GROUP && x.artifact == wrapper.ARTIFACT && x.ext == "zip" && x.classifier == "bin" {
+        dist_(b, x, shown, overrides, fetched, present, refused, denied)
+        return
+    }
     ok, rerr = reachable(b, x.group, x.artifact, x.version)
     if rerr != "" {
         reason = "the project's POMs could not be read: ${rerr}"

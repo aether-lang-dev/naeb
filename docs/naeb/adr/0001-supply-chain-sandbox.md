@@ -373,11 +373,12 @@ now; opening the proposed change in `$EDITOR` to adjust it before applying
 is the planned next step (TODO.md).
 
 - **What is offered.** The TUI collects every refusal record with a
-  `suggestion` from Run results (`run_end`'s `fence_denied`) and delivered
-  background bash results. Records whose line is not exactly
-  `policy.allow_read(p, "path")`, `policy.allow_write(p, "path")` or
+  `suggestion` or a `note` from Run results (`run_end`'s `fence_denied`)
+  and delivered background bash results. Records whose line is not exactly
+  `policy.allow_read(p, "path")`, `policy.allow_write(p, "path")`,
   `policy.allow_host(p, "host", port)` with a plain argument (printable
-  ASCII, no quote, backslash, `$` or brace) are not offered.
+  ASCII, no quote, backslash, `$` or brace) or `policy.maven_broker(p)` are
+  not offered.
   Suggestions are grouped (`nib.fence.proposal`) so a build tool refused on
   thousands of files is one line: one `allow_host` per `host:port`; paths
   under their nearest common directory, unless that directory is `$HOME`,
@@ -388,6 +389,28 @@ is the planned next step (TODO.md).
   `~/.m2/repository` and `~/.m2/wrapper/dists/...` become two lines, never
   `~/.m2` (it holds `settings.xml`). A write line also answers the read
   refusals beneath it. Templates (`maven.apply(p)`) are not suggested.
+- **Never a forbidden path, grouped or not** (2026-11-16, after a real run
+  offered `policy.allow_write(p, "~/.m2")` for mvnw's `mkdir ~/.m2`: the
+  check above applied only to groups, a single refusal passed as itself).
+  Every refusal is vetted first (`nib.fence.proposal.vet`, also when the
+  record is made, so the model sees the same): a path that is a forbidden
+  path, lies in one or holds one gets no line but a `note` saying why
+  (`not offered: ~/.m2 holds ~/.m2/settings.xml, which naeb keeps closed;
+  open a narrower path, or edit naeb.ae yourself`). The TUI shows notes as
+  dim lines above the prompt, with nothing to answer, and they are not
+  among the lines offered; notes alone open no prompt. This also drops the
+  old exact-path `allow_read` offer for a secret (`~/.ssh/id_fake`): the
+  policy can still name one, by hand.
+- **Maven projects get the broker.** In a project with `pom.xml` or `mvnw`
+  at its root, a refused write at or under `~/.m2` (creating `~/.m2` or
+  `~/.m2/repository` too, but not `settings*.xml`) is answered by
+  `policy.maven_broker(p)`, one line for all of them, with its reason in
+  the prompt and in the comment above it (`a Maven project: naeb's broker
+  fetches its dependencies into ~/.m2 after checks, builds run offline`).
+  With the broker already on such a refusal is a note pointing at
+  `tools.maven_fetch` (and at the wrapper's distribution, below), so the
+  broker is not offered again. `nib.fence` detects the project's shape and
+  passes it in (`proposal.Scope`); `nib.fence.proposal` stays pure.
 - **When.** Never while a Turn runs or the user is typing: once the Turn
   ends (and the input is empty, no `/provider` flow or pinned menu is open)
   everything collected since the last prompt is one prompt, duplicates
@@ -542,6 +565,44 @@ fence(p: ptr) {
   (A settings file with `<offline>` was rejected: `~/.m2/settings.xml` is on
   the secrets list, and one elsewhere needs `-s` on every command line.) A
   write refused under the repository carries no `allow_write` suggestion.
+  `~/.m2/wrapper` is treated the same way (readable, never writable to a
+  fenced writer, `maven.apply`'s `allow_write` of it dropped): the broker
+  installs the wrapper's Maven there.
+- **The Maven wrapper's distribution** (2026-11-16). mvnw (wrapper 3.3,
+  `distributionType=only-script`) runs Maven from
+  `~/.m2/wrapper/dists/<name>/<hash>` when that directory exists, else
+  downloads `distributionUrl` itself: `<name>` is the URL's file name
+  without extension and `-bin` (`apache-maven-3.9.16`), `<hash>` Java's
+  `String.hashCode` of the URL as written, unsigned hex (`nib.maven.wrapper`,
+  checked against mvnw's own `hash_string`). With the broker on, that URL
+  is a coordinate, `org.apache.maven:apache-maven:zip:bin:<v>` (also
+  accepted version first, `...:3.9.16:bin:zip`): `tools.maven_fetch` fetches
+  its POM and `-bin.zip` from the allowed repositories (never the URL's
+  host) with the same checksum, signature and age checks, checks
+  `distributionSha256Sum` when the properties name one, unpacks it
+  (entries only under `apache-maven-<v>/`, no `..`, every directory opened
+  from its parent without following a symlink inside `~/.m2/wrapper/dists`,
+  `bin/` files executable, size and count capped) into a staging directory
+  beside the target, writes `mvnw.url`, and renames it into place. It is
+  reachable when, and only when, the project's
+  `.mvn/wrapper/maven-wrapper.properties` names exactly that version; it is
+  not written into `~/.m2/repository`. A too-young distribution is a
+  `maven_age` refusal like any other (the TUI's y/N).
+  *Why on `tools.maven_fetch`*, not at session start or on a refused write:
+  the first mvnw run inside the fence fails at once (`mkdir -p
+  ~/.m2/wrapper/dists/...` is refused; mvnw needs no lock and writes nothing
+  else once the directory exists), and that refusal's note names the
+  coordinate to fetch, so the model fetches it with the same tool, record
+  and y/N as every artifact, the user never has to, and naeb never reaches
+  a repository the model or the user did not ask for (a fetch at start
+  would on every session of a Maven project, refused or not).
+  *mvnw inside the fence:* it reads the properties, hashes the URL and
+  `exec`s `$MAVEN_HOME/bin/mvn`; it creates nothing when the directory
+  exists, so `~/.m2` can stay unwritable (and need not exist beyond the
+  distribution). `MVNW_REPOURL` and `MAVEN_USER_HOME` do not pass into the
+  fence (not in the kept environment), so the URL hashed is the
+  properties' own. Not supported: the jar-based wrapper
+  (`distributionType=bin`), mvnd, snapshots.
 - **`tools.maven_fetch({ gavs })`** (only with the broker on) → `{ ok,
   fetched: [{ gav, requested, repo, files: [{ file, sha256, checksum,
   signature }], signature, age_days, override }], present: [gav], refused:
@@ -635,8 +696,26 @@ fence(p: ptr) {
   `~/.m2/repository` while `MAVEN_ARGS=--offline`, planted directory and
   leaf symlinks not followed, a build extension (whose class would create
   a marker if loaded) fetched and never run, a keyring inside the project
-  refused at start. No real Maven build runs in the tests: no `mvn` is
-  installed and a Maven distribution would have to come from outside.
+  refused at start; and, with the Maven wrapper 3.3.4's own `mvnw` in the
+  fixture project and a fake distribution in the fixture repository (its
+  `bin/mvn` only prints its arguments): a fresh HOME without `~/.m2` whose
+  refused `./mvnw` record names the coordinate, the distribution fetched
+  into mvnw's directory (checks, `mvnw.url`, nothing left staged, nothing
+  in the repository), mvnw then running it offline, `~/.m2/wrapper` still
+  unwritable, a young one, a `distributionSha256Sum` mismatch and an
+  unnamed version refused; and the TUI on Paul's petclinic shape (mvnw, no
+  naeb.ae, no `~/.m2`): the prompt offers `policy.maven_broker(p)` and
+  never `allow_write`, `y` writes a new naeb.ae with it and the policy is
+  rebuilt. `ae/tests/fence_proposal_test.ae` covers vetting (a single
+  forbidden path, a parent of one, the broker in a Maven project, not again
+  once on). No real Maven build runs in the tests: no `mvn` is installed and
+  a Maven distribution would have to come from outside.
+- **No Java.** When a fenced command's output says it found no Java (the
+  macOS stub's `Unable to locate a Java Runtime`, mvnw's `JAVA_HOME is not
+  defined correctly`, `java: command not found`), naeb's TUI shows one dim
+  hint per Session: start naeb with `JAVA_HOME` set (it passes into the
+  fence by default; a JDK under `$HOME` also needs `allow_read`). Not a
+  refusal, nothing to approve.
 - **Not yet:** brokers for npm, Cargo, Go modules, uv/pip and Bundler (TODO.md);
   Gradle (it reads the same repository layout but has its own offline
   switch and module metadata); Maven's `maven-metadata-<repo>.xml` for

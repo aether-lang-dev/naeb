@@ -10,7 +10,22 @@ import nib.fence.proposal
 const HOME = "/h"
 
 ref_(op: string, resource: string, command: string, line: string) -> ptr {
-    return proposal.new_refusal(op, resource, command, line)
+    return proposal.new_refusal(op, resource, command, line, "")
+}
+
+scope_() -> ptr { return proposal.new_scope(HOME, forbidden_(), 0, 0, "") }
+
+maven_scope_(broker: int) -> ptr { return proposal.new_scope(HOME, forbidden_(), 1, broker, "org.apache.maven:apache-maven:zip:bin:3.9.16") }
+
+notes_text_(items: ptr) -> string {
+    out = ""
+    ns = proposal.notes_of(items)
+    i = 0
+    while i < list.list_size(ns) {
+        out = "${out}${proposal.summary(list.list_get_raw(ns, i))}\n"
+        i = i + 1
+    }
+    return out
 }
 
 forbidden_() -> ptr {
@@ -28,7 +43,7 @@ lines_of_(items: ptr) -> string {
     i = 0
     while i < list.list_size(items) {
         it = list.list_get_raw(items, i) as *proposal.Item
-        out = "${out}${it.line} [${list.list_size(it.refusals)}]\n"
+        if it.kind != proposal.KIND_NOTE { out = "${out}${it.line} [${list.list_size(it.refusals)}]\n" }
         i = i + 1
     }
     return out
@@ -62,7 +77,7 @@ main() {
                 list.list_add(rs, ref_("write", "/h/.m2/repository/com/y/b${i}.pom", "b3", "policy.allow_write(p, \"~/.m2/repository/com/y/b${i}.pom\")"))
                 i = i + 1
             }
-            items = proposal.group(rs, HOME, forbidden_())
+            items = proposal.group(rs, scope_())
             spec.assert_str_eq(lines_of_(items), "policy.allow_write(p, \"~/.m2/repository\") [600]\n", "one line")
             spec.assert_str_eq(proposal.summary(one_(items) as ptr), "refused write under ~/.m2/repository · 600 refusals · b3", "the count shown")
         }
@@ -74,14 +89,14 @@ main() {
             list.list_add(rs, ref_("write", "/h/.m2/wrapper/dists/m/1/y.zip", "b2", "policy.allow_write(p, \"~/.m2/wrapper/dists/m/1/y.zip\")"))
             list.list_add(rs, ref_("read", "/h/.cache/k/one", "", "policy.allow_read(p, \"~/.cache/k/one\")"))
             list.list_add(rs, ref_("read", "/h/.config/k/two", "", "policy.allow_read(p, \"~/.config/k/two\")"))
-            items = proposal.group(rs, HOME, forbidden_())
+            items = proposal.group(rs, scope_())
             spec.assert_str_eq(lines_of_(items), "policy.allow_write(p, \"~/.m2/repository\") [2]\npolicy.allow_write(p, \"~/.m2/wrapper/dists/m/1\") [2]\npolicy.allow_read(p, \"~/.cache/k/one\") [1]\npolicy.allow_read(p, \"~/.config/k/two\") [1]\n", "~/.m2 and ~ are too wide")
         }
         spec.it("never the project, nor a directory containing it") callback {
             rs = list.list_new()
             list.list_add(rs, ref_("write", "/h/work/a", "b1", "policy.allow_write(p, \"~/work/a\")"))
             list.list_add(rs, ref_("write", "/h/work/b", "b1", "policy.allow_write(p, \"~/work/b\")"))
-            items = proposal.group(rs, HOME, forbidden_())
+            items = proposal.group(rs, scope_())
             spec.assert_eq(list.list_size(items), 2, "~/work holds the project: two lines")
         }
         spec.it("outside $HOME a group needs two components") callback {
@@ -90,7 +105,7 @@ main() {
             list.list_add(rs, ref_("write", "/srv/b", "b1", "policy.allow_write(p, \"/srv/b\")"))
             list.list_add(rs, ref_("write", "/var/cache/t/x", "b1", "policy.allow_write(p, \"/var/cache/t/x\")"))
             list.list_add(rs, ref_("write", "/var/cache/t/y", "b1", "policy.allow_write(p, \"/var/cache/t/y\")"))
-            items = proposal.group(rs, HOME, forbidden_())
+            items = proposal.group(rs, scope_())
             spec.assert_str_eq(lines_of_(items), "policy.allow_write(p, \"/opt/a\") [1]\npolicy.allow_write(p, \"/srv/b\") [1]\npolicy.allow_write(p, \"/var/cache/t\") [2]\n", "/ is never a group")
         }
         spec.it("a write line answers the reads beneath it; one line per host:port") callback {
@@ -102,17 +117,85 @@ main() {
             list.list_add(rs, ref_("egress", "repo.invalid:443", "b2", "policy.allow_host(p, \"repo.invalid\", 443)"))
             list.list_add(rs, ref_("egress", "repo.invalid:80", "b2", "policy.allow_host(p, \"repo.invalid\", 80)"))
             list.list_add(rs, ref_("read", "/h/x", "b2", "policy.open_home(p)"))
-            items = proposal.group(rs, HOME, forbidden_())
+            items = proposal.group(rs, scope_())
             spec.assert_str_eq(lines_of_(items), "policy.allow_write(p, \"~/.gradle/caches\") [3]\npolicy.allow_host(p, \"repo.invalid\", 443) [2]\npolicy.allow_host(p, \"repo.invalid\", 80) [1]\n", "grouped, the odd line dropped")
             spec.assert_str_eq(proposal.summary(list.list_get_raw(items, 1)), "refused egress repo.invalid:443 · 2 refusals · b1, b2", "host summary")
             spec.assert_str_eq(proposal.summary(list.list_get_raw(items, 2)), "refused egress repo.invalid:80 · b2", "single")
+        }
+    }
+    spec.describe(fw, "fence.proposal vetting") {
+        spec.it("never offers a single forbidden path, a path inside one or a parent of one") callback {
+            rs = list.list_new()
+            list.list_add(rs, ref_("write", "/h/.m2", "b2", "policy.allow_write(p, \"~/.m2\")"))
+            list.list_add(rs, ref_("read", "/h/.ssh/id_fake", "b3", "policy.allow_read(p, \"~/.ssh/id_fake\")"))
+            list.list_add(rs, ref_("write", "/h", "b4", "policy.allow_write(p, \"~\")"))
+            list.list_add(rs, ref_("read", "/h/work", "b5", "policy.allow_read(p, \"~/work\")"))
+            list.list_add(rs, ref_("write", "/h/.cache/x", "b6", "policy.allow_write(p, \"~/.cache/x\")"))
+            items = proposal.group(rs, scope_())
+            spec.assert_str_eq(lines_of_(items), "policy.allow_write(p, \"~/.cache/x\") [1]\n", "only the harmless line")
+            spec.assert_eq(list.list_size(proposal.lines_of(items)), 1, "notes are not offered")
+            spec.assert_str_eq(notes_text_(items), "refused write /h/.m2 · b2 · not offered: ~/.m2 holds ~/.m2/settings.xml, which naeb keeps closed; open a narrower path, or edit naeb.ae yourself\nrefused read /h/.ssh/id_fake · b3 · not offered: naeb keeps ~/.ssh closed; open it only by editing naeb.ae yourself\nrefused write /h · b4 · not offered: ~ holds ~/.ssh, which naeb keeps closed; open a narrower path, or edit naeb.ae yourself\nrefused read /h/work · b5 · not offered: ~/work holds ~/work/proj, which naeb keeps closed; open a narrower path, or edit naeb.ae yourself\n", "each says why")
+            pl = proposal.place("", items, "d")
+            spec.assert_true(string.contains(pl.text, "~/.m2\"") == 0 && string.contains(pl.text, "~/.cache/x") == 1, "naeb.ae gets only the line: ${pl.text}")
+        }
+        spec.it("a parent of a forbidden path among grouped refusals is a note too") callback {
+            rs = list.list_new()
+            list.list_add(rs, ref_("write", "/h/.m2", "b1", "policy.allow_write(p, \"~/.m2\")"))
+            list.list_add(rs, ref_("write", "/h/.m2/repository/a.jar", "b1", "policy.allow_write(p, \"~/.m2/repository/a.jar\")"))
+            list.list_add(rs, ref_("write", "/h/.m2/repository/b.jar", "b1", "policy.allow_write(p, \"~/.m2/repository/b.jar\")"))
+            items = proposal.group(rs, scope_())
+            spec.assert_str_eq(lines_of_(items), "policy.allow_write(p, \"~/.m2/repository\") [2]\n", "never ~/.m2")
+            spec.assert_eq(list.list_size(proposal.notes_of(items)), 1, "~/.m2 itself explained")
+        }
+        spec.it("vet keeps a refusal without a line silent, and hosts as they are") callback {
+            l, n = proposal.vet(scope_(), "write", "/h/work/proj/.git/hooks/x", "")
+            spec.assert_str_eq("${l}|${n}", "|", "nothing to say")
+            l2, n2 = proposal.vet(scope_(), "egress", "h.invalid:443", "policy.allow_host(p, \"h.invalid\", 443)")
+            spec.assert_str_eq("${l2}|${n2}", "policy.allow_host(p, \"h.invalid\", 443)|", "a host")
+        }
+        spec.it("a Maven project's write under ~/.m2 is answered by the broker, once") callback {
+            rs = list.list_new()
+            list.list_add(rs, ref_("write", "/h/.m2", "b2", "policy.allow_write(p, \"~/.m2\")"))
+            list.list_add(rs, ref_("write", "/h/.m2/repository/org/x.jar", "b2", "policy.allow_write(p, \"~/.m2/repository/org/x.jar\")"))
+            list.list_add(rs, ref_("write", "/h/.m2/wrapper/dists/apache-maven-3.9.16", "b3", "policy.allow_write(p, \"~/.m2/wrapper/dists/apache-maven-3.9.16\")"))
+            list.list_add(rs, ref_("write", "/h/.m2/settings.xml", "b3", "policy.allow_write(p, \"~/.m2/settings.xml\")"))
+            list.list_add(rs, ref_("egress", "repo.maven.apache.org:443", "b2", "policy.allow_host(p, \"repo.maven.apache.org\", 443)"))
+            items = proposal.group(rs, maven_scope_(0))
+            spec.assert_str_eq(lines_of_(items), "policy.maven_broker(p) [3]\npolicy.allow_host(p, \"repo.maven.apache.org\", 443) [1]\n", "the broker, never ~/.m2")
+            spec.assert_str_eq(proposal.summary(one_(items) as ptr), "refused write under ~/.m2 · 3 refusals · b2, b3 · ${proposal.BROKER_REASON}", "its reason in the prompt")
+            spec.assert_eq(proposal.valid_line(proposal.BROKER_LINE), 1, "a line naeb adds")
+            spec.assert_true(string.contains(notes_text_(items), "naeb keeps ~/.m2/settings.xml closed") == 1, "settings.xml is still a secret: ${notes_text_(items)}")
+            one = list.list_new()
+            list.list_add(one, ref_("write", "/h/.m2", "b2", "policy.allow_write(p, \"~/.m2\")"))
+            pl = proposal.place("", proposal.group(one, maven_scope_(0)), "2026-11-16")
+            spec.assert_str_eq(pl.error, "", "placed")
+            spec.assert_true(string.contains(pl.text, "    // Approved 2026-11-16: refused write /h/.m2 (b2); ${proposal.BROKER_REASON}\n    policy.maven_broker(p)\n}\n") == 1, "the comment says why: ${pl.text}")
+            spec.assert_true(string.contains(pl.text, "allow_write") == 0, "no allow_write")
+        }
+        spec.it("not a Maven project: no broker; broker already on: not offered again") callback {
+            rs = list.list_new()
+            list.list_add(rs, ref_("write", "/h/.m2/wrapper/dists/x", "b1", "policy.allow_write(p, \"~/.m2/wrapper/dists/x\")"))
+            spec.assert_str_eq(lines_of_(proposal.group(rs, scope_())), "policy.allow_write(p, \"~/.m2/wrapper/dists/x\") [1]\n", "a plain project keeps the plain line")
+            rs2 = list.list_new()
+            list.list_add(rs2, ref_("write", "/h/.m2", "b4", "policy.allow_write(p, \"~/.m2\")"))
+            list.list_add(rs2, proposal.new_refusal("write", "/h/.m2/repository/org/y.jar", "b4", "", ""))
+            list.list_add(rs2, ref_("write", "/h/.m2/x", "b5", proposal.BROKER_LINE))
+            items = proposal.group(rs2, maven_scope_(1))
+            spec.assert_eq(list.list_size(proposal.lines_of(items)), 0, "nothing offered")
+            spec.assert_str_eq(notes_text_(items), "refused write /h/.m2 and 2 more · b4, b5 · not offered: ~/.m2 is the Maven broker's, commands only read it; build offline and fetch what is missing with tools.maven_fetch, the wrapper's Maven too (org.apache.maven:apache-maven:zip:bin:3.9.16)\n", "one note, pointing at maven_fetch")
+            spec.assert_true(proposal.place("", items, "d").error != "", "nothing to place")
+        }
+        spec.it("a record's own note is kept when vetting has nothing to add") callback {
+            rs = list.list_new()
+            list.list_add(rs, proposal.new_refusal("write", "/opt/x", "b1", "", "the record's note"))
+            spec.assert_str_eq(notes_text_(proposal.group(rs, scope_())), "refused write /opt/x · b1 · the record's note\n", "kept")
         }
     }
     spec.describe(fw, "fence.proposal placing") {
         spec.it("puts the lines last in fence(p: ptr), each after its comment, and diffs it") callback {
             rs = list.list_new()
             list.list_add(rs, ref_("egress", "127.0.0.1:4100", "b3", "policy.allow_host(p, \"127.0.0.1\", 4100)"))
-            items = proposal.group(rs, HOME, forbidden_())
+            items = proposal.group(rs, scope_())
             pl = proposal.place(POLICY, items, "2026-11-15")
             spec.assert_str_eq(pl.error, "", "placed")
             want = "// The fixture's policy.\n\nimport naeb.policy\n\nfence(p: ptr) {\n    // Bundler: a home in the project.\n    policy.set_env(p, \"BUNDLE_USER_HOME\", \"\${policy.project_root(p)}/.bundle/user\")\n    policy.allow_host(p, \"rubygems.org\", 443) // { not a brace }\n    /* } nor this */\n\n    // Approved 2026-11-15: refused egress 127.0.0.1:4100 (b3)\n    policy.allow_host(p, \"127.0.0.1\", 4100)\n}\n\nhelper() -> int { return 1 }\n"
@@ -124,15 +207,15 @@ main() {
             rs = list.list_new()
             list.list_add(rs, ref_("read", "/h/.npmrc", "", "policy.allow_read(p, \"~/.npmrc\")"))
             list.list_add(rs, ref_("egress", "r.invalid:443", "b1", "policy.allow_host(p, \"r.invalid\", 443)"))
-            pl = proposal.place("import naeb.policy\n\nfence(p: ptr) {\n}\n", proposal.group(rs, HOME, forbidden_()), "2026-01-02")
+            pl = proposal.place("import naeb.policy\n\nfence(p: ptr) {\n}\n", proposal.group(rs, scope_()), "2026-01-02")
             spec.assert_str_eq(pl.text, "import naeb.policy\n\nfence(p: ptr) {\n    // Approved 2026-01-02: refused read /h/.npmrc (tool)\n    policy.allow_read(p, \"~/.npmrc\")\n\n    // Approved 2026-01-02: refused egress r.invalid:443 (b1)\n    policy.allow_host(p, \"r.invalid\", 443)\n}\n", "empty body")
-            pl2 = proposal.place("import naeb.policy\nfence(p: ptr)\n{\n\tpolicy.open_home(p)\n}\n", proposal.group(rs, HOME, forbidden_()), "d")
+            pl2 = proposal.place("import naeb.policy\nfence(p: ptr)\n{\n\tpolicy.open_home(p)\n}\n", proposal.group(rs, scope_()), "d")
             spec.assert_true(string.contains(pl2.text, "\n\tpolicy.open_home(p)\n\n\t// Approved d: refused read /h/.npmrc (tool)\n\tpolicy.allow_read(p, \"~/.npmrc\")\n") == 1, "tab indent kept: ${pl2.text}")
         }
         spec.it("a project without naeb.ae gets a new one, all of it added") callback {
             rs = list.list_new()
             list.list_add(rs, ref_("egress", "r.invalid:443", "b1", "policy.allow_host(p, \"r.invalid\", 443)"))
-            pl = proposal.place("", proposal.group(rs, HOME, forbidden_()), "d")
+            pl = proposal.place("", proposal.group(rs, scope_()), "d")
             spec.assert_str_eq(pl.error, "", "placed")
             spec.assert_true(string.starts_with(pl.text, proposal.NEW_POLICY) == 0, "lines inside the body")
             d = proposal.unified("", pl.text, pl.at, pl.added)
@@ -141,7 +224,7 @@ main() {
         spec.it("refuses to guess where to put them") callback {
             rs = list.list_new()
             list.list_add(rs, ref_("egress", "r.invalid:443", "b1", "policy.allow_host(p, \"r.invalid\", 443)"))
-            items = proposal.group(rs, HOME, forbidden_())
+            items = proposal.group(rs, scope_())
             spec.assert_true(proposal.place("import naeb.policy\nfence(p: ptr) { policy.open_home(p) }\n", items, "d").error != "", "} not on its own line")
             spec.assert_true(proposal.place("import naeb.policy\nfence(q: ptr) {\n}\n", items, "d").error != "", "another parameter name")
             spec.assert_true(proposal.place("import naeb.policy\nfence(p: ptr) {\n}\nfence(p: ptr) {\n}\n", items, "d").error != "", "two bodies")

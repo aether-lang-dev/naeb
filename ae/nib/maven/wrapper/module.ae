@@ -1,0 +1,142 @@
+// maven.wrapper: the Maven distribution a project's Maven wrapper (mvnw,
+// distributionType=only-script, wrapper 3.3) downloads, as a coordinate the
+// broker can fetch, and where mvnw looks for it (docs/naeb/adr/0001, "The
+// Maven broker"). Pure text.
+//
+// mvnw reads distributionUrl from .mvn/wrapper/maven-wrapper.properties
+// (key and value split at the first "=", every whitespace character removed
+// from the value) and runs Maven from
+//     $MAVEN_USER_HOME/wrapper/dists/<name>/<hash>
+// when that directory exists: <name> is the URL's file name without its
+// extension and a trailing "-bin" (apache-maven-3.9.16), <hash> is Java's
+// String.hashCode of the URL as written, unsigned, in lower-case hex with
+// no padding. The directory holds the archive's top directory's contents
+// (bin/, boot/, conf/, lib/) and mvnw.url, the URL and a newline.
+
+import std.string
+
+exports(Dist, parse, hash_string, PROPERTIES, GROUP, ARTIFACT)
+
+const PROPERTIES = ".mvn/wrapper/maven-wrapper.properties"
+const GROUP = "org.apache.maven"
+const ARTIFACT = "apache-maven"
+const LAYOUT = "/org/apache/maven/apache-maven/"
+
+struct Dist {
+    url: string        // distributionUrl, as mvnw uses it
+    version: string
+    gav: string        // org.apache.maven:apache-maven:zip:bin:<version>
+    dir: string        // under ~/.m2/wrapper/dists: "apache-maven-<version>/<hash>"
+    sha256: string     // distributionSha256Sum, "" none
+    error: string      // why naeb cannot install it, "" none
+}
+
+// Java's String.hashCode of an ASCII string, as mvnw's hash_string prints
+// it: unsigned 32-bit, lower-case hex, no leading zeros. "" for non-ASCII.
+hash_string(s: string) -> string {
+    h = 0 as long
+    i = 0
+    while i < string.length(s) {
+        c = string.char_at(s, i)
+        if c < 0 || c > 127 { return "" }
+        h = (h * (31 as long) + (c as long)) % (4294967296 as long)
+        i = i + 1
+    }
+    if h == (0 as long) { return "0" }
+    digits = "0123456789abcdef"
+    out = ""
+    while h > (0 as long) {
+        d = (h % (16 as long)) as int
+        out = "${string.substring(digits, d, d + 1)}${out}"
+        h = h / (16 as long)
+    }
+    return out
+}
+
+no_space_(s: string) -> string {
+    out = ""
+    start = 0
+    i = 0
+    while i < string.length(s) {
+        c = string.char_at(s, i)
+        if c == 32 || c == 9 || c == 10 || c == 13 || c == 11 || c == 12 {
+            out = "${out}${string.substring(s, start, i)}"
+            start = i + 1
+        }
+        i = i + 1
+    }
+    return "${out}${string.substring(s, start, string.length(s))}"
+}
+
+version_ok_(v: string) -> int {
+    n = string.length(v)
+    if n == 0 || n > 100 { return 0 }
+    i = 0
+    while i < n {
+        c = string.char_at(v, i)
+        ok = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 46 || c == 45 || c == 95
+        if !ok { return 0 }
+        i = i + 1
+    }
+    if string.starts_with(v, ".") == 1 || string.contains(v, "..") == 1 { return 0 }
+    return 1
+}
+
+// The distribution maven-wrapper.properties' text names; error set when
+// naeb's broker cannot install it (not an only-script wrapper, not an
+// Apache Maven -bin.zip in a Maven repository layout).
+parse(text: string) -> *Dist {
+    d = heap.new(Dist)
+    d.url = ""
+    d.version = ""
+    d.gav = ""
+    d.dir = ""
+    d.sha256 = ""
+    d.error = ""
+    kind = ""
+    lines = string.split(text, "\n")
+    i = 0
+    while i < string.array_size(lines) {
+        l = string.array_get(lines, i)
+        eq = string.index_of(l, "=")
+        if eq > 0 {
+            k = string.substring(l, 0, eq)
+            v = no_space_(string.substring(l, eq + 1, string.length(l)))
+            if k == "distributionUrl" { d.url = string.copy(v) }
+            if k == "distributionSha256Sum" { d.sha256 = string.to_lower(v) }
+            if k == "distributionType" { kind = string.copy(v) }
+        }
+        i = i + 1
+    }
+    string.array_free(lines)
+    if d.url == "" {
+        d.error = "${PROPERTIES} names no distributionUrl"
+        return d
+    }
+    if kind != "only-script" {
+        d.error = "naeb's broker installs the wrapper's Maven for distributionType=only-script only (${PROPERTIES} says '${kind}')"
+        return d
+    }
+    at = string.index_of(d.url, LAYOUT)
+    if (string.starts_with(d.url, "https://") == 0 && string.starts_with(d.url, "http://") == 0) || at < 0 {
+        d.error = "distributionUrl is not Apache Maven in a Maven repository (…${LAYOUT}<version>/apache-maven-<version>-bin.zip): ${d.url}"
+        return d
+    }
+    rest = string.substring(d.url, at + string.length(LAYOUT), string.length(d.url))
+    slash = string.index_of(rest, "/")
+    v = ""
+    if slash > 0 { v = string.substring(rest, 0, slash) }
+    if version_ok_(v) == 0 || string.substring(rest, slash + 1, string.length(rest)) != "apache-maven-${v}-bin.zip" || string.ends_with(v, "-SNAPSHOT") == 1 {
+        d.error = "distributionUrl is not Apache Maven in a Maven repository (…${LAYOUT}<version>/apache-maven-<version>-bin.zip): ${d.url}"
+        return d
+    }
+    h = hash_string(d.url)
+    if h == "" {
+        d.error = "distributionUrl is not ASCII: ${d.url}"
+        return d
+    }
+    d.version = v
+    d.gav = "${GROUP}:${ARTIFACT}:zip:bin:${v}"
+    d.dir = "apache-maven-${v}/${h}"
+    return d
+}
