@@ -1074,6 +1074,21 @@ class StatsTest(unittest.TestCase):
             cli = ['python3', str(ROOT / 'scripts/stats.py'), directory, '--group-by', 'profile']
             self.assertIn('=== profile=codex ===', subprocess.check_output(cli).decode())
 
+    def test_group_by_tuning_header(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = {}
+            for name, metadata in (('old', {}), ('long', dict(tuning=dict(delivery='tool'))),
+                                   ('long2', dict(tuning=dict(delivery='tool'))),
+                                   ('default', dict(tuning=dict(delivery='user'))),
+                                   ('invalid', dict(tuning='long'))):
+                paths[name] = Path(directory) / (name + '.jsonl')
+                synthetic_log(paths[name], [[None]], **metadata)
+            report = stats.summarize(sorted(paths.values()), group_by='tuning')
+            self.assertEqual({key: group['overall']['sessions'] for key, group in report['groups'].items()},
+                             {'delivery=tool': 2, 'delivery=user': 1, 'unknown': 2})
+            cli = ['python3', str(ROOT / 'scripts/stats.py'), directory, '--group-by', 'tuning']
+            self.assertIn('=== tuning=delivery=tool ===', subprocess.check_output(cli).decode())
+
     def test_group_by_header_mixed_versions_systems_patches_and_cli(self):
         write_a = 'tools.write({path: "a", content: "x"})'
         write_b = 'tools.edit({path: "b", old_text: "x", new_text: "y"})'

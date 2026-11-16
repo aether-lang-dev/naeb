@@ -19,6 +19,14 @@ After implementation review and before enabling the patch, `python3 scripts/stat
 
 Measure with `python3 scripts/stats.py --since YYYY-MM-DD --group-by patches` (optionally `--json`). Reuse the conservative write-to-validation classifier, preferring actual tools and `args.command` from complete recordings, otherwise static extraction. Hits require only bash/read with all bash commands validating/checking status. Unclear dynamic/static extraction, compound shell, redirects, and git merge do not hit. Thus this baseline differs from manually counted 316/1757 (about 18%, about 16% of time), including different historical sample scope. Time-share denominator is total candidate-Step duration with `ms`, not model time. Old-log/group differences are signals, not direct causal evidence of patch effects.
 
+## Value tunings
+
+Variants live in `src/session/tuning.zig`; a Profile picks one per tuning, `NIB_TUNE=<tuning>=<variant>[,...]` overrides it for experiments, and the Session log header records the result (`stats.py --group-by tuning`). See [ADR 0026](adr/0026-tuning.md).
+
+| tuning / variant | Model measured | Date | Problem and evidence | Result |
+|---|---|---|---|---|
+| `delivery`: `tool` for DeepSeek, `user` for the rest | deepseek-flash, effort max | 2026-11-13 | 30 Terminal-Bench 2.1 trials. DeepSeek drops all earlier assistant `reasoning_content` whenever a new user message appears (server side; nib sends it). nib inserted every finished background Run/bash/agent result as a `role: "user"` message at the next Step boundary, whether the model was working or waiting: 49 times, in Steps that were under 8% of all Steps but 36–41% of all uncached input tokens, and the model lost its reasoning chain each time (next request e.g. 98k to 64k tokens, almost entirely a cache miss). Raising the auto-background threshold only trades away parallel work: of 196 Steps taken while an auto-backgrounded Run was pending, 126 did real independent work. | Results ride on the next tool message and `tools.wait()` replaces ending the response, so no mid-Turn user message remains. Recheck when the model changes; compare with `stats.py --group-by tuning` ([ADR 0025](adr/0025-model-profiles.md)). |
+
 ## Implementation compromises
 
 | Name | Location | Reason | Removal condition |

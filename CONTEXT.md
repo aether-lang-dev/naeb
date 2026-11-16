@@ -65,7 +65,7 @@ The model family a Session's behavior is tuned for: codex (gpt-*, codex), deepse
 _Avoid_: model config, preset
 
 **Tuning**:
-A named model-specific choice with a small set of variants: a prompt slot's text or a runtime value such as the auto-background threshold. A Profile picks a variant for each tuning; `NIB_TUNE` overrides variants for experiments only. Variants are fixed when a Session starts and recorded in its log header ([ADR 0026](docs/adr/0026-tuning.md)). Prompt patches are one kind of tuning.
+A named model-specific choice with a small set of variants: a prompt slot's text or a runtime value such as how background results and mid-Turn user messages reach the model (`delivery`: `user` or `tool`). A Profile picks a variant for each tuning; `NIB_TUNE` overrides variants for experiments only. Variants are fixed when a Session starts and recorded in its log header ([ADR 0026](docs/adr/0026-tuning.md)). Prompt patches are one kind of tuning.
 _Avoid_: knob, setting, patch (for the general concept)
 
 **Context compaction**:
