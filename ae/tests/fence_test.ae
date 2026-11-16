@@ -195,6 +195,13 @@ main() {
             g2 = jail.landlock_reads(closed)
             spec.assert_eq(has_(g2, "${base}/home/work/proj"), 1, "allowed inside closed")
             spec.assert_eq(has_(g2, "${base}/home/other"), 0, "closed sibling")
+            nested = list.list_new()
+            list.list_add(nested, "-${base}")
+            list.list_add(nested, "-${base}/home")
+            list.list_add(nested, "+${base}/home/work/proj")
+            g3 = jail.landlock_reads(nested)
+            spec.assert_eq(has_(g3, "${base}/home/work/proj"), 1, "an allow inside a closed home inside a closed home")
+            spec.assert_eq(has_(g3, "${base}/home/other"), 0, "still closed")
             fs.remove_tree(base)
         }
         spec.it("the SBPL profile orders reads shallow to deep and confines the network to the proxy") callback {

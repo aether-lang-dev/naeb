@@ -344,14 +344,16 @@ grant_(rs: ptr, path: string, allowed: int, out: ptr) {
         return
     }
     if allowed == 0 {
-        // Only the allow rules nearest below a denied directory matter.
+        // Only the rules nearest below a denied directory matter: an allow
+        // is granted, a nested deny (a fence $HOME inside the account's
+        // home) is entered for the allows below it.
         n = list.list_size(rs)
         i = 0
         while i < n {
             r, _e = list.get_string(rs, i)
             p = rules.path_of(r)
-            if rules.kind_of(r) == rules.ALLOW && p != path && rules.covers(path, p) == 1 && nearest_(rs, path, p) == 1 {
-                grant_(rs, p, 1, out)
+            if p != path && rules.covers(path, p) == 1 && nearest_(rs, path, p) == 1 && (rules.kind_of(r) == rules.ALLOW || rules.allows(rs, p) == 0) {
+                grant_(rs, p, rules.allows(rs, p), out)
             }
             i = i + 1
         }
