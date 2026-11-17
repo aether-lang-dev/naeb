@@ -1080,12 +1080,16 @@ class StatsTest(unittest.TestCase):
             for name, metadata in (('old', {}), ('long', dict(tuning=dict(delivery='tool'))),
                                    ('long2', dict(tuning=dict(delivery='tool'))),
                                    ('default', dict(tuning=dict(delivery='user'))),
+                                   ('none', dict(tuning=dict(delivery='tool', validation='none'))),
+                                   ('single', dict(tuning=dict(delivery='tool', validation='single'))),
                                    ('invalid', dict(tuning='long'))):
                 paths[name] = Path(directory) / (name + '.jsonl')
                 synthetic_log(paths[name], [[None]], **metadata)
             report = stats.summarize(sorted(paths.values()), group_by='tuning')
             self.assertEqual({key: group['overall']['sessions'] for key, group in report['groups'].items()},
-                             {'delivery=tool': 2, 'delivery=user': 1, 'unknown': 2})
+                             {'delivery=tool': 2, 'delivery=user': 1,
+                              'delivery=tool,validation=none': 1, 'delivery=tool,validation=single': 1,
+                              'unknown': 2})
             cli = ['python3', str(ROOT / 'scripts/stats.py'), directory, '--group-by', 'tuning']
             self.assertIn('=== tuning=delivery=tool ===', subprocess.check_output(cli).decode())
 

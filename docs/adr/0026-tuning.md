@@ -53,9 +53,10 @@ tunings until existing measurements no longer need it.
 
 ## Rollout
 
-1. Land the `validation` slot from the current experiment (variants: `single`,
-   today's wording; `existing-only`; `none`) and make the winning variant the DeepSeek
-   default.
+1. Done: the `validation` slot has `single` (the original wording), `existing-only`
+   and `none` variants. DeepSeek defaults to `none` following the maintainer's selection;
+   other families retain `single`. The choice is independent of `delivery` and both
+   are recorded and restored together.
 2. Move the existing patches (`json-escape`, `no-shell-search`,
    `expected-continuation`) into prompt tunings with on/empty variants.
 3. Make `delivery` (`user`, `tool`) the first value tuning; DeepSeek uses `tool`. A raised

@@ -266,6 +266,7 @@ pub const Tools = struct {
     mcp_client: ?*@import("mcp.zig").Client = null,
     depth: u32 = 0,
     delivery_tool: bool = false,
+    validation: @import("session/tuning.zig").Resolved.Validation = .single,
     session_id: ?[]const u8 = null,
     forked: bool = false,
     fork_snapshot: ?@import("tools/agent/input.zig").Fork = null,

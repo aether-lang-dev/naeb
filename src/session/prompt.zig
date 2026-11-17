@@ -82,16 +82,33 @@ pub const system_template =
     \\{s}```
     \\
     \\Writing scripts:
-    \\- Top-level `await` works. Each Step is a full model round trip, usually 10 s or more; one Run can read several files, make all independent edits, then build and test, returning only what you need (such as failures).
+    \\- Top-level `await` works. Each Step is a full model round trip, usually 10 s or more; one Run can {s}
 ++ std.fmt.comptimePrint("\n- Tool calls started without awaiting each one (e.g. Promise.all) run concurrently, up to {d} at a time; commands chained inside one bash call (&&, ;) run one after another.\n", .{sandbox.tool_concurrency}) ++
     \\- Long Runs auto-background while awaiting tools; scripts and captured output stay intact. Background Run/bash/agent results arrive automatically as messages. Continue useful work meanwhile; never check or wait for them with ps, cat/tail logs, sleep, empty Runs or timeout reruns. Do not read their redirected logs before completion. If no independent work remains, end the model response immediately with a brief text reply and no run/tool call (not even console.log); Session waits locally, delivers the result and continues the Turn. After edit/write changes, rerun the same command/cwd directly: older Run bash stops with {{superseded_by}}, not failure. Do not wait for the stale result.
     \\- Default to doing the task yourself. Unless the user requests delegation, delegate only independent read-only investigations that can run in parallel with useful parent work and whose results can be discarded. Keep serial edits, builds, tests and reviews in the main loop. Waiting on a foreground agent is serial; background delegation does not help if you must wait for it to proceed.
     \\- The last expression and console.log output share {s} per Run, truncated by console call and final result with markers; tool results inside JS remain complete. Locate with grep, then read needed line ranges. Large multi-file output can exceed this display budget: batch reads or print only needed snippets.
-    \\- Before full builds/tests, finish implementation, known regression tests, expected results/fixtures and formatting; aim for one full validation. On failure, fix the failures and revalidate. Keep all necessary checks.
+++ "\n{s}" ++
     \\- A run script's syntax or runtime error means the script needs correction. Fix it and continue the task; do not end the Turn just because a script failed.
     \\{s}
     \\When the task is done, answer the user directly without calling the tool.
 ;
+
+const Validation = @import("tuning.zig").Resolved.Validation;
+
+fn validationRunText(variant: Validation) []const u8 {
+    return switch (variant) {
+        .single => "read several files, make all independent edits, then build and test, returning only what you need (such as failures).",
+        .@"existing-only", .none => "read several files and make all independent edits, returning only what you need.",
+    };
+}
+
+fn validationRuleText(variant: Validation) []const u8 {
+    return switch (variant) {
+        .single => "- Before full builds/tests, finish implementation, known regression tests, expected results/fixtures and formatting; aim for one full validation. On failure, fix the failures and revalidate. Keep all necessary checks.\n",
+        .@"existing-only" => "- Run the project's existing tests or checks when they exist. Unless the user asks, do not write new test scripts or install toolchains only to verify your work.\n",
+        .none => "",
+    };
+}
 
 pub fn renderSystem(a: std.mem.Allocator, cwd: []const u8, host: *const tools.Tools, environ: ?*const std.process.Environ.Map) ![]const u8 {
     const docs = try host.documentation(a);
@@ -101,7 +118,7 @@ pub fn renderSystem(a: std.mem.Allocator, cwd: []const u8, host: *const tools.To
     const bytes = if (host.cfg) |cfg| cfg.limits.run_output_bytes else @import("output.zig").max_bytes;
     const budget = if (bytes % 1024 == 0) try std.fmt.allocPrint(a, "{d} KiB", .{bytes / 1024}) else try std.fmt.allocPrint(a, "{d} bytes", .{bytes});
     defer a.free(budget);
-    const rendered = try std.fmt.allocPrint(a, system_template, .{ cwd, docs, budget, lines });
+    const rendered = try std.fmt.allocPrint(a, system_template, .{ cwd, docs, validationRunText(host.validation), budget, validationRuleText(host.validation), lines });
     return if (host.waitEnabled()) toolDelivery(a, rendered) else rendered;
 }
 
@@ -354,4 +371,24 @@ test "tool delivery rewrites every wait-by-ending-the-response sentence" {
     try std.testing.expect(std.mem.indexOf(u8, tool, "Session waits") == null);
     try std.testing.expect(std.mem.indexOf(u8, tool, "reply without tools") == null);
     try std.testing.expect(std.mem.indexOf(u8, tool, "async wait(ids)") != null);
+}
+
+test "validation variants preserve delivery and remove only validation guidance" {
+    const t = std.testing;
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_]bool{ false, true }) |delivery| {
+        var host: tools.Tools = .{ .io = t.io, .home = ".", .cfg = .{ .base_url = "invalid://local", .api_key = "k", .model = "deepseek-flash" }, .delivery_tool = delivery };
+        inline for (std.meta.tags(Validation)) |variant| {
+            host.validation = variant;
+            const system = try renderSystem(a, "/work", &host, null);
+            try t.expectEqual(variant == .single, std.mem.indexOf(u8, system, "then build and test") != null);
+            try t.expectEqual(variant == .single, std.mem.indexOf(u8, system, "known regression tests, expected results/fixtures") != null);
+            try t.expectEqual(variant == .@"existing-only", std.mem.indexOf(u8, system, "do not write new test scripts or install toolchains") != null);
+            try t.expectEqual(delivery, std.mem.indexOf(u8, system, "async wait(ids)") != null);
+            try t.expect(std.mem.indexOf(u8, system, "Fix it and continue the task") != null);
+            try t.expect(std.mem.indexOf(u8, system, "{{validation}}") == null);
+        }
+    }
 }

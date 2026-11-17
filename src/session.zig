@@ -74,6 +74,7 @@ pub const Session = struct {
     fn setTuning(s: *Session, resolved: Tuning) void {
         s.tuning = resolved;
         s.tools.delivery_tool = resolved.delivery == .tool;
+        s.tools.validation = resolved.validation;
     }
 
     /// Thread-safe while a Turn runs; other Session mutation is exclusive.
@@ -1000,6 +1001,8 @@ test "tuning follows the model, NIB_TUNE and the log" {
         var session = try Session.init(t.allocator, t.io, &client, cfg, .{ .home = root, .user_home = root, .environ = &env });
         defer session.deinit();
         try t.expectEqual(Tuning.Delivery.user, session.tuning.delivery);
+        try t.expectEqual(Tuning.Validation.single, session.tools.validation);
+        try t.expect(std.mem.indexOf(u8, session.history.items[0].content.?, "then build and test") != null);
         try t.expect(!session.tools.delivery_tool);
         try t.expect(std.mem.indexOf(u8, session.history.items[0].content.?, "async wait(") == null);
     }
@@ -1010,25 +1013,31 @@ test "tuning follows the model, NIB_TUNE and the log" {
         defer session.deinit();
         id = try a.dupe(u8, session.id);
         try t.expectEqual(Tuning.Delivery.tool, session.tuning.delivery);
+        try t.expectEqual(Tuning.Validation.none, session.tools.validation);
+        try t.expect(std.mem.indexOf(u8, session.history.items[0].content.?, "then build and test") == null);
         try t.expect(session.tools.delivery_tool);
         try t.expect(std.mem.indexOf(u8, session.history.items[0].content.?, "async wait(") != null);
         try t.expect(std.mem.indexOf(u8, session.history.items[0].content.?, "Session waits") == null);
         try session.commit(session.history.items.len, &.{ .{ .role = "user", .content = "hi" }, .{ .role = "assistant", .content = "yo" } }, 10, null);
     }
     {
-        try env.put("NIB_TUNE", "delivery=user");
+        try env.put("NIB_TUNE", "delivery=user,validation=existing-only");
         var session = try Session.init(t.allocator, t.io, &client, cfg, .{ .home = root, .user_home = root, .environ = &env, .resume_id = id });
         defer session.deinit();
         try t.expectEqual(Tuning.Delivery.tool, session.tuning.delivery);
+        try t.expectEqual(Tuning.Validation.none, session.tools.validation);
+        try t.expect(std.mem.indexOf(u8, session.history.items[0].content.?, "then build and test") == null);
         try t.expect(session.tools.delivery_tool);
     }
     {
         var session = try Session.init(t.allocator, t.io, &client, cfg, .{ .home = root, .user_home = root, .environ = &env });
         defer session.deinit();
         try t.expectEqual(Tuning.Delivery.user, session.tuning.delivery);
+        try t.expectEqual(Tuning.Validation.@"existing-only", session.tools.validation);
+        try t.expect(std.mem.indexOf(u8, session.history.items[0].content.?, "do not write new test scripts") != null);
         const path = try std.fmt.allocPrint(a, "{s}/sessions/{s}.jsonl", .{ root, session.id });
         const data = try std.Io.Dir.cwd().readFileAlloc(t.io, path, a, .unlimited);
-        try t.expect(std.mem.indexOf(u8, data, "\"tuning\":{\"delivery\":\"user\"}") != null);
+        try t.expect(std.mem.indexOf(u8, data, "\"tuning\":{\"delivery\":\"user\",\"validation\":\"existing-only\"}") != null);
     }
     try env.put("NIB_TUNE", "delivery=nope");
     try t.expectError(error.InvalidTuning, Session.init(t.allocator, t.io, &client, cfg, .{ .home = root, .user_home = root, .environ = &env }));
