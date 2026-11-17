@@ -182,4 +182,12 @@ stats `bash_superseded` counts selected superseded events, text “Bash superses
 
 Custom headers combine `provider:"custom"` and `custom_provider`; cross-custom-id resume rejects. Optional usage `prompt_cache_write_tokens` defaults zero, already included in prompt totals. stats accumulates cache writes where present.
 
+Local `source` records carry `{step, run, code, base?, arguments, failed}` for Run
+source resolution. They do not replace history or contribute Steps. A start record
+has `failed:false`; only a completed script failure becomes eligible, and its Run
+must also appear in committed history. Terminal records preserve full executed
+source, including resolved `rerun` edits, without rewriting the original tool call.
+Tool messages for `rerun` may carry local `executed_source` for the Script view;
+provider encoders omit it.
+
 `tool_summary.failures` counts failed retained dispatched calls; use it together with `omitted`. Older summaries omit it; the TUI retains Result and Script when failure status is unknown, including caught tool errors.
