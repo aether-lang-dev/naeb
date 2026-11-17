@@ -13,6 +13,8 @@
 
 No XDG configuration/data reads, old-file searches, or automatic migration. Users move retained instructions/Sessions themselves. `NIB_HOME` does not change the Codex CLI login nib may import: `$CODEX_HOME/auth.json`, default ~/.codex/auth.json.
 
+`stats.sqlite3` is an optional metrics index created only by `scripts/stats_db.py`; see [SQLite metrics index](stats-sqlite.md).
+
 ## `auth.json`
 
 Written by `/provider`, `nib login` and the ChatGPT refresh; mode 0600, replaced atomically (temporary file + rename). Never edit it while nib runs. Shape: `{"keys": {"<service id>": "<key>"}, "tokens": {id_token, access_token, refresh_token, account_id}, "last_refresh": "<RFC 3339>"}`; unknown fields are kept. Key precedence, highest first: the service's environment variable, then `auth.json`, then (Codex only) `$CODEX_HOME/auth.json`, used in place and never copied; nib's own Codex `tokens` outrank the CLI file. Keys are never printed in the TUI, logs, errors, or `/status` (which names only the source), never written to config.toml, and `read`/`edit`/`write` and bash refuse this file. Sign out with `/provider logout <service>` or `nib logout <service>`; it removes only nib's own entry.
