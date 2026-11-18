@@ -217,16 +217,14 @@ store(dir: string, name: string, data: string) -> (string, string) {
     if herr != "" { return "", "Unexpected" }
     file = "${string.substring(hex, 0, 32)}.${extension(fmt)}"
     path = atomic_file.join(dir, file)
-    mkerr = fs.create_dir_with_mode(dir, 448)
-    if mkerr != "" {
-        _d, dk, _dm = fs.stat(dir, 1)
-        if dk == fs.KIND_NOT_FOUND {
-            merr = fs.mkdir_p(dir)
-            if string.length(merr) > 0 { return "", "AccessDenied" }
-            fs.chmod(dir, 448)
-        } else if dk != fs.KIND_OK {
-            return "", fserr.errname(dk)
-        }
+    // Already there is fine; a missing parent is made; anything else is why.
+    _mok, mkind, _mmsg = fs.create_dir_with_mode(dir, 448)
+    if mkind == fs.KIND_NOT_FOUND {
+        merr = fs.mkdir_p(dir)
+        if string.length(merr) > 0 { return "", "AccessDenied" }
+        fs.chmod(dir, 448)
+    } else if mkind != fs.KIND_OK && mkind != fs.KIND_EXISTS {
+        return "", fserr.errname(mkind)
     }
     st, sk, _sm = fs.stat(path, 1)
     present = 0

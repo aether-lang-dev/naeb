@@ -1,15 +1,9 @@
 // fserr: upstream's Zig error names ("FileNotFound", "AccessDenied", ...),
-// which the tools return as data, for a failed std.fs call. Call errname
-// right after the failing call: a KIND_IO failure is told apart by the raw
-// errno fs.last_os_error() keeps for the thread.
+// which the tools return as data, for a failed std.fs call's KIND_*.
 
 import std.fs
 
 exports(errname)
-
-const EBUSY = 16
-const EFBIG = 27
-const EROFS = 30
 
 errname(kind: int) -> string {
     if kind == fs.KIND_NOT_FOUND { return "FileNotFound" }
@@ -22,11 +16,8 @@ errname(kind: int) -> string {
     if kind == fs.KIND_NO_SPACE { return "NoSpaceLeft" }
     if kind == fs.KIND_CROSS_DEVICE { return "RenameAcrossMountPoints" }
     if kind == fs.KIND_INVALID { return "InvalidArgument" }
-    if kind == fs.KIND_IO {
-        e = fs.last_os_error()
-        if e == EROFS { return "ReadOnlyFileSystem" }
-        if e == EBUSY { return "DeviceBusy" }
-        if e == EFBIG { return "FileTooBig" }
-    }
+    if kind == fs.KIND_READ_ONLY_FS { return "ReadOnlyFileSystem" }
+    if kind == fs.KIND_BUSY { return "DeviceBusy" }
+    if kind == fs.KIND_FILE_TOO_BIG { return "FileTooBig" }
     return "Unexpected"
 }

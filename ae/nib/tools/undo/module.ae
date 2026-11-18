@@ -503,15 +503,6 @@ size_of_(fd: int) -> long {
     return n
 }
 
-// Why unlink(path) failed, named as upstream names it: fs.unlink reports no
-// errno, so the path says what it can.
-unlink_failure_(path: string) -> string {
-    st, k, _m = fs.stat(path, 0)
-    if k != fs.KIND_OK { return fserr.errname(k) }
-    if st.kind == fs.STAT_KIND_DIR { return "IsDir" }
-    return "AccessDenied"
-}
-
 // 1 when the file is not exactly what nib last wrote.
 conflicted_(e: *Entry) -> int {
     if e.pending != 0 || e.tainted != 0 { return 1 }
@@ -612,10 +603,10 @@ undo(hp: ptr, nib_home: string, seen: ptr, reg: ptr) -> string {
             }
             file_state.remember_stat(seen, ent.path, rst)
         } else {
-            uerr = fs.unlink(ent.path)
+            _uok, ukind, uerr = fs.unlink(ent.path)
             if uerr != "" {
                 release_items_(items)
-                return "${report}\nfailed: ${ent.path}: ${unlink_failure_(ent.path)} (retry /undo)"
+                return "${report}\nfailed: ${ent.path}: ${fserr.errname(ukind)} (retry /undo)"
             }
         }
         ent.undone = 1
