@@ -33,7 +33,12 @@
 # 0.916.0 (2026-11-14): contrib.quickjs gains eval_async, a host deadline with
 # cancel and stop cells, promise_state/promise_result and a to_string that
 # returns (string, error); quickjs-ng 0.18.0. nib.qjsgap is deleted.
-AE_PIN=0.916.0
+# 0.923.0 (2026-11-18): fs.unlink and fs.create_dir_with_mode return
+# (ok, kind, msg), and std.fs has KIND_READ_ONLY_FS, KIND_BUSY and
+# KIND_FILE_TOO_BIG (aether #3728); /undo's stat guess and fserr's POSIX errno
+# numbers are gone. Verified: aeb .tests.ae 89/89 on macOS arm64 with the
+# installed release.
+AE_PIN=0.923.0
 
 # v0.344 (2026-11-12): aether.program and aether.program_test with lib().
 # v0.347 (2026-11-15): `aeb .tests.ae` refuses an unclosed or nested builder
