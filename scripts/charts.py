@@ -114,10 +114,15 @@ def main():
         dict(row, ten_rss_mb=nib_ten_rss_mb) if row["name"] == "nib" else row
         for row in data["footprint"]
     ]
+    prompt = [
+        dict(row, short="nib (shared)", prompt_tokens=data["current_nib"]["shared_prompt_tokens"])
+        if row["name"] == "nib" else row
+        for row in data["footprint"]
+    ]
     for theme, palette in PALETTES.items():
         charts = {
             "memory": bars(memory, "ten_rss_mb", "MB", *palette),
-            "prompt": bars(data["footprint"], "prompt_tokens", "tokens", *palette),
+            "prompt": bars(prompt, "prompt_tokens", "tokens", *palette),
             "cost": costs(data["comparison"]["task_cost_usd"], *palette),
             "versus": versus(data["comparison"], *palette),
         }
