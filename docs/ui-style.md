@@ -24,6 +24,8 @@ Changes line: the left side of the Turn footer after a successful Turn with dire
 
 Title line: an empty transcript shows dim `<project> · <branch> · <model> · <effort>` at its top-left (`nibcode · main · deepseek-flash · high`); the branch part is omitted without git, the effort part when the server picks it. Signed out shows `No provider · /provider to sign in` instead.
 
+When the selected Codex model is configured to request Fast mode, append `· Fast` to the empty-transcript title and new-Session notices. In Normal mode, show `Fast` in the right-aligned bottom-border metadata beside the model and context; keep the Fast label if only it fits. These labels describe the local setting, not a server-confirmed tier.
+
 Open command (only with `open` configured): paths that resolve to project files look like normal text and are underlined while hovered. A failed start shows the dim notice `Could not run <program>`.
 
 Hooks: successful commands are silent. After-edit failure adds one warning-colored line in the Run block: `hook <command> · exit <code>`. Turn-end failure adds a dim notice: `hook turn_end · exit <code>`. `/status` adds `Hooks: after_edit <count> · turn_end <count>` only when any hooks are configured.

@@ -494,6 +494,47 @@ test "empty screen has one guidance line and no zero statistics" {
     try testing.expect(std.mem.indexOf(u8, image, "0%") == null);
 }
 
+test "Fast appears on the input border only in Normal mode" {
+    const a = testing.allocator;
+    for ([_]u16{ 11, 60, 120, 160 }) |width| {
+        var screen = try vaxis.Screen.init(a, .{ .cols = width, .rows = 12, .x_pixel = 0, .y_pixel = 0 });
+        defer screen.deinit(a);
+        const win: vaxis.Window = .{ .x_off = 0, .y_off = 0, .parent_x_off = 0, .parent_y_off = 0, .width = width, .height = 12, .screen = &screen };
+        var input: Editor = .{};
+        defer input.deinit(a);
+        var scroll: Viewport = .{};
+        var text: status.Text = .{};
+        var cfg = mock_cfg;
+        cfg.provider = .codex;
+        cfg.model = "gpt-6.1-sol";
+        cfg.codex_fast = true;
+        for ([_]bool{ false, true }) |simple| {
+            cfg.simple = simple;
+            draw(win, &.{}, &input, &scroll, &.{}, 0, .{ .cfg = cfg, .context = cfg.context_window }, &text);
+            const image = try snapshot(a, &screen);
+            defer a.free(image);
+            if (simple) {
+                const bottom_start = std.mem.lastIndexOfScalar(u8, image[0 .. image.len - 1], '\n').? + 1;
+                const bottom = image[bottom_start..];
+                try testing.expect(std.mem.indexOf(u8, bottom, "Fast") == null);
+                if (width >= 60) try testing.expect(std.mem.indexOf(u8, image, " context 100% ╮") != null);
+            } else {
+                const meta = if (width == 11) " Fast ──╯\n" else " gpt-6.1-sol · Fast · context 100% ──╯\n";
+                try testing.expect(std.mem.endsWith(u8, image, meta));
+            }
+        }
+        cfg.simple = false;
+        for ([_]bool{ false, true }) |signed_out| {
+            if (!signed_out) cfg.provider = .openai;
+            draw(win, &.{}, &input, &scroll, &.{}, 0, .{ .cfg = cfg, .signed_out = signed_out }, &text);
+            const image = try snapshot(a, &screen);
+            defer a.free(image);
+            try testing.expect(std.mem.indexOf(u8, image, "Fast") == null);
+            cfg.provider = .codex;
+        }
+    }
+}
+
 test "model menu shows distinct model names and current marker at common widths" {
     const a = testing.allocator;
     for ([_]u16{ 60, 120, 160 }) |width| {
