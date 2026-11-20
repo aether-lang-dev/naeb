@@ -38,7 +38,13 @@
 # KIND_FILE_TOO_BIG (aether #3728); /undo's stat guess and fserr's POSIX errno
 # numbers are gone. Verified: aeb .tests.ae 89/89 on macOS arm64 with the
 # installed release.
-AE_PIN=0.923.0
+# 0.931.0 (2026-11-20): a tracking-only bump, no new primitive needed and no
+# source change. Verified: aeb .tests.ae on macOS arm64 (88 of 89; the red-team
+# script's sockets need a checkout path under about 70 characters, and it passed
+# 200 checks from a short path) and on ae-x64 (88 of 89 the same way; passed from
+# a short path; ae/tests/llm_test.ae failed once under heavy load and passes alone).
+# No provider traffic: mocks and fixtures only.
+AE_PIN=0.931.0
 
 # v0.344 (2026-11-12): aether.program and aether.program_test with lib().
 # v0.347 (2026-11-15): `aeb .tests.ae` refuses an unclosed or nested builder
