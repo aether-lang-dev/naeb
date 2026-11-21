@@ -44,7 +44,10 @@
 # 200 checks from a short path) and on ae-x64 (88 of 89 the same way; passed from
 # a short path; ae/tests/llm_test.ae failed once under heavy load and passes alone).
 # No provider traffic: mocks and fixtures only.
-AE_PIN=0.931.0
+# 0.933.0 (2026-11-21): a tracking-only bump, no new primitive needed and no source
+# change. Verified: aeb .tests.ae 89 of 89 on macOS arm64 from a short checkout
+# path (34 characters), mocks and fixtures only, no provider traffic.
+AE_PIN=0.933.0
 
 # v0.344 (2026-11-12): aether.program and aether.program_test with lib().
 # v0.347 (2026-11-15): `aeb .tests.ae` refuses an unclosed or nested builder
