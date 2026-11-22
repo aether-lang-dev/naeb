@@ -5,7 +5,7 @@ still owes upstream is in [PORT_STATUS.md](PORT_STATUS.md).
 
 ## The project fence: what is left (docs/naeb/adr/0001)
 
-Landed 2026-11-15: `nib.fence`, in-process checks, the egress proxy, Linux
+Landed 2026-11-15: `naeb.fence`, in-process checks, the egress proxy, Linux
 namespace + Landlock + seccomp and macOS SBPL confinement of bash, hooks and
 MCP stdio, Maven/Gradle/npm templates, `ae/tests/redteam/`; then one `naeb`
 binary loading the project's `naeb.ae` as a policy library built by
@@ -42,7 +42,7 @@ Session, grouped suggestions, the approval in the Session log).
 ## Dependency brokers (experimental; docs/naeb/adr/0001, "The Maven broker")
 
 Landed 2026-11-15, experimental: the Maven broker (`policy.maven_broker`,
-`tools.maven_fetch`, naeb's own resolver in `ae/nib/maven/`, the TUI's y/N
+`tools.maven_fetch`, naeb's own resolver in `ae/naeb/maven/`, the TUI's y/N
 for a too-young version). Landed 2026-11-16, after Paul's petclinic run was
 offered `allow_write ~/.m2`: no line for a forbidden path, single or grouped
 (a note says why); `policy.maven_broker(p)` offered for a Maven project's

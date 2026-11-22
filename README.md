@@ -1,41 +1,77 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
-    <img src="docs/assets/logo-light.svg" alt="nib" width="96">
+    <img src="docs/assets/logo-light.svg" alt="naeb" width="96">
   </picture>
 </p>
 
 <h1 align="center">naeb</h1>
 
-<p align="center">nib, ported to <a href="https://github.com/aether-lang-dev/aether">Aether</a></p>
+<p align="center">A port of nib-code to <a href="https://github.com/aether-lang-dev/aether">Aether</a></p>
 
-A small, focused, quiet coding agent. naeb is the Aether port of
-[nib](https://github.com/yyydddkkk/nib-code) (Zig, MIT, © jackyyy): the same
-agent, feature for feature, built from Aether instead of Zig. It builds two
-commands: `nib`, upstream's behaviour, and `naeb`, the same agent inside a
-project fence (below).
+**naeb is a port to the Aether language of
+[nib-code](https://github.com/yyydddkkk/nib-code), the coding agent written in
+Zig by jackyyy (GitHub: [yyydddkkk](https://github.com/yyydddkkk)).**
 
-nib works in Runs: the model writes one JavaScript script that reads, edits
-and checks your project in a single step. In naeb that script runs on
-QuickJS embedded through Aether's `contrib.quickjs`.
+## Credit
 
-This branch, `aether-port`, is the port. `main` mirrors upstream nib and is
-never committed to; the port tracks it. Which upstream file each Aether module
-ports, and through which upstream commit, is in
-[PORT_STATUS.md](PORT_STATUS.md).
+The agent is jackyyy's. nib-code is a small, focused, quiet coding agent
+that works in Runs: the model is given a single tool, `run(code)`, writes one
+JavaScript script that reads, edits and checks your project in a single step,
+and sees the result. That design, the single `run(code)` tool, the prompts,
+the session and log formats, the TUI, the test suite and mock providers, the
+documentation under `docs/` and the original Zig implementation are all
+theirs. naeb exists to run that same agent on Aether; it adds a port and a
+project fence, and it does not replace or improve on the design. If you want
+the original, go to
+[yyydddkkk/nib-code](https://github.com/yyydddkkk/nib-code) (command name
+`nib`, MIT). Upstream's own README, with its benchmark numbers, is
+[there](https://github.com/yyydddkkk/nib-code#readme).
 
-## Differences from upstream nib
+## A divergent fork
 
+This repository is a fork of nib-code that has diverged on purpose, and the
+port is renamed to match.
+
+- **Branches.** `main` mirrors upstream's `main` and is never committed to.
+  `aether-port` (the default branch) is the port; everything described here
+  is on it. The Zig sources (`src/`, `build.zig`), upstream's Python end-to-end
+  tests and mock providers (`tests/`) and upstream's docs are kept as upstream
+  wrote them, so that upstream's changes merge in cleanly and the port can be
+  checked against them. The Aether sources are under `ae/`. Which upstream
+  file each Aether module ports, and through which upstream commit, is in
+  [PORT_STATUS.md](PORT_STATUS.md).
+- **Aether instead of Zig.** The agent is built from Aether, compiled to C,
+  with the agent's Run scripts on QuickJS embedded through Aether's
+  `contrib.quickjs`.
+- **Two commands.** `naeb` runs the agent inside a project fence against
+  supply-chain attacks (below), which upstream does not have. `naeb-unfenced`
+  is the same agent with no fence, behaving as upstream's `nib` does; it is
+  what upstream's own tests are run against.
 - **API keys only.** OpenAI, Anthropic, DeepSeek, Grok (xAI) and your own
   Responses or Chat Completions endpoint. The Codex subscription sign-in, its
   WebSocket protocol and the Codex backend are not ported, by choice.
-- **No self-updater.** `nib update` is not ported (it downloads upstream's
+- **No self-updater.** `update` is not ported (it downloads upstream's
   releases). Update with `git pull` and a rebuild.
-- **No prebuilt binary yet.** Build from source, below. Release binaries may
-  come later.
+- **No prebuilt binary yet.** Build from source, below.
 - **Benchmarks.** Upstream's speed, cost and memory numbers were measured on
-  its Zig build and are not claimed for naeb. See
-  [upstream's README](https://github.com/yyydddkkk/nib-code#readme).
+  its Zig build and are not claimed for naeb.
+- **Behind upstream.** The port is current with upstream through the commits
+  listed in [PORT_STATUS.md](PORT_STATUS.md), which is behind upstream's
+  latest release.
+- **Names.** Everything the port names itself is `naeb`: the commands, the
+  `NAEB_*` environment variables (upstream's `NIB_*`), `~/.naeb` (upstream's
+  `~/.naeb`), `.naeb/skills` in a project, and the Aether modules under
+  `ae/naeb/`. Upstream's documents under `docs/` still say `nib` and `NIB_*`;
+  read them with that substitution. The one deliberate exception is the field
+  `nib_version` in the Session log header, kept as upstream writes it so that
+  upstream's `scripts/stats.py` reads naeb's logs.
+
+## Licence
+
+MIT, as upstream's. [LICENSE](LICENSE) is upstream's licence text with its
+copyright line, "Copyright (c) 2026 jackyyy", unaltered, and the port's
+changes are under the same licence.
 
 ## Set up
 
@@ -65,17 +101,17 @@ on Linux) and OpenSSL 3 or later:
 ### 2. Build
 
 ```sh
-git clone -b aether-port https://github.com/paul-hammant/naeb-code.git naeb
+git clone -b aether-port https://github.com/aether-lang-dev/naeb.git naeb
 cd naeb
-aeb .build.ae          # builds target/build/bin/nib and target/build/bin/naeb
+aeb .build.ae          # builds target/build/bin/naeb and target/build/bin/naeb-unfenced
 ```
 
 ### 3. Install
 
 ```sh
-install -m 755 target/build/bin/nib ~/.local/bin/nib
 install -m 755 target/build/bin/naeb ~/.local/bin/naeb
-nib --version          # nib 0.13.0-ae
+install -m 755 target/build/bin/naeb-unfenced ~/.local/bin/naeb-unfenced
+naeb --version         # naeb 0.13.0-ae
 ```
 
 To update, run `git pull`, then `aeb .build.ae`, then the `install` lines
@@ -87,14 +123,14 @@ checkout: `naeb build` compiles policies against its `ae/policy_lib`
 
 ```sh
 cd your-project
-nib                          # interactive
-nib ask 'explain the entry points'
-nib -c                       # continue the last session here
+naeb                          # interactive
+naeb ask 'explain the entry points'
+naeb -c                       # continue the last session here
 ```
 
-On first run, start `nib` and use `/provider` to choose a service and paste
-its API key. The key is entered masked and stored in `~/.nib/auth.json` with
-mode 0600. `nib login <service>` does the same from the shell. `/model` picks
+On first run, start `naeb` and use `/provider` to choose a service and paste
+its API key. The key is entered masked and stored in `~/.naeb/auth.json` with
+mode 0600. `naeb login <service>` does the same from the shell. `/model` picks
 a model. Your own endpoint: [providers](docs/providers.md).
 
 - **Keys:** Enter sends, Shift+Enter adds a line, Esc cancels. `@` completes
@@ -106,7 +142,7 @@ a model. Your own endpoint: [providers](docs/providers.md).
 - **Hooks:** optional sandboxed `after_edit` and `turn_end` commands, see
   [hooks](docs/config.md#hooks).
 - **Conventions:** project ones go in `AGENTS.md`, personal ones in
-  `~/.nib/AGENTS.md`.
+  `~/.naeb/AGENTS.md`.
 
 ## Fenced: naeb
 
@@ -213,8 +249,8 @@ Every fetch and refusal is in the Session log (`maven_fetch`) and in
 
 ```text
   Run · edit 2 files · bash
-    ae/nib/grep/module.ae +38 −9 · ae/nib/tools/module.ae +2 −1
-    read ae/nib/grep/module.ae · read ae/nib/tools/module.ae · grep ae
+    ae/naeb/grep/module.ae +38 −9 · ae/naeb/tools/module.ae +2 −1
+    read ae/naeb/grep/module.ae · read ae/naeb/tools/module.ae · grep ae
     └─ b1 bash aeb .tests.ae · 4s · completed ✓ exit 0
 
   1 Run · 2 steps · 41s · 6.6k tokens
@@ -225,15 +261,15 @@ Click a Run to see its diff, result and script; Ctrl+O opens the latest one.
 
 ## Safety
 
-nib runs model-written code with your permissions, as you would yourself.
+naeb runs model-written code with your permissions, as you would yourself.
 - **bash** refuses obviously destructive commands.
 - **Workspace mode:** `[sandbox] mode = "workspace"` limits writes to the
   project, temp dirs and build caches. It uses Landlock on Linux (kernel 5.19
   or later, Landlock ABI 2; on older kernels bash runs unsandboxed, as
   upstream's does) and `sandbox-exec` on macOS.
 - **Commit before you start.**
-- **Logs:** sessions and tool results are logged locally in `~/.nib/sessions`
-  (mode 0600). `NIB_RECORD=off` stops tool recording.
+- **Logs:** sessions and tool results are logged locally in `~/.naeb/sessions`
+  (mode 0600). `NAEB_RECORD=off` stops tool recording.
 
 ## Develop
 

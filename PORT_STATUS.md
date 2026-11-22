@@ -1,4 +1,4 @@
-# The Aether port of nib
+# naeb: the Aether port of nib-code
 
 This branch (`aether-port`) ports [yyydddkkk/nib-code](https://github.com/yyydddkkk/nib-code)
 (Zig, MIT, © jackyyy) to [Aether](https://github.com/aether-lang-dev/aether).
@@ -26,17 +26,17 @@ untouched so `main` merges in cleanly:
 
 ```
 ae/main.ae               the binary's entry (name set once, in .build.ae's output())
-ae/nib/<concept>/        one module per upstream file or concept, imported as nib.<concept>
-                         (the nib. prefix keeps them clear of std and aeb module names,
+ae/naeb/<concept>/        one module per upstream file or concept, imported as naeb.<concept>
+                         (the naeb. prefix keeps them clear of std and aeb module names,
                          e.g. aeb's own `sandbox` SDK)
-ae/nib/sandbox/          src/sandbox.zig, scheduler, native, timer -> module.ae;
+ae/naeb/sandbox/          src/sandbox.zig, scheduler, native, timer -> module.ae;
                          console.zig, timing.zig -> sandbox/console, sandbox/timing
-ae/nib/tools/            src/tools.zig and src/tools/*: one service module per tool family
+ae/naeb/tools/            src/tools.zig and src/tools/*: one service module per tool family
 ae/term/                 the TUI's terminal layer (another slice)
 ae/tests/<name>_test.ae  std.spec suites; upstream's inline Zig tests ported by name
 tools/                   port maintenance scripts (upstream-diff.sh, check_layers.sh)
 asks/                    what the port needs from Aether, written up for upstream
-.build.ae, .tests.ae     aeb: `aeb .build.ae` builds target/build/bin/nib, `aeb .tests.ae` runs the suites
+.build.ae, .tests.ae     aeb: `aeb .build.ae` builds target/build/bin/naeb-unfenced, `aeb .tests.ae` runs the suites
 pins                     AE_PIN / AEB_REF the port is verified against
 ```
 
@@ -63,88 +63,88 @@ pins                     AE_PIN / AEB_REF the port is verified against
 
 | Upstream | Lines | Aether | Ported through | Notes |
 |---|---|---|---|---|
-| `src/sandbox.zig` | 799 | `ae/nib/sandbox/module.ae` | a2dd439 | eval, Limits, prelude, syntax context; Host.record (settle at delivery, eval_end), Host.virtual |
-| `src/sandbox/scheduler.zig` | 296 | `ae/nib/sandbox/module.ae` | a2dd439 | virtual selection in jobs_; concurrency 8, completion order, timers, drain, stopped calls; Host.poll's role is a 20 ms Session ticker (session) |
-| `src/sandbox/native.zig` | 163 | `ae/nib/sandbox/module.ae` | a2dd439 | __log/__host as contrib.quickjs host functions with a `hide` veto line; installVirtual (__replayEpoch/Time/Random, "replay diverged"); the virtual stop interrupts JS through contrib.quickjs's stop cell |
-| `src/sandbox/timer.zig` | 18 | `ae/nib/sandbox/module.ae` | a2dd439 |  |
-| `src/sandbox/console.zig` | 181 | `ae/nib/sandbox/console/module.ae` | a2dd439 |  |
-| `src/sandbox/timing.zig` | 168 | `ae/nib/sandbox/timing/module.ae` | a2dd439 | Execution epoch times live on process.Result |
+| `src/sandbox.zig` | 799 | `ae/naeb/sandbox/module.ae` | a2dd439 | eval, Limits, prelude, syntax context; Host.record (settle at delivery, eval_end), Host.virtual |
+| `src/sandbox/scheduler.zig` | 296 | `ae/naeb/sandbox/module.ae` | a2dd439 | virtual selection in jobs_; concurrency 8, completion order, timers, drain, stopped calls; Host.poll's role is a 20 ms Session ticker (session) |
+| `src/sandbox/native.zig` | 163 | `ae/naeb/sandbox/module.ae` | a2dd439 | __log/__host as contrib.quickjs host functions with a `hide` veto line; installVirtual (__replayEpoch/Time/Random, "replay diverged"); the virtual stop interrupts JS through contrib.quickjs's stop cell |
+| `src/sandbox/timer.zig` | 18 | `ae/naeb/sandbox/module.ae` | a2dd439 |  |
+| `src/sandbox/console.zig` | 181 | `ae/naeb/sandbox/console/module.ae` | a2dd439 |  |
+| `src/sandbox/timing.zig` | 168 | `ae/naeb/sandbox/timing/module.ae` | a2dd439 | Execution epoch times live on process.Result |
 | `src/sandbox/timer_test.zig` | 237 | `ae/tests/timer_test.ae` | a2dd439 |  |
-| `src/sandbox/record.zig` | 510 | `ae/nib/sandbox/record/module.ae` | a2dd439 | file via std.fs (flock, pwrite, ftruncate, fsync); dedup keys are sha256 hex |
-| `src/sandbox/replay.zig` | 303 | `ae/nib/sandbox/replay/module.ae` | a2dd439 | Virtual.stopped is a std.sync cell, not a callback |
-| `src/sandbox/virtual.zig` | 19 | `ae/nib/sandbox/module.ae` (VIRTUAL_PRELUDE) | a2dd439 |  |
-| `src/tools.zig` | 813 | `ae/nib/tools/module.ae` | a2dd439 | table verbatim; only ported tools enter a Run's API; RunScope replaces the threadlocal; docs fill {{llm_limits}}/{{llm_options}}; search options wait for web search |
-| `src/tools/files.zig` | 587 | `ae/nib/tools/files/module.ae` | a2dd439 | undo snapshots in edit/write |
-| `src/tools/atomic_file.zig` | 243 | `ae/nib/tools/atomic_file/module.ae` | a2dd439 | on std.fs (stat, O_EXCL create, fchmod, fsync, move) |
-| `src/tools/file_state.zig` | 247 | `ae/nib/tools/file_state/module.ae` | a2dd439 | flock path locks on std.fs |
-| `src/tools/changes.zig` | 253 | `ae/nib/tools/changes/module.ae` | a2dd439 | Tracker per Run scope; Recovery |
-| `src/tools/diff.zig` | 195 | `ae/nib/tools/diff/module.ae` | a2dd439 |  |
-| `src/tools/search.zig` | 173 | `ae/nib/tools/search/module.ae` | a2dd439 |  |
-| `src/tools/grep.zig` | 509 | `ae/nib/tools/grep/module.ae` | a2dd439 | one scanning thread (upstream 8); JS RegExp in a private QuickJS runtime; a running regex is bounded at 10 s, not interruptible by cancel |
-| `src/tools/regex.zig` | 106 | `ae/nib/tools/grep/module.ae` | a2dd439 | libregexp via JS RegExp |
-| `src/tools/walk.zig` | 385 | `ae/nib/tools/walk/module.ae` | a2dd439 |  |
-| `src/tools/policy.zig` | 698 | `ae/nib/tools/policy/module.ae` | a2dd439 | rule for rule, same texts |
-| `src/tools/secrets.zig` | 16 | `ae/nib/tools/secrets/module.ae` | a2dd439 |  |
-| `src/tools/process.zig` | 358 | `ae/nib/tools/process/module.ae` | a2dd439 | output to a file, not a pipe; a 20 ms tick with the output byte count (progress); run_lines (a child nib: stdin input, stdout lines, TERM then KILL after a grace) through os.run_stdio, its stderr discarded; open_stdio for MCP; a signal reads as 128+n |
-| `src/tools/bash.zig` | 433 | `ae/nib/tools/bash/module.ae` | a2dd439 | progress Tracker; ids reserved at start, snapshot after 3 s |
-| `src/tools/bash/registry.zig` | 146 | `ae/nib/tools/registry/module.ae` | a2dd439 | supersession; started/superseded/finished log records |
-| `src/tools/bash/jail.zig` | 304 | `ae/nib/tools/jail/module.ae` | a2dd439 | Landlock in jail/landlock.c (stand-in); probe cached per Tools, not per process |
-| `src/tools/background.zig` | 866 | `ae/nib/tools/background/module.ae` | a2dd439 | bash, agents (start_agent, completion without usage, invocation-matched delivery) and adopted Runs (adopt_run, take_done_runs, enqueue_run with the run completion); typed inbox, started record, lost on resume, detached across Turns; a Run cannot stop itself |
-| `src/tools/stop.zig` | 29 | `ae/nib/tools/module.ae`, `ae/nib/tui/live/module.ae` | a2dd439 | userStop is the TUI port's `user_stop_`; a stop requested during a Turn runs on a worker, not in Tools.poll |
-| `src/tools/undo.zig` | 606 | `ae/nib/tools/undo/module.ae` | a2dd439 | Session wires begin/finish/undo; off for `nib ask` as upstream; /undo itself is the TUI's |
-| `src/tools/view.zig` | 92 | `ae/nib/tools/view/module.ae` | a2dd439 | credential-path refusal as read; the Run's images in `RunScope.images` (`nib.image` Attached, 4 per Run, none from background Runs) |
-| `src/tools/progress.zig` | 249 | `ae/nib/tools/progress/module.ae` | a2dd439 |  |
-| `src/tools/web.zig` | 161 | `ae/nib/tools/web/module.ae` | a2dd439 | std.http.client on a worker, caller watches cancel/deadline; no response decompression (no accept-encoding is sent) and no environment proxy |
-| `src/tools/html.zig` | 504 | `ae/nib/tools/html/module.ae` | a2dd439 | byte-identical to upstream on 310 differential inputs; a stale link offset leaves output alone where upstream would trap |
-| `src/tools/web_search.zig` | 404 | `ae/nib/tools/web_search/module.ae` | a2dd439 | openai, anthropic, deepseek routes; no Codex (policy); transport errors carry std.http.client's text |
-| `src/tools/llm.zig` | 246 | `ae/nib/tools/llm_call/module.ae` | a2dd439 | the gate is per Tools; subagent usage joins through the same cell |
-| `src/tools/agent.zig` | 497 | `ae/nib/tools/agent/module.ae` | a2dd439 | a Ctx per call from the Tools (no threadlocal); the child is `self_exe ask --json --agent-input [--resume] -` via process.run_lines; background calls return status 2 and the tools module starts the job |
-| `src/tools/agent/input.zig` | 90 | `ae/nib/tools/agent_input/module.ae` | a2dd439 | renamed (basenames); the Config's JSON spelling is the port's own (both ends are this binary); also the header's mcp_servers JSON |
-| `src/tools/agent/sessions.zig` | 119 | `ae/nib/tools/agent_sessions/module.ae` | a2dd439 | renamed |
-| `src/tools/mcp.zig` | 101 | `ae/nib/tools/mcp_tool/module.ae` | a2dd439 | renamed (basename `mcp` is the client's) |
-| `src/session.zig` | 999 | `ae/nib/session/module.ae` | a2dd439 | Turn/Step loop, resume/continue, interrupted commits, auto compaction, Step-limit wait, undo wiring, the Run's viewed images on its tool message, fork init and per-Step fork snapshots, agent_session restore, skills, MCP (header mcp_servers, the log's on resume), hooks (turn_end on a Session-held thread, TurnJob), the calls recorder; user-message images (`turn_with_images`) |
-| `src/session/run.zig` | 236 | `ae/nib/session/module.ae` | a2dd439 | execute + executeTimed: every Run on its own thread (RunJob) with its own timing, merged into the Step's; the waiting flag is the sandbox Host's `waiting` cell |
-| `src/session/run_job.zig` | 116 | `ae/nib/session/module.ae` | a2dd439 | RunJob; its recorder is a fork of the Session's (begin at start, finish before done) |
-| `src/session/log.zig` | 1402 | `ae/nib/session/log/module.ae` | a2dd439 | records are JSON text; tool summaries travel on the logged tool messages (the TUI reads them on resume); background ids and bash replacements are restored onto replayed messages, as upstream restoreToolSummaries |
-| `src/session/output.zig` | 596 | `ae/nib/session/output/module.ae` | a2dd439 |  |
-| `src/session/prompt.zig` | 322 | `ae/nib/session/prompt/module.ae` | a2dd439 |  |
-| `src/session/profile.zig` | 58 | `ae/nib/session/profile/module.ae` | a2dd439 |  |
-| `src/session/instructions.zig` | 49 | `ae/nib/session/instructions/module.ae` | a2dd439 |  |
-| `src/session/compact.zig` | 175 | `ae/nib/session/compact/module.ae` | a2dd439 | withoutImages is `without_images` |
-| `src/session/tool_summary.zig` | 249 | `ae/nib/session/tool_summary/module.ae` | a2dd439 | annotateViews takes the images as JSON text |
-| `src/session/events.zig` | 182 | `ae/nib/session/module.ae` | a2dd439 | events are the NDJSON text they print as |
-| `src/session/inbox.zig` | 278 | `ae/nib/tools/background/module.ae` | a2dd439 | bash results, FIFO, detached kept; user interjections (`enqueue_user`/`take_users`, kind "user") inserted before the next Step |
-| `src/session/history.zig` | 130 | `ae/nib/session/fork_history/module.ae` | a2dd439 | renamed; messages are JSON texts, copies are fresh strings |
-| `src/session/hooks.zig`, `skills.zig` | 538 | `ae/nib/session/hooks/module.ae`, `ae/nib/session/skills/module.ae` | a2dd439 | hooks run `cd <root>` inside the script (process.run has no cwd); skills: unlistable roots report NotDir/AccessDenied, disabled skills are reported in name order |
-| `src/provider.zig` | 395 | `ae/nib/provider/types/module.ae`, `ae/nib/provider/module.ae` | a2dd439 | less Codex |
-| `src/provider/retry.zig` | 331 | `ae/nib/provider/module.ae` | a2dd439 | no Codex Retry-After or stale-socket paths |
-| `src/provider/anthropic.zig` | 444 | `ae/nib/provider/anthropic/module.ae` | a2dd439 | |
-| `src/provider/responses.zig` | 1033 | `ae/nib/provider/responses/module.ae` | a2dd439 | SSE only; no Codex auth/WebSocket or web search |
-| `src/provider/openai.zig` | 428 | `ae/nib/provider/openai/module.ae` | a2dd439 | HTTP errors other than 401 carry the body (64 KiB), as upstream |
-| `src/provider/sse.zig` | 52 | `ae/nib/provider/sse/module.ae` | a2dd439 | plus fixed/live line sources |
-| `src/provider/timing.zig` | 319 | `ae/nib/provider/timing/module.ae` | a2dd439 | |
-| `src/provider/body.zig`, `cancel.zig`, `idle.zig` | 393 | `ae/nib/provider/http/module.ae` | a2dd439 | a request thread plus a polling reader on std.http.client |
+| `src/sandbox/record.zig` | 510 | `ae/naeb/sandbox/record/module.ae` | a2dd439 | file via std.fs (flock, pwrite, ftruncate, fsync); dedup keys are sha256 hex |
+| `src/sandbox/replay.zig` | 303 | `ae/naeb/sandbox/replay/module.ae` | a2dd439 | Virtual.stopped is a std.sync cell, not a callback |
+| `src/sandbox/virtual.zig` | 19 | `ae/naeb/sandbox/module.ae` (VIRTUAL_PRELUDE) | a2dd439 |  |
+| `src/tools.zig` | 813 | `ae/naeb/tools/module.ae` | a2dd439 | table verbatim; only ported tools enter a Run's API; RunScope replaces the threadlocal; docs fill {{llm_limits}}/{{llm_options}}; search options wait for web search |
+| `src/tools/files.zig` | 587 | `ae/naeb/tools/files/module.ae` | a2dd439 | undo snapshots in edit/write |
+| `src/tools/atomic_file.zig` | 243 | `ae/naeb/tools/atomic_file/module.ae` | a2dd439 | on std.fs (stat, O_EXCL create, fchmod, fsync, move) |
+| `src/tools/file_state.zig` | 247 | `ae/naeb/tools/file_state/module.ae` | a2dd439 | flock path locks on std.fs |
+| `src/tools/changes.zig` | 253 | `ae/naeb/tools/changes/module.ae` | a2dd439 | Tracker per Run scope; Recovery |
+| `src/tools/diff.zig` | 195 | `ae/naeb/tools/diff/module.ae` | a2dd439 |  |
+| `src/tools/search.zig` | 173 | `ae/naeb/tools/search/module.ae` | a2dd439 |  |
+| `src/tools/grep.zig` | 509 | `ae/naeb/tools/grep/module.ae` | a2dd439 | one scanning thread (upstream 8); JS RegExp in a private QuickJS runtime; a running regex is bounded at 10 s, not interruptible by cancel |
+| `src/tools/regex.zig` | 106 | `ae/naeb/tools/grep/module.ae` | a2dd439 | libregexp via JS RegExp |
+| `src/tools/walk.zig` | 385 | `ae/naeb/tools/walk/module.ae` | a2dd439 |  |
+| `src/tools/policy.zig` | 698 | `ae/naeb/tools/policy/module.ae` | a2dd439 | rule for rule, same texts |
+| `src/tools/secrets.zig` | 16 | `ae/naeb/tools/secrets/module.ae` | a2dd439 |  |
+| `src/tools/process.zig` | 358 | `ae/naeb/tools/process/module.ae` | a2dd439 | output to a file, not a pipe; a 20 ms tick with the output byte count (progress); run_lines (a child naeb: stdin input, stdout lines, TERM then KILL after a grace) through os.run_stdio, its stderr discarded; open_stdio for MCP; a signal reads as 128+n |
+| `src/tools/bash.zig` | 433 | `ae/naeb/tools/bash/module.ae` | a2dd439 | progress Tracker; ids reserved at start, snapshot after 3 s |
+| `src/tools/bash/registry.zig` | 146 | `ae/naeb/tools/registry/module.ae` | a2dd439 | supersession; started/superseded/finished log records |
+| `src/tools/bash/jail.zig` | 304 | `ae/naeb/tools/jail/module.ae` | a2dd439 | Landlock in jail/landlock.c (stand-in); probe cached per Tools, not per process |
+| `src/tools/background.zig` | 866 | `ae/naeb/tools/background/module.ae` | a2dd439 | bash, agents (start_agent, completion without usage, invocation-matched delivery) and adopted Runs (adopt_run, take_done_runs, enqueue_run with the run completion); typed inbox, started record, lost on resume, detached across Turns; a Run cannot stop itself |
+| `src/tools/stop.zig` | 29 | `ae/naeb/tools/module.ae`, `ae/naeb/tui/live/module.ae` | a2dd439 | userStop is the TUI port's `user_stop_`; a stop requested during a Turn runs on a worker, not in Tools.poll |
+| `src/tools/undo.zig` | 606 | `ae/naeb/tools/undo/module.ae` | a2dd439 | Session wires begin/finish/undo; off for `naeb ask` as upstream; /undo itself is the TUI's |
+| `src/tools/view.zig` | 92 | `ae/naeb/tools/view/module.ae` | a2dd439 | credential-path refusal as read; the Run's images in `RunScope.images` (`naeb.image` Attached, 4 per Run, none from background Runs) |
+| `src/tools/progress.zig` | 249 | `ae/naeb/tools/progress/module.ae` | a2dd439 |  |
+| `src/tools/web.zig` | 161 | `ae/naeb/tools/web/module.ae` | a2dd439 | std.http.client on a worker, caller watches cancel/deadline; no response decompression (no accept-encoding is sent) and no environment proxy |
+| `src/tools/html.zig` | 504 | `ae/naeb/tools/html/module.ae` | a2dd439 | byte-identical to upstream on 310 differential inputs; a stale link offset leaves output alone where upstream would trap |
+| `src/tools/web_search.zig` | 404 | `ae/naeb/tools/web_search/module.ae` | a2dd439 | openai, anthropic, deepseek routes; no Codex (policy); transport errors carry std.http.client's text |
+| `src/tools/llm.zig` | 246 | `ae/naeb/tools/llm_call/module.ae` | a2dd439 | the gate is per Tools; subagent usage joins through the same cell |
+| `src/tools/agent.zig` | 497 | `ae/naeb/tools/agent/module.ae` | a2dd439 | a Ctx per call from the Tools (no threadlocal); the child is `self_exe ask --json --agent-input [--resume] -` via process.run_lines; background calls return status 2 and the tools module starts the job |
+| `src/tools/agent/input.zig` | 90 | `ae/naeb/tools/agent_input/module.ae` | a2dd439 | renamed (basenames); the Config's JSON spelling is the port's own (both ends are this binary); also the header's mcp_servers JSON |
+| `src/tools/agent/sessions.zig` | 119 | `ae/naeb/tools/agent_sessions/module.ae` | a2dd439 | renamed |
+| `src/tools/mcp.zig` | 101 | `ae/naeb/tools/mcp_tool/module.ae` | a2dd439 | renamed (basename `mcp` is the client's) |
+| `src/session.zig` | 999 | `ae/naeb/session/module.ae` | a2dd439 | Turn/Step loop, resume/continue, interrupted commits, auto compaction, Step-limit wait, undo wiring, the Run's viewed images on its tool message, fork init and per-Step fork snapshots, agent_session restore, skills, MCP (header mcp_servers, the log's on resume), hooks (turn_end on a Session-held thread, TurnJob), the calls recorder; user-message images (`turn_with_images`) |
+| `src/session/run.zig` | 236 | `ae/naeb/session/module.ae` | a2dd439 | execute + executeTimed: every Run on its own thread (RunJob) with its own timing, merged into the Step's; the waiting flag is the sandbox Host's `waiting` cell |
+| `src/session/run_job.zig` | 116 | `ae/naeb/session/module.ae` | a2dd439 | RunJob; its recorder is a fork of the Session's (begin at start, finish before done) |
+| `src/session/log.zig` | 1402 | `ae/naeb/session/log/module.ae` | a2dd439 | records are JSON text; tool summaries travel on the logged tool messages (the TUI reads them on resume); background ids and bash replacements are restored onto replayed messages, as upstream restoreToolSummaries |
+| `src/session/output.zig` | 596 | `ae/naeb/session/output/module.ae` | a2dd439 |  |
+| `src/session/prompt.zig` | 322 | `ae/naeb/session/prompt/module.ae` | a2dd439 |  |
+| `src/session/profile.zig` | 58 | `ae/naeb/session/profile/module.ae` | a2dd439 |  |
+| `src/session/instructions.zig` | 49 | `ae/naeb/session/instructions/module.ae` | a2dd439 |  |
+| `src/session/compact.zig` | 175 | `ae/naeb/session/compact/module.ae` | a2dd439 | withoutImages is `without_images` |
+| `src/session/tool_summary.zig` | 249 | `ae/naeb/session/tool_summary/module.ae` | a2dd439 | annotateViews takes the images as JSON text |
+| `src/session/events.zig` | 182 | `ae/naeb/session/module.ae` | a2dd439 | events are the NDJSON text they print as |
+| `src/session/inbox.zig` | 278 | `ae/naeb/tools/background/module.ae` | a2dd439 | bash results, FIFO, detached kept; user interjections (`enqueue_user`/`take_users`, kind "user") inserted before the next Step |
+| `src/session/history.zig` | 130 | `ae/naeb/session/fork_history/module.ae` | a2dd439 | renamed; messages are JSON texts, copies are fresh strings |
+| `src/session/hooks.zig`, `skills.zig` | 538 | `ae/naeb/session/hooks/module.ae`, `ae/naeb/session/skills/module.ae` | a2dd439 | hooks run `cd <root>` inside the script (process.run has no cwd); skills: unlistable roots report NotDir/AccessDenied, disabled skills are reported in name order |
+| `src/provider.zig` | 395 | `ae/naeb/provider/types/module.ae`, `ae/naeb/provider/module.ae` | a2dd439 | less Codex |
+| `src/provider/retry.zig` | 331 | `ae/naeb/provider/module.ae` | a2dd439 | no Codex Retry-After or stale-socket paths |
+| `src/provider/anthropic.zig` | 444 | `ae/naeb/provider/anthropic/module.ae` | a2dd439 | |
+| `src/provider/responses.zig` | 1033 | `ae/naeb/provider/responses/module.ae` | a2dd439 | SSE only; no Codex auth/WebSocket or web search |
+| `src/provider/openai.zig` | 428 | `ae/naeb/provider/openai/module.ae` | a2dd439 | HTTP errors other than 401 carry the body (64 KiB), as upstream |
+| `src/provider/sse.zig` | 52 | `ae/naeb/provider/sse/module.ae` | a2dd439 | plus fixed/live line sources |
+| `src/provider/timing.zig` | 319 | `ae/naeb/provider/timing/module.ae` | a2dd439 | |
+| `src/provider/body.zig`, `cancel.zig`, `idle.zig` | 393 | `ae/naeb/provider/http/module.ae` | a2dd439 | a request thread plus a polling reader on std.http.client |
 | `src/provider/codex_ws.zig`, `websocket.zig` | 523 | not ported |  | policy: API keys only |
-| `src/config.zig` | 1680 | `ae/nib/config/module.ae`, `ae/nib/config/env/module.ae` | a2dd439 | no Codex provider ([codex] validated and ignored); default service anthropic |
-| `src/mcp.zig`, `src/mcp/*` | 700 | `ae/nib/mcp/module.ae`, `mcp/mcp_index`, `mcp/mcp_headers`, `mcp/mcp_transport` | a2dd439 | stdio over os.run_stdio (newline-delimited JSON-RPC; stderr discarded and cwd set by os.run_stdio; kill by pid, no process group); Streamable HTTP on std.http.client from a worker thread; no environment proxy |
-| `src/main.zig` | 311 | `ae/main.ae` | a2dd439 | ask, js, login/logout, help, version, __jail; bare `nib` opens the TUI (`run_tui_`); `nib replay` with its three error texts; no update |
-| `src/replay.zig` | 541 | `ae/nib/run_replay/module.ae` | a2dd439 | renamed (basename `replay` is the core's) |
-| `src/image.zig` | 324 | `ae/nib/image/module.ae` | a2dd439 | images are JSON texts (the log's `images` entries); binary-safe reads; SHA-256 hash name; Attached/Target for the Run's images; pastedPath, and read_pasted for the TUI's stat-then-read |
-| `src/tui.zig` | 1911 | `ae/nib/tui/module.ae` | 7788541 | the App; takes term, Session port and clock; app events through `nib.tui.app_queue`; the Ticker is the poll timeout; the clipboard reader is an instance field (upstream's test override) |
-| `src/tui/view.zig` | 744 | `ae/nib/tui/tui_view/module.ae` | 7788541 | renamed (basename `view`); both snapshot files match cell for cell |
-| `src/tui/transcript.zig`, `transcript/entry.zig`, `transcript/changes.zig`, `transcript/intraline.zig`, `transcript/label.zig` | 2634 | `ae/nib/tui/transcript`, `entry`, `turn_changes` (renamed), `intraline`, `label` | 7788541 | replayed tool summaries are read from the messages' `tool_summary` members |
-| `src/tui/editor.zig` | 657 | `ae/nib/tui/editor/module.ae` | 7788541 | image blocks hold nib.image Images (JSON text); sent_images is their JSON array |
-| `src/tui/markdown.zig`, `syntax.zig` | 1472 | `ae/nib/tui/markdown`, `syntax` | 7788541 | |
-| `src/tui/viewport.zig`, `selection.zig`, `selection/history.zig` | 595 | `ae/nib/tui/viewport`, `selection`, `sel_history` (renamed) | 7788541 | the local clipboard tool is a closure the app supplies (tui/clipboard's copier: ours adds pbcopy on macOS, see "Ours: pbcopy") |
-| `src/tui/status.zig`, `bill.zig`, `title.zig`, `format.zig`, `frames.zig`, `smooth.zig`, `long_text.zig`, `mode.zig` | 1076 | `ae/nib/tui/<same>`, `turn_summary` | 7788541 | times are ms from the app's clock |
-| `src/tui/commands.zig`, `menu.zig`, `providers.zig` | 1133 | `ae/nib/tui/commands`, `menu`, `module.ae` | 7788541 | execute/select/providers live in the app; `/provider` is key entry only |
-| `src/tui/provider_flow.zig` | 658 | `ae/nib/tui/provider_flow/module.ae` | 7788541 | API keys only: the Codex sign-in steps are not ported |
-| `src/tui/prediction.zig`, `reflect.zig` | 798 | `ae/nib/tui/prediction`, `reflect` | 7788541 | the model call and gh are closures (specs replace them) |
-| `src/tui/paths.zig`, `open.zig`, `clipboard.zig`, `agent_tree.zig`, `tasks.zig`, `turn.zig` | 1306 | `ae/nib/tui/<same>` | 7788541 | turn.zig's thread is the port's (`nib.tui.live`); clipboard checks with nib.image's probe |
-| (new) | | `ae/nib/tui/port`, `live`, `clock`, `app_queue` | | the Session interface with its scripted (specs) and live (nib.session) implementations, the clock instance, the app event queue |
-| `src/auth.zig`, `src/auth/store.zig`, `src/auth/cli.zig` | 601 | `ae/nib/auth/module.ae`, `ae/nib/auth/store/module.ae` | a2dd439 | API keys only: no tokens, no Codex login |
+| `src/config.zig` | 1680 | `ae/naeb/config/module.ae`, `ae/naeb/config/env/module.ae` | a2dd439 | no Codex provider ([codex] validated and ignored); default service anthropic |
+| `src/mcp.zig`, `src/mcp/*` | 700 | `ae/naeb/mcp/module.ae`, `mcp/mcp_index`, `mcp/mcp_headers`, `mcp/mcp_transport` | a2dd439 | stdio over os.run_stdio (newline-delimited JSON-RPC; stderr discarded and cwd set by os.run_stdio; kill by pid, no process group); Streamable HTTP on std.http.client from a worker thread; no environment proxy |
+| `src/main.zig` | 311 | `ae/main.ae` | a2dd439 | ask, js, login/logout, help, version, __jail; bare `naeb` opens the TUI (`run_tui_`); `naeb replay` with its three error texts; no update |
+| `src/replay.zig` | 541 | `ae/naeb/run_replay/module.ae` | a2dd439 | renamed (basename `replay` is the core's) |
+| `src/image.zig` | 324 | `ae/naeb/image/module.ae` | a2dd439 | images are JSON texts (the log's `images` entries); binary-safe reads; SHA-256 hash name; Attached/Target for the Run's images; pastedPath, and read_pasted for the TUI's stat-then-read |
+| `src/tui.zig` | 1911 | `ae/naeb/tui/module.ae` | 7788541 | the App; takes term, Session port and clock; app events through `naeb.tui.app_queue`; the Ticker is the poll timeout; the clipboard reader is an instance field (upstream's test override) |
+| `src/tui/view.zig` | 744 | `ae/naeb/tui/tui_view/module.ae` | 7788541 | renamed (basename `view`); both snapshot files match cell for cell |
+| `src/tui/transcript.zig`, `transcript/entry.zig`, `transcript/changes.zig`, `transcript/intraline.zig`, `transcript/label.zig` | 2634 | `ae/naeb/tui/transcript`, `entry`, `turn_changes` (renamed), `intraline`, `label` | 7788541 | replayed tool summaries are read from the messages' `tool_summary` members |
+| `src/tui/editor.zig` | 657 | `ae/naeb/tui/editor/module.ae` | 7788541 | image blocks hold naeb.image Images (JSON text); sent_images is their JSON array |
+| `src/tui/markdown.zig`, `syntax.zig` | 1472 | `ae/naeb/tui/markdown`, `syntax` | 7788541 | |
+| `src/tui/viewport.zig`, `selection.zig`, `selection/history.zig` | 595 | `ae/naeb/tui/viewport`, `selection`, `sel_history` (renamed) | 7788541 | the local clipboard tool is a closure the app supplies (tui/clipboard's copier: ours adds pbcopy on macOS, see "Ours: pbcopy") |
+| `src/tui/status.zig`, `bill.zig`, `title.zig`, `format.zig`, `frames.zig`, `smooth.zig`, `long_text.zig`, `mode.zig` | 1076 | `ae/naeb/tui/<same>`, `turn_summary` | 7788541 | times are ms from the app's clock |
+| `src/tui/commands.zig`, `menu.zig`, `providers.zig` | 1133 | `ae/naeb/tui/commands`, `menu`, `module.ae` | 7788541 | execute/select/providers live in the app; `/provider` is key entry only |
+| `src/tui/provider_flow.zig` | 658 | `ae/naeb/tui/provider_flow/module.ae` | 7788541 | API keys only: the Codex sign-in steps are not ported |
+| `src/tui/prediction.zig`, `reflect.zig` | 798 | `ae/naeb/tui/prediction`, `reflect` | 7788541 | the model call and gh are closures (specs replace them) |
+| `src/tui/paths.zig`, `open.zig`, `clipboard.zig`, `agent_tree.zig`, `tasks.zig`, `turn.zig` | 1306 | `ae/naeb/tui/<same>` | 7788541 | turn.zig's thread is the port's (`naeb.tui.live`); clipboard checks with naeb.image's probe |
+| (new) | | `ae/naeb/tui/port`, `live`, `clock`, `app_queue` | | the Session interface with its scripted (specs) and live (naeb.session) implementations, the clock instance, the app event queue |
+| `src/auth.zig`, `src/auth/store.zig`, `src/auth/cli.zig` | 601 | `ae/naeb/auth/module.ae`, `ae/naeb/auth/store/module.ae` | a2dd439 | API keys only: no tokens, no Codex login |
 | `src/auth/oauth.zig`, `login.zig`, `codex.zig` | 798 | not ported | | policy |
-| `src/auth/models.zig` | 92 | `ae/nib/auth/models/module.ae` | 7788541 | API keys only |
+| `src/auth/models.zig` | 92 | `ae/naeb/auth/models/module.ae` | 7788541 | API keys only |
 | `src/update*` | 140 | not ported | | |
 
 `tools/upstream-diff.sh` lists, per row with a commit, what upstream changed
@@ -173,23 +173,23 @@ matcher embed QuickJS, nothing in this slice imports a network module. The
 sandbox's two host functions open with a `hide os, worker, ...` veto line.
 
 **Stand-ins (marked, each with an ask):**
-`ae/nib/tools/jail/landlock.c` (asks/aether-landlock-write-roots.md).
+`ae/naeb/tools/jail/landlock.c` (asks/aether-landlock-write-roots.md).
 
 **Differences kept on purpose or by gap:** grep scans on one thread and
 bounds a running regex at 10 s per file; bash output goes through a file;
 a signalled bash reports 128+n, not `null`; the jail probe is cached per Tools.
 
-**Upstream's Python tests for this slice** all drive `nib ask` (or the TUI)
+**Upstream's Python tests for this slice** all drive `naeb ask` (or the TUI)
 against a mock model server, so they wait for the session and provider
 slices: `tests/test_sandbox.py` (workspace mode: needs `ask --json`, config
 `[sandbox]`, subagents for its child cases), `test_files.py` (file tools in a
-Session: `ask --json`, NIB_HOME locks, multi-process edits),
+Session: `ask --json`, NAEB_HOME locks, multi-process edits),
 `test_background_bash.py` (needs the inbox, `--resume`, Session ids),
 `test_limits.py` (configured limits: config + llm + agent), `test_undo.py`
-(TUI `/undo`). They run against the Aether binary unchanged once `nib ask`
+(TUI `/undo`). They run against the Aether binary unchanged once `naeb ask`
 speaks the mock's wire protocol.
 
-**What the next slice (Session + Anthropic provider + `nib ask`) needs from
+**What the next slice (Session + Anthropic provider + `naeb ask`) needs from
 this one:** a `tools.Tools` per Session (`tools.new(home)`, set `data_home`,
 `codex_home`, `workspace`, `extra_writable`, `env`, `self_exe`), a
 `tools.new_scope(t, run_id)` per Run and `tools.host(scope)` for
@@ -204,7 +204,7 @@ sandbox_unavailable), undo snapshots in edit/write.
 
 ## Session, provider and config slice (2026-11-12)
 
-**What runs.** `nib ask [--json] [-c|--continue|--resume <id>] [--effort <level>]
+**What runs.** `naeb ask [--json] [-c|--continue|--resume <id>] [--effort <level>]
 <prompt|->` over Anthropic Messages, OpenAI Responses (openai, xai, custom
 `responses` endpoints) and Chat Completions (deepseek, chat_completions,
 custom), API keys only, streaming SSE on std.http.client; the append-only
@@ -212,7 +212,7 @@ Session log with resume, torn-tail repair and the session lock; automatic and
 model-driven compaction; interrupted Turns (SIGINT/SIGTERM) committed with
 their partial text; background bash across Steps and Turns with progress and
 log records; tools.llm; undo snapshots (wired, off for `ask` as upstream);
-`nib login`/`logout` storing keys in `$NIB_HOME/auth.json` (0600, atomic,
+`naeb login`/`logout` storing keys in `$NAEB_HOME/auth.json` (0600, atomic,
 unknown fields kept); `--help` with the active provider.
 
 **Unit tests.** `aeb .tests.ae`: 35 std.spec suites (about 430 tests) plus
@@ -233,7 +233,7 @@ module was mutation-checked.
 | test_stream_idle.py | Chat cases pass except two | tools.agent, tools.llm in a child; Codex classes excluded |
 | test_background_bash.py | 30 of 38 non-TUI Chat cases (Linux; on macOS its `/proc` helper needs a stand-in) | tools.agent ids, the TUI; Codex classes excluded |
 | test_llm.py | Chat cases pass except the child one, with one assertion set aside | its docs check requires `async agent(` in the prompt |
-| test_limits.py | max-steps cases pass; LLM limits pass with the same assertion set aside | agent limits, `nib replay`, Codex classes |
+| test_limits.py | max-steps cases pass; LLM limits pass with the same assertion set aside | agent limits, `naeb replay`, Codex classes |
 | test_effort.py | the chat_completions half passes | its second half is Codex |
 | test_model.py, test_undo.py, test_tui_*.py, test_at_files.py, test_interjections.py, test_prediction.py | pass (TUI slice) | |
 | test_images.py | pass (its `View` cases; the TUI functions need the TUI's clipboard and paste, still stand-ins) | |
@@ -276,7 +276,7 @@ record/replay.
 
 ## TUI slice (2026-11-12)
 
-**What runs.** Bare `nib` opens the TUI on the controlling terminal
+**What runs.** Bare `naeb` opens the TUI on the controlling terminal
 (`ae/term`), over the real Session with undo on (`-c`/`--resume` reopen
 one): streaming with the Thinking / Generating response / Running states,
 Run blocks with tool summaries, background tasks and the agent tree,
@@ -284,23 +284,23 @@ interjections, Esc cancel with queued text returned to the input, the `/`
 menu and every command (`/provider` with API keys only, `/model` with the
 listed models, `/effort`, `/undo`, `/tasks`, `/stop`, `/skills`, `/status`,
 `/simple`, `/new`, `/resume`, `/copy`, `/js`, `/compact`, `/reflect` with
-NIB_ISSUE_REPO, `/mcp`), `@` path and `$` skill completion, input history,
+NAEB_ISSUE_REPO, `/mcp`), `@` path and `$` skill completion, input history,
 paste blocks, input prediction, mouse selection with OSC 52 copy, hover,
 clickable paths with `open`, Simple mode, resize.
 
-**Design (Paul's requirement).** `nib.tui.new(terminal, port, clock, env)`:
+**Design (Paul's requirement).** `naeb.tui.new(terminal, port, clock, env)`:
 the terminal is `term.open()` or `term.memory(cols, rows)`; the Session is a
-`nib.tui.port.Port` (closures: the real one is `nib.tui.live` over
-`nib.session`, specs use `port.scripted(cfg, home)`, which records Turns
+`naeb.tui.port.Port` (closures: the real one is `naeb.tui.live` over
+`naeb.session`, specs use `port.scripted(cfg, home)`, which records Turns
 and lets the spec emit events: "reasoning, then text, then a Run with these
-results"); the clock is `nib.tui.clock` (`of_terminal`, so an in-memory
+results"); the clock is `naeb.tui.clock` (`of_terminal`, so an in-memory
 terminal's fake clock drives it). No module-level state. Specs drive the
 app in-process (`term.driver` keys and mouse, `tui.step`, `tui.settle`): no
 pty, no sleeps.
 
-**Session-side hooks added for it** (small, in `nib.session` and
-`nib.tools.background`): `Sink.on_activity` (model
-started/data/script/waiting/finished, user_inserted; `nib ask` sets none),
+**Session-side hooks added for it** (small, in `naeb.session` and
+`naeb.tools.background`): `Sink.on_activity` (model
+started/data/script/waiting/finished, user_inserted; `naeb ask` sets none),
 `session.enqueue`/`take_queued` (user items in the background inbox,
 FIFO, committed with the Step), `session.switch_config` (in place before
 the first Step, else the port reopens), `turn_end_hooks` returning its
@@ -349,10 +349,10 @@ accepted for a `string` parameter), plus ae/term's.
 
 ## Run recording and offline replay slice (2026-11-12)
 
-`nib.sandbox.record` (record.zig), `nib.sandbox.replay` (sandbox/replay.zig),
-the virtual prelude and Host.record/Host.virtual hooks in `nib.sandbox`, the
-Session's recorder (`<id>.calls.jsonl` beside the log; `NIB_RECORD=off`
-disables it; each RunJob forks it), and `nib replay` (`nib.run_replay`,
+`naeb.sandbox.record` (record.zig), `naeb.sandbox.replay` (sandbox/replay.zig),
+the virtual prelude and Host.record/Host.virtual hooks in `naeb.sandbox`, the
+Session's recorder (`<id>.calls.jsonl` beside the log; `NAEB_RECORD=off`
+disables it; each RunJob forks it), and `naeb replay` (`naeb.run_replay`,
 src/replay.zig) with main.zig's three replay error texts.
 
 **Tests.** Every inline test of record.zig, sandbox/replay.zig and replay.zig,
@@ -376,15 +376,15 @@ divergence stops a running script without it reading as canceled).
 
 **What it adds.** Subagents: `tools.agent` (foreground and background, resume
 by task id, fork with the Step's history and file versions, limits and the
-concurrency gate), `nib ask --agent-input`, the child-Session registry and its
+concurrency gate), `naeb ask --agent-input`, the child-Session registry and its
 log records. Automatic Run backgrounding (every Run on its own thread; adopted
 as rN after `run_background_after_ms` while waiting on tools). Hooks
 (`after_edit`, `turn_end`) and skills (index, `$name` expansion). MCP (stdio and
 Streamable HTTP, `tools.mcp`, `tools.mcp_schema`). `tools.fetch` (HTML to
 Markdown) and `tools.search` (openai, anthropic, deepseek). Images and
-`tools.view`. Run recording and `nib replay` (its own section above). Session
+`tools.view`. Run recording and `naeb replay` (its own section above). Session
 headers record `nib_version` as build.zig.zon's version plus the commit
-(.build.ae writes it; `nib --version` keeps `0.13.0-ae`). Upstream's
+(.build.ae writes it; `naeb --version` keeps `0.13.0-ae`). Upstream's
 `[providers.<id>] max_output` (8537d53) is ported; `main` was fast-forwarded to
 upstream 8537d53 (two Config commits: dd82e39, 8537d53).
 
@@ -415,7 +415,7 @@ functions were left out of this run; both run since the parity follow-up below. 
 cases of test_background_bash pass since the follow-up below.)
 
 **Stand-ins added (marked, each with an ask).** A child
-nib's or MCP server's stderr is discarded and its cwd set through `sh -c`
+naeb's or MCP server's stderr is discarded and its cwd set through `sh -c`
 (asks/aether-run-stdio-stderr.md); the QuickJS stand-in's stop cell for replay
 (asks/aether-quickjs-async-eval-and-interrupt.md).
 
@@ -429,16 +429,16 @@ accept-encoding is sent).
 ## Follow-up: /js as a Run, check_layers on every module, Aether 0.912.0 (2026-11-13)
 
 **`/js` is a Run.** As upstream (`session.run`, session/run.zig run +
-runTimed), the TUI's `/js` goes through `nib.session.run`: the Run takes the
+runTimed), the TUI's `/js` goes through `naeb.session.run`: the Run takes the
 Session's next Run id, tools.llm usage joins the Session's, after-edit hooks
 run, and an empty record commits the task id counters (`task_ids`), so a
 resumed Session numbers its tasks after it. The TUI numbers the next Turn's
 Runs after the `/js` Run, so later background progress attaches to its Run,
-and `nib.tui.live`'s idle tick now drains the due progress snapshots
+and `naeb.tui.live`'s idle tick now drains the due progress snapshots
 (upstream's `.tick` with no Turn). `tui_app_test.ae` has a spec for both.
 
 **`tools/check_layers.sh`** pins the imports of every module (ae/main.ae and
-every ae/nib module; an unpinned one fails). Who may start a program is the
+every ae/naeb module; an unpinned one fails). Who may start a program is the
 compiler's rule since Aether 0.911.0 (`import ns hiding (...)`, aether
 #3653): every std.os import outside tools/process and tools/jail hides
 std.os's program starters (E0304 on use), and the script checks those lists.
@@ -474,16 +474,16 @@ and CONTEXT.md); `main` is fast-forwarded to it. Five marked stand-ins and
 partial features of the port are gone, one commit each:
 
 - **TUI images.** Ctrl+V and an empty or whitespace paste read the clipboard
-  image through tui/clipboard (now checked with nib.image's probe and
-  MAX_BYTES); a pasted path naming an image file (nib.image.pasted_path,
+  image through tui/clipboard (now checked with naeb.image's probe and
+  MAX_BYTES); a pasted path naming an image file (naeb.image.pasted_path,
   read_pasted: stat before read) is stored under the Session's images
-  directory; the editor holds nib.image Images; Enter sends them with the
+  directory; the editor holds naeb.image Images; Enter sends them with the
   Turn (session.turn_with_images, the port's start_turn). The app owns its
   Clipboard instance, whose reader specs replace (upstream's test override).
   config.env.pairs gives children their environment; the `open` launcher
   had been handed the Env struct where a NAME=value list was expected.
   Unlocks test_images.py's four `test_tui_*` functions.
-- **`/mcp` connection state.** nib.mcp.server_state, the port's mcp_state;
+- **`/mcp` connection state.** naeb.mcp.server_state, the port's mcp_state;
   `/mcp` shows " · failed: <error>" or " · <n> tools". `/new` reads [mcp]
   again (as [skills]); a failed reopen keeps the current config. Unlocks
   test_mcp.py's `tui_toggle`.
@@ -527,8 +527,8 @@ on all three hosts.
 aether #3694 (0.914.0) fixed six of this port's asks; their stand-ins are
 gone. `xs.push(f())` keeps the struct's strings (agent_tree pushes the row
 directly); `commands.Choice[] x = []` parses, so `commands.no_choices()` is
-deleted; `nib.provider.timing` has its upstream name again (the qualified-type
-basename collision with `nib.sandbox.timing` is fixed); std.ipc never raises
+deleted; `naeb.provider.timing` has its upstream name again (the qualified-type
+basename collision with `naeb.sandbox.timing` is fixed); std.ipc never raises
 SIGPIPE, so `sysgap.ignore_sigpipe` is deleted; `os.run_stdio` takes
 `stderr_to:` and `cwd:`, so tools.process starts the program directly instead
 of through `sh -c`; `ae run` exits non-zero when a spec fails, so
@@ -541,19 +541,19 @@ cachyos 29/30 and ae-x64 29/30 (left: the Codex half of `test_effort`, by
 policy). ae-x64 now runs Ubuntu's HWE kernel 6.8 (was 5.15), so Landlock ABI
 2+ holds there and its sandbox cases pass. macOS unchanged at 23/30.
 
-## Aether 0.915.0: nib.sysgap deleted (2026-11-14)
+## Aether 0.915.0: naeb.sysgap deleted (2026-11-14)
 
-The two remaining stand-in asks are answered in 0.915.0 and `ae/nib/sysgap/`
+The two remaining stand-in asks are answered in 0.915.0 and `ae/naeb/sysgap/`
 (a C file and its Aether wrapper) is gone. std.fs gives `stat` (a `Stat` value
 with inode, mode and nanosecond mtime), `lock_open`/`try_lock`, `create_exclusive`,
 `fchmod`, `fd_fsync`, `fd_truncate`, `fd_size`, `fd_pwrite_all`, `move` (replaces
 an existing target; the atomic-replace step) and `chmod`/`unlink`/
 `create_dir_with_mode`; std.io gives `fd_close`/`fd_write` and `set_echo`;
 std.os gives `environ` and `signal_watch`/`signal_received`/`signal_unwatch`.
-Two small modules replace the rest: `nib.fserr` (`errname(kind)`: a std.fs
+Two small modules replace the rest: `naeb.fserr` (`errname(kind)`: a std.fs
 `KIND_*` to upstream's Zig error name, read with the errno behind a `KIND_IO`
-for ReadOnlyFileSystem, DeviceBusy and FileTooBig) and `nib.sysenv` (the
-environment as a `std.list`). `nib ask` owns its signal watch: the Turn's
+for ReadOnlyFileSystem, DeviceBusy and FileTooBig) and `naeb.sysenv` (the
+environment as a `std.list`). `naeb ask` owns its signal watch: the Turn's
 poller thread holds the handle it was given and the watch lasts the process.
 Masked key entry is `io.set_echo`, restoring what it found.
 
@@ -564,15 +564,15 @@ and the image store tells a missing parent from an existing directory by a stat
 after the failed mkdir. The errno numbers behind KIND_IO are the POSIX ones
 (Linux, macOS); Windows reports GetLastError codes there.
 
-New check: `ae/tests/tui_e2e.py` `login_masks_key` runs `nib login anthropic`
+New check: `ae/tests/tui_e2e.py` `login_masks_key` runs `naeb login anthropic`
 on a pseudo-terminal and checks echo is off while the key is read, back on
 afterwards, and the key never reaches the screen. SIGINT/SIGTERM during
-`nib ask` are covered by upstream's `test_session.py` (the interrupted Turn
+`naeb ask` are covered by upstream's `test_session.py` (the interrupted Turn
 test) and `test_agent.py` (`check_cancel`). Pins: AE_PIN 0.915.0.
 
-## Aether 0.916.0: nib.qjsgap deleted (2026-11-14)
+## Aether 0.916.0: naeb.qjsgap deleted (2026-11-14)
 
-contrib.quickjs answers the last QuickJS ask and `ae/nib/qjsgap/` is gone.
+contrib.quickjs answers the last QuickJS ask and `ae/naeb/qjsgap/` is gone.
 The sandbox now uses `quickjs.set_cancel_cell` and `set_stop_cell` (the Run's
 cancel cell and replay's divergence cell, both owned by the caller and freed
 after `dispose`, so nothing is unset), `set_deadline_ns(q, now_ns() + remaining)`
@@ -608,7 +608,7 @@ unchanged):
   seen failing once on ae-x64; not reproduced in about 200 runs there (alone,
   four at once, under eight CPU burners, six whole-file runs), and the log of
   the failure was not kept. Its last check is that the detached job's
-  processes are gone when `nib ask` has exited. Upstream's process.run
+  processes are gone when `naeb ask` has exited. Upstream's process.run
   returns only after the group has closed its stdout pipe (500 ms cap), which
   a SIGKILLed process does late in its exit; the port writes output to a file
   and returned right after the kill. tools.process now waits, up to the same

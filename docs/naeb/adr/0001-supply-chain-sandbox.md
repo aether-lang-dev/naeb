@@ -8,7 +8,7 @@ date: 2026-11-15
 naeb's own ADR series, separate from upstream's `docs/adr/` numbering. It
 extends upstream's [ADR 0004](../../adr/0004-two-layer-isolation.md) (write-only
 workspace sandbox) and [0006](../../adr/0006-deny-dangerous-commands.md)
-(deny-list, credential paths) without changing them: `nib` stays as upstream,
+(deny-list, credential paths) without changing them: `naeb` stays as upstream,
 and everything here is `naeb`'s, the second binary.
 
 ## Threat
@@ -19,7 +19,7 @@ plugins), and a prompt-injected model driving naeb's tools. The attacker
 wants to:
 
 1. read secrets: `~/.ssh`, `~/.aws`, `~/.config/gh`, browser profiles,
-   keychains, `~/.nib/auth.json`, secrets in environment variables;
+   keychains, `~/.naeb/auth.json`, secrets in environment variables;
 2. send them out over the network;
 3. persist: shell rc files, LaunchAgents and systemd user units, git hooks,
    other projects, `~/.m2/settings.xml`;
@@ -50,11 +50,11 @@ are not limited at all.
 
 ## Decision
 
-**One policy object, two layers.** naeb builds a `Fence` (`nib.fence`)
-from the policy library (`nib.fence.policy`): reads allowed and denied,
+**One policy object, two layers.** naeb builds a `Fence` (`naeb.fence`)
+from the policy library (`naeb.fence.policy`): reads allowed and denied,
 extra writable roots, paths inside the roots that stay read-only, egress
 `host:port` pairs, environment variables passed to or set for children. It
-is an instance handed from `nib.app.run_naeb` to the Session's Tools;
+is an instance handed from `naeb.app.run_naeb` to the Session's Tools;
 nothing is module state. The in-process tools check it (layer 1); the same Fence
 becomes a jail spec for every child process naeb starts: bash, background
 bash, hooks, MCP stdio servers (layer 2). Sub-agents are naeb itself, re-run from
@@ -63,9 +63,9 @@ the same checks.
 
 **Fail closed.** naeb always has a Fence: a project without `naeb.ae` gets
 the default one (the project only, no egress) and a one-line notice. There
-is no `naeb --unfenced`; that is `nib`. A child is never started
+is no `naeb --unfenced`; that is `naeb`. A child is never started
 unconfined: where the OS jail cannot be applied, the command is refused with
-the reason. `nib` has no Fence and nothing changes there (upstream's
+the reason. `naeb` has no Fence and nothing changes there (upstream's
 off/workspace behaviour and its tests stay as they are).
 
 ### Reads
@@ -79,7 +79,7 @@ A fenced child's environment always carries the Fence's `$HOME`. A built-in deny
 `~/.aws`, `~/.gnupg`, `~/.config/gh`, `~/.kube`, `~/.docker`, `~/.netrc`,
 `~/.git-credentials`, `~/.npmrc`, `~/.pypirc`, `~/.gem/credentials`,
 `~/.m2/settings*.xml`, `~/.gradle/gradle.properties`, cloud CLIs, browser
-profiles, keychains, `$NIB_HOME`, `~/.codex`) wins even inside an allowed
+profiles, keychains, `$NAEB_HOME`, `~/.codex`) wins even inside an allowed
 path, except where the Fence allows that exact path. A deny-list alone was
 rejected: secrets live in too many places to list, and a home-closed default
 makes a missing entry fail visibly (a denial) instead of silently (a leak).
@@ -192,13 +192,13 @@ localhost on macOS and is a named hole.
 | Abstract Unix sockets | network namespace (abstract names are per netns); also Landlock scope (ABI 6) | n/a |
 | Daemons, `setsid`, double fork | the restriction is inherited by every descendant; no unconfined process is reachable (sockets above) | same; `launchctl submit` fails inside `sandbox-exec` (observed, not explained); `(deny lsopen)` stops `open` (verified) |
 | Apple events (`osascript` driving Terminal) | n/a | `(deny appleevent-send)`, **unverified** (testing it would prompt) |
-| ptrace, `/proc/<naeb>/environ`, signals | Landlock limits ptrace and sensitive `/proc` files to the domain; the user namespace too; signal scope (ABI 6) | a child *can* read naeb's initial environment through `KERN_PROCARGS2` (verified; no SBPL operation stops it without breaking the child): under a Fence naeb moves its environment to the heap and zeroes the initial area first thing (`jail.scrub_environ`). Pointers `os.getenv` returned before then are zeroed too, so `nib.fence` copies every string it is handed |
+| ptrace, `/proc/<naeb>/environ`, signals | Landlock limits ptrace and sensitive `/proc` files to the domain; the user namespace too; signal scope (ABI 6) | a child *can* read naeb's initial environment through `KERN_PROCARGS2` (verified; no SBPL operation stops it without breaking the child): under a Fence naeb moves its environment to the heap and zeroes the initial area first thing (`jail.scrub_environ`). Pointers `os.getenv` returned before then are zeroed too, so `naeb.fence` copies every string it is handed |
 | Secrets in the environment | children get an allow-list environment (`PATH`, `HOME`, locale, terminal, temp, user/shell names, toolchain homes) plus `Fence.pass_env` names plus the proxy variables | same |
 | Clipboard, TUI `open` | run from naeb's own unconfined process, on the user's action; the model can no longer read secrets in-process, so it has nothing secret to place there | same |
 | MCP stdio servers, hooks | started inside the same jail spec | same |
 | Keychain | home-closed reads deny the login keychain file; `security dump-keychain` then lists only the System keychain (observed) | |
 | Other spellings of a fenced file in-process: case, `/.vol`, `/System/Volumes/Data`, `/dev/fd`, `/proc/self/fd`, a symlink swapped in after the check | in-process tools decide on the opened descriptor (Reads, "Path identity") | same; case, `/.vol` and the firmlink are macOS's own |
-| Inherited descriptors (`c-devfd`): a descriptor naeb was started with, open on a fenced file, reaches every child, and Landlock and SBPL check opens, not descriptors already open | naeb marks every inherited descriptor above 2 close-on-exec first thing (`atomic_file.cloexec_inherited`, from `/proc/self/fd`); `nib` keeps upstream's behaviour | same, from `/dev/fd` |
+| Inherited descriptors (`c-devfd`): a descriptor naeb was started with, open on a fenced file, reaches every child, and Landlock and SBPL check opens, not descriptors already open | naeb marks every inherited descriptor above 2 close-on-exec first thing (`atomic_file.cloexec_inherited`, from `/proc/self/fd`); `naeb` keeps upstream's behaviour | same, from `/dev/fd` |
 | An allowed name that resolves (or rebinds) to a local service (`c-rebind`, `i-fetch-rebind`) | the proxy resolves the name itself and connects to an address it vetted, never re-resolving: loopback, private (RFC 1918, ULA, `fec0::/10`), carrier-grade NAT (`100.64/10`), link-local, unspecified, multicast and reserved addresses, and IPv4-mapped, IPv4-compatible, NAT64 and 6to4 forms of them, only when an `allow_host` names that very address for the port (a wildcard or a name never does). The refusal is an `egress` record with `reason` ("resolves to 127.0.0.1, a loopback address") and a suggestion naming the address | same |
 
 ### naeb restricting its own process: not now
@@ -243,7 +243,7 @@ build`. Where the records are:
   carries `fence_denied`; an uncaught one prints it after the stack;
 - a sub-agent: its Runs' records reach the parent through `run_end`
   (`fence_denied`) and the agent result's `fence_denied`;
-- the model is told the field in the fenced tool table; `nib`, with no
+- the model is told the field in the fenced tool table; `naeb`, with no
   Fence, keeps upstream's shapes and descriptions.
 
 In detail:
@@ -289,7 +289,7 @@ In detail:
     from the caller (`process_vm_readv`; the relay is its ancestor), resolves
     it as the caller sees it, checks it against the grants the command's
     Landlock domain holds (and the read-only binds), writes a refused one to
-    a report file of the command's own under `$NIB_HOME/run`, and lets the
+    a report file of the command's own under `$NAEB_HOME/run`, and lets the
     call continue (`SECCOMP_USER_NOTIF_FLAG_CONTINUE`). Landlock still
     decides; the relay only names what it will refuse, so an ordinary
     permission failure (a `chmod 000` file inside the grants) is never named.
@@ -317,7 +317,7 @@ In detail:
 
 ### The policy in force, visible
 
-`tools.fence()` (only under naeb; not in upstream's table, so `nib` has no
+`tools.fence()` (only under naeb; not in upstream's table, so `naeb` has no
 such tool) returns the fence as data: `platform`, `policy` (`file`,
 `sha256`, `library`, `library_sha256`, as the build record vouched for them
 at start; `null` for the default fence), `project`, `home`, `home_open`,
@@ -379,12 +379,12 @@ is the planned next step (TODO.md).
   `policy.allow_host(p, "host", port)` with a plain argument (printable
   ASCII, no quote, backslash, `$` or brace) or `policy.maven_broker(p)` are
   not offered.
-  Suggestions are grouped (`nib.fence.proposal`) so a build tool refused on
+  Suggestions are grouped (`naeb.fence.proposal`) so a build tool refused on
   thousands of files is one line: one `allow_host` per `host:port`; paths
   under their nearest common directory, unless that directory is `$HOME`,
   contains it, is `/` (or, outside `$HOME`, has fewer than two components),
   or is, contains or lies in a forbidden path (the secrets list, the
-  policy's own denials, the project, `$NIB_HOME`), in which case each
+  policy's own denials, the project, `$NAEB_HOME`), in which case each
   directory directly below it is grouped on its own. So refusals under
   `~/.m2/repository` and `~/.m2/wrapper/dists/...` become two lines, never
   `~/.m2` (it holds `settings.xml`). A write line also answers the read
@@ -392,7 +392,7 @@ is the planned next step (TODO.md).
 - **Never a forbidden path, grouped or not** (2026-11-16, after a real run
   offered `policy.allow_write(p, "~/.m2")` for mvnw's `mkdir ~/.m2`: the
   check above applied only to groups, a single refusal passed as itself).
-  Every refusal is vetted first (`nib.fence.proposal.vet`, also when the
+  Every refusal is vetted first (`naeb.fence.proposal.vet`, also when the
   record is made, so the model sees the same): a path that is a forbidden
   path, lies in one or holds one gets no line but a `note` saying why
   (`not offered: ~/.m2 holds ~/.m2/settings.xml, which naeb keeps closed;
@@ -409,8 +409,8 @@ is the planned next step (TODO.md).
   fetches its dependencies into ~/.m2 after checks, builds run offline`).
   With the broker already on such a refusal is a note pointing at
   `tools.maven_fetch` (and at the wrapper's distribution, below), so the
-  broker is not offered again. `nib.fence` detects the project's shape and
-  passes it in (`proposal.Scope`); `nib.fence.proposal` stays pure.
+  broker is not offered again. `naeb.fence` detects the project's shape and
+  passes it in (`proposal.Scope`); `naeb.fence.proposal` stays pure.
 - **When.** Never while a Turn runs or the user is typing: once the Turn
   ends (and the input is empty, no `/provider` flow or pinned menu is open)
   everything collected since the last prompt is one prompt, duplicates
@@ -429,7 +429,7 @@ is the planned next step (TODO.md).
   ptr)` bodies, another parameter name, the closing `}` not on a line of its
   own, an unterminated string or comment, unbalanced braces), naeb.ae is not
   touched: the lines are shown to add by hand and build with `naeb build`.
-- **Applying** (naeb's own unconfined code, on the user's key; `nib.fence.
+- **Applying** (naeb's own unconfined code, on the user's key; `naeb.fence.
   policy.approve`, on a worker thread): refused, with naeb.ae untouched,
   when naeb.ae on disk is no longer what the prompt was made from or its
   SHA-256 is not the one the policy in force was built from (someone else
@@ -475,7 +475,7 @@ is the planned next step (TODO.md).
 
 ### The policy interface
 
-The library carries no copy of `nib.fence` or of anything whose memory
+The library carries no copy of `naeb.fence` or of anything whose memory
 layout naeb owns, so a naeb update cannot meet a policy built against
 other layouts. naeb passes a table of C function pointers and its version:
 
@@ -508,10 +508,10 @@ later ecosystem's broker needs no new field; naeb refuses a policy that
 uses a name it does not know (exit 2, the name given), so a policy never
 silently means less than it says.
 
-- naeb's side is `ae/nib/fence/policy/policy_host.c`: `dlopen(RTLD_NOW |
+- naeb's side is `ae/naeb/fence/policy/policy_host.c`: `dlopen(RTLD_NOW |
   RTLD_LOCAL)`, `dlsym` of the two exports, the version check, the call. Each
   call through the table is copied (`strdup`) into a list of operations
-  that `nib.fence.policy` then applies to the Fence in Aether; the policy's
+  that `naeb.fence.policy` then applies to the Fence in Aether; the policy's
   strings never outlive its call.
 - The policy's side is the `naeb.policy` module (`ae/policy_lib/naeb/policy`),
   which declares the table field for field and calls through it. `naeb
@@ -573,7 +573,7 @@ fence(p: ptr) {
   `~/.m2/wrapper/dists/<name>/<hash>` when that directory exists, else
   downloads `distributionUrl` itself: `<name>` is the URL's file name
   without extension and `-bin` (`apache-maven-3.9.16`), `<hash>` Java's
-  `String.hashCode` of the URL as written, unsigned hex (`nib.maven.wrapper`,
+  `String.hashCode` of the URL as written, unsigned hex (`naeb.maven.wrapper`,
   checked against mvnw's own `hash_string`). With the broker on, that URL
   is a coordinate, `org.apache.maven:apache-maven:zip:bin:<v>` (also
   accepted version first, `...:3.9.16:bin:zip`): `tools.maven_fetch` fetches
@@ -614,7 +614,7 @@ fence(p: ptr) {
   call, rerun. It lives in the table (seen whenever the broker is on)
   rather than as a `SKILL.md`, which a Session loads only when configured.
 - **naeb's own resolver, no build tool.** The fetch runs in naeb's
-  unconfined process (`nib.maven.*`): POMs are parsed (`std.xml`), never
+  unconfined process (`naeb.maven.*`): POMs are parsed (`std.xml`), never
   built; no Maven, mvnw, Gradle or JVM is started, so no plugin, extension
   or build script runs outside the fence. aeb's `aeb-resolve.jar` (bld's
   resolver) was considered and not used: it needs a JVM, downloads straight
@@ -644,7 +644,7 @@ fence(p: ptr) {
      repository publishes must match; none published is a refusal.
   4. *Signatures:* where the repository has a `.asc`, an OpenPGP v4
      signature (RSA or Ed25519; SHA-1/224/256/384/512) is verified in Aether
-     (`nib.maven.pgp`, std.cryptography) against the keyring: a bad or
+     (`naeb.maven.pgp`, std.cryptography) against the keyring: a bad or
      unreadable signature is a refusal; a key not in the keyring is recorded
      as `unknown key <fingerprint>` and allowed unless
      `maven_require_signatures`. The keyring is trusted as given (no expiry,
@@ -739,7 +739,7 @@ fence(p: ptr) {
 Paths may start with `~/`; `deny_write` paths may be relative to the
 project. `naeb build` compiles it (`ae build --emit=lib --lib
 <checkout>/ae/policy_lib`). Templates live under
-`ae/policy_lib/naeb_templates/` (`maven`, `gradle`, `npm`), outside `nib.*`.
+`ae/policy_lib/naeb_templates/` (`maven`, `gradle`, `npm`), outside `naeb.*`.
 
 ## Red-team plan
 
@@ -798,7 +798,7 @@ mode) the same fixtures find 15 holes on macOS.
 ## Implementation order
 
 1. Red-team fixtures, failing on today's code. *Done.*
-2. `nib.fence`, consulted by the in-process tools; the egress proxy for
+2. `naeb.fence`, consulted by the in-process tools; the egress proxy for
    `tools.fetch`. *Done.*
 3. Child enforcement: reads, writes, read-only paths, the proxy and its
    confinement, Unix sockets, the environment; bash, hooks, MCP stdio.
@@ -817,7 +817,7 @@ mode) the same fixtures find 15 holes on macOS.
 
 - Under naeb every project gets reads, writes and egress confined on Linux
   (kernel with user namespaces; Landlock ABI 1+) and macOS; `naeb.ae` widens
-  the default fence. `nib` behaves as upstream.
+  the default fence. `naeb` behaves as upstream.
 - Toolchains need their `$HOME` paths and hosts declared; the first runs
   of a new project hit denials until `naeb.ae` has them.
 - `naeb build` needs `ae` on `PATH` and the naeb-code checkout naeb was
