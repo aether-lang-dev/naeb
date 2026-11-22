@@ -136,7 +136,7 @@ reads it.
 | `src/provider/codex_ws.zig`, `websocket.zig` | 523 | not ported |  | policy: API keys only |
 | `src/config.zig` | 1680 | `ae/naeb/config/module.ae`, `ae/naeb/config/env/module.ae` | a2dd439 | no Codex provider ([codex] validated and ignored); default service anthropic |
 | `src/mcp.zig`, `src/mcp/*` | 700 | `ae/naeb/mcp/module.ae`, `mcp/mcp_index`, `mcp/mcp_headers`, `mcp/mcp_transport` | a2dd439 | stdio over os.run_stdio (newline-delimited JSON-RPC; stderr discarded and cwd set by os.run_stdio; kill by pid, no process group); Streamable HTTP on std.http.client from a worker thread; no environment proxy |
-| `src/main.zig` | 311 | `ae/main.ae` | a2dd439 | ask, js, login/logout, help, version, __jail; bare `naeb` opens the TUI (`run_tui_`); `naeb replay` with its three error texts; no update |
+| `src/main.zig` | 311 | `ae/naeb_unfenced_main.ae` | a2dd439 | ask, js, login/logout, help, version, __jail; bare `naeb` opens the TUI (`run_tui_`); `naeb replay` with its three error texts; no update |
 | `src/replay.zig` | 541 | `ae/naeb/run_replay/module.ae` | a2dd439 | renamed (basename `replay` is the core's) |
 | `src/image.zig` | 324 | `ae/naeb/image/module.ae` | a2dd439 | images are JSON texts (the log's `images` entries); binary-safe reads; SHA-256 hash name; Attached/Target for the Run's images; pastedPath, and read_pasted for the TUI's stat-then-read |
 | `src/tui.zig` | 1911 | `ae/naeb/tui/module.ae` | 7788541 | the App; takes term, Session port and clock; app events through `naeb.tui.app_queue`; the Ticker is the poll timeout; the clipboard reader is an instance field (upstream's test override) |
@@ -446,7 +446,7 @@ Runs after the `/js` Run, so later background progress attaches to its Run,
 and `naeb.tui.live`'s idle tick now drains the due progress snapshots
 (upstream's `.tick` with no Turn). `tui_app_test.ae` has a spec for both.
 
-**`tools/check_layers.sh`** pins the imports of every module (ae/main.ae and
+**`tools/check_layers.sh`** pins the imports of every module (ae/naeb_unfenced_main.ae and
 every ae/naeb module; an unpinned one fails). Who may start a program is the
 compiler's rule since Aether 0.911.0 (`import ns hiding (...)`, aether
 #3653): every std.os import outside tools/process and tools/jail hides
