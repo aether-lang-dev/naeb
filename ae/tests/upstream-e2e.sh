@@ -33,27 +33,15 @@ fi
 mkdir -p zig-out/bin
 ln -sf ../../ae/tests/nib-oracle-launcher.py zig-out/bin/nib
 
-# What the skipped tests assert, with naeb's name.
-unknown=$("$BIN" --x 2>&1 >/dev/null)
-if [ "$unknown" != "naeb: Unknown option: --x · run naeb --help" ]; then
-    echo "FAIL naming: unknown-option message is: $unknown" >&2
-    exit 1
-fi
-case $("$BIN" --version) in "naeb "*) ;; *) echo "FAIL naming: --version" >&2; exit 1 ;; esac
-
 # The tests that apply, one per line: FILE, then the tests left out of it
 # (substrings of Class.method, run through ae/tests/run_upstream.py) and
 # why. A file with nothing left out runs as upstream runs it.
 #   Codex*/codex: policy (API keys only, no Codex sign-in or WebSocket)
-#   renamed: the test asserts upstream's program name `nib` in a message the
-#   port words with `naeb` (test_help_without_configuration: "nib: Unknown
-#   option"; test_policy_rejection_does_not_start_background_job: "refused by
-#   nib"). The two messages are checked here with the new name instead.
-#   Left out whole: tests/test_model.py, a single script that waits for the
-#   TUI text "NIB_PROVIDER overrides at startup"; naeb says NAEB_PROVIDER.
-#   ae/tests/tui_commands_test.ae and tui_provider_flow_test.ae cover the model
-#   commands; the override notice itself is asserted nowhere else yet.
-APPLY="tests/test_cli.py|test_help_without_configuration
+#   Files run through ae/tests/run_upstream.py also get its SUBS table: the few
+#   assertions that pin the program name `nib` in a message, or `.nib` as the
+#   default home, are read as naeb's wording in memory; the file on disk is
+#   never touched (test_cli, test_session, test_model, test_background_bash).
+APPLY="tests/test_cli.py
 tests/test_providers.py
 tests/test_session.py
 tests/test_files.py
@@ -66,11 +54,12 @@ tests/test_agent.py|CodexTests
 tests/test_agent_fork.py|CodexForkTests
 tests/test_agent_reuse.py|CodexTests
 tests/test_background_agent.py|CodexTests
-tests/test_background_bash.py|CodexTests test_policy_rejection_does_not_start_background_job
+tests/test_background_bash.py|CodexTests
 tests/test_background_run.py|codex
 tests/test_replay.py
 tests/test_tui_stream.py
 tests/test_tui_mouse.py
+tests/test_model.py
 tests/test_undo.py
 tests/test_interjections.py
 tests/test_at_files.py
@@ -100,7 +89,8 @@ for f in $files; do
            [ -n "$entry" ] && skips=${entry#*|} ;;
     esac
     name=$(basename "$f" .py)
-    if [ -n "$skips" ]; then
+    case $name in test_cli|test_session|test_model) via_runner=1 ;; *) via_runner=0 ;; esac
+    if [ -n "$skips" ] || [ "$via_runner" = 1 ]; then
         # shellcheck disable=SC2086
         (cd tests && timeout 1800 python3 ../ae/tests/run_upstream.py "$name.py" $skips > "$LOGS/$name.log" 2>&1)
     else
