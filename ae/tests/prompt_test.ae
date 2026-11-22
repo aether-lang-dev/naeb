@@ -110,7 +110,7 @@ main() {
             spec.assert_true(has_(prompt_text, "{superseded_by}"), "format escape rendered")
             spec.assert_false(has_(prompt_text, "{s}"), "no marker left")
             spec.assert_false(has_(prompt_text, "{d}"), "no marker left")
-            spec.assert_true(has_(prompt_text, "You are naeb, a coding agent working in /work.\n"), "cwd")
+            spec.assert_true(has_(prompt_text, "You are nib, a coding agent working in /work.\n"), "cwd")
             // Upstream-complete documentation: every tool is checked against
             // tools.all_docs().
             full = prompt.render_system("/work", tools.all_docs(), 16384 as long, "", "gpt-6.1-sol")

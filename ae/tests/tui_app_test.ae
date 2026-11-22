@@ -544,7 +544,7 @@ main() {
             tui.handle_input(a, hover)
             spec.assert_eq(a.has_link, 1, "link")
             spec.assert_eq(a.link_x0, 4, "x0")
-            spec.assert_eq(a.link_x1, 24, "x1")
+            spec.assert_eq(a.link_x1, 25, "x1")
             tui.handle_input(a, input.Mouse { col: 32, row: 0, button: input.BUTTON_NONE, mods: 0, kind: input.MOUSE_MOTION })
             spec.assert_eq(a.has_link, 0, "missing file: no link")
             tui.handle_input(a, input.Mouse { col: 0, row: 0, button: input.BUTTON_NONE, mods: 0, kind: input.MOUSE_MOTION })

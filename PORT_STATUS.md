@@ -47,7 +47,8 @@ configuration is `NAEB_*` and `~/.naeb`, where upstream has `NIB_*` and
 `zig-out/bin/nib` and `NIB_*`, are run through `ae/tests/nib-oracle-launcher.py`,
 which translates the names (see `ae/tests/upstream-e2e.sh`). The Session log
 header keeps upstream's `nib_version` field so upstream's `scripts/stats.py`
-reads it.
+reads it. The system prompt still opens "You are nib",
+because upstream's tests/test_session.py asserts it.
 
 ## Decisions (Paul, 2026-11-12)
 

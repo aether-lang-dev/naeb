@@ -29,7 +29,9 @@ os.chdir(ROOT / "tests")
 import test_interjections as tui  # noqa: E402
 from test_interjections import Reply, fixture, screen, wait_for  # noqa: E402
 
-tui.BIN = Path(os.environ.get("NAEB_UNFENCED", ROOT / "target/build/bin/naeb-unfenced"))
+# Upstream's fixture configures the program through NIB_* variables, so it runs
+# through the launcher that translates them to NAEB_* (see that file).
+tui.BIN = ROOT / "ae/tests/nib-oracle-launcher.py"
 
 
 def status_line(terminal):

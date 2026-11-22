@@ -18,7 +18,7 @@ import os
 import sys
 
 root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
-real = os.path.join(root, "target", "build", "bin", "naeb-unfenced")
+real = os.environ.get("NAEB_UNFENCED", os.path.join(root, "target", "build", "bin", "naeb-unfenced"))
 env = {}
 for key, value in os.environ.items():
     if key.startswith("NIB_"):
