@@ -48,7 +48,10 @@ configuration is `NAEB_*` and `~/.naeb`, where upstream has `NIB_*` and
 which translates the names (see `ae/tests/upstream-e2e.sh`). The Session log
 header keeps upstream's `nib_version` field so upstream's `scripts/stats.py`
 reads it. The system prompt still opens "You are nib",
-because upstream's tests/test_session.py asserts it.
+because upstream's tests/test_session.py asserts it. Two more names stay
+upstream's as shared contracts that upstream's tests use: the project skills
+directory `.nib/skills`, and the hook variables `NIB_EVENT`, `NIB_FILES` and
+`NIB_TURN_STATUS`.
 
 ## Decisions (Paul, 2026-11-12)
 

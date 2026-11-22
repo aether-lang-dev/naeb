@@ -49,6 +49,10 @@ case $("$BIN" --version) in "naeb "*) ;; *) echo "FAIL naming: --version" >&2; e
 #   port words with `naeb` (test_help_without_configuration: "nib: Unknown
 #   option"; test_policy_rejection_does_not_start_background_job: "refused by
 #   nib"). The two messages are checked here with the new name instead.
+#   Left out whole: tests/test_model.py, a single script that waits for the
+#   TUI text "NIB_PROVIDER overrides at startup"; naeb says NAEB_PROVIDER.
+#   ae/tests/tui_commands_test.ae and tui_provider_flow_test.ae cover the model
+#   commands; the override notice itself is asserted nowhere else yet.
 APPLY="tests/test_cli.py|test_help_without_configuration
 tests/test_providers.py
 tests/test_session.py
@@ -67,7 +71,6 @@ tests/test_background_run.py|codex
 tests/test_replay.py
 tests/test_tui_stream.py
 tests/test_tui_mouse.py
-tests/test_model.py
 tests/test_undo.py
 tests/test_interjections.py
 tests/test_at_files.py

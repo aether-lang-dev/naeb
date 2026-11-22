@@ -61,12 +61,15 @@ port is renamed to match.
   latest release.
 - **Names.** Everything the port names itself is `naeb`: the commands, the
   `NAEB_*` environment variables (upstream's `NIB_*`), `~/.naeb` (upstream's
-  `~/.nib`), `.naeb/skills` in a project, and the Aether modules under
+  `~/.nib`), and the Aether modules under
   `ae/naeb/`. Upstream's documents under `docs/` still say `nib` and `NIB_*`;
   read them with that substitution. Two names are deliberately still upstream's:
   the field `nib_version` in the Session log header, kept as upstream writes it
   so that upstream's `scripts/stats.py` reads naeb's logs, and the words "You
   are nib" that open the system prompt, which upstream's own test asserts.
+  Also still upstream's, because they are shared contracts and upstream's
+  tests use them: `.nib/skills` inside a project, and `NIB_EVENT`, `NIB_FILES`
+  and `NIB_TURN_STATUS`, the variables a hook command receives.
 
 ## Licence
 

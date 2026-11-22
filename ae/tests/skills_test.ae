@@ -236,7 +236,7 @@ main() {
 
         spec.it("load reads the four roots in order") callback {
             d = tmp_()
-            dirs = [".agents/skills", "naebhome/skills", "proj/.agents/skills", "proj/.naeb/skills"]
+            dirs = [".agents/skills", "naebhome/skills", "proj/.agents/skills", "proj/.nib/skills"]
             i = 0
             while i < 4 {
                 fs.mkdir_p("${d}/${dirs[i]}/s")
@@ -252,7 +252,7 @@ main() {
             spec.assert_str_eq(skills.source("${d}/.agents/skills/only/SKILL.md", "${d}/naebhome", d, "${d}/proj"), "~/.agents/skills", "user label")
             spec.assert_str_eq(skills.source("${d}/naebhome/skills/s/SKILL.md", "${d}/naebhome", d, "${d}/proj"), "$NAEB_HOME/skills", "home label")
             spec.assert_str_eq(skills.source("${d}/proj/.agents/skills/s/SKILL.md", "${d}/naebhome", d, "${d}/proj"), ".agents/skills", "project agents label")
-            spec.assert_str_eq(skills.source("${d}/proj/.naeb/skills/s/SKILL.md", "${d}/naebhome", d, "${d}/proj"), ".naeb/skills", "project naeb label")
+            spec.assert_str_eq(skills.source("${d}/proj/.nib/skills/s/SKILL.md", "${d}/naebhome", d, "${d}/proj"), ".nib/skills", "project naeb label")
             spec.assert_str_eq(skills.source("/elsewhere/SKILL.md", "${d}/naebhome", d, "${d}/proj"), "/elsewhere/SKILL.md", "no label")
             spec.assert_str_eq(skills.source("${d}/.agents/skills", "${d}/naebhome", d, "${d}/proj"), "${d}/.agents/skills", "the root itself has none")
             fs.remove_tree(d)
