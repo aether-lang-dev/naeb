@@ -10,8 +10,8 @@ import std.spec
 import std.string
 import std.strbuilder
 import term.screen
-import nib.tui.markdown
-import nib.tui.syntax
+import naeb.tui.markdown
+import naeb.tui.syntax
 
 struct Shot {
     surf: *screen.Surface

@@ -3,8 +3,8 @@
 import std.spec
 import std.string
 import std.list
-import nib.session.tool_summary
-import nib.tui.label
+import naeb.session.tool_summary
+import naeb.tui.label
 
 add_count_(s: *tool_summary.Summary, name: string, n: int) {
     c = heap.new(tool_summary.Count)

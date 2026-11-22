@@ -17,7 +17,7 @@ import std.bytes
 import std.strbuilder
 import std.cryptography
 import std.encoding
-import nib.image
+import naeb.image
 
 hexv_(c: int) -> int {
     if c >= 48 && c <= 57 { return c - 48 }
@@ -90,7 +90,7 @@ webp_(tag: string) -> ptr {
 }
 
 tmp_() -> string {
-    d, _e = fs.make_temp_dir("", "nib-image")
+    d, _e = fs.make_temp_dir("", "naeb-image")
     real, _k, _m = fs.realpath(d)
     return real
 }

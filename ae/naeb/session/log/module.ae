@@ -1,6 +1,6 @@
 // session.log: the append-only Session log (upstream src/session/log.zig;
 // docs/session-log.md). One JSON record per line under
-// $NIB_HOME/sessions/<id>.jsonl, created 0600 and held under an exclusive
+// $NAEB_HOME/sessions/<id>.jsonl, created 0600 and held under an exclusive
 // flock while a Session uses it. Records are stamped with `at` (Unix ms);
 // a commit record replaces history[from..] with its messages, so replaying
 // every record rebuilds the safe history. A torn last line is repaired on
@@ -27,12 +27,12 @@ import std.string
 import std.fs
 import std.dir
 import std.time
-import nib.jsonx
-import nib.lock
-import nib.msg
+import naeb.jsonx
+import naeb.lock
+import naeb.msg
 import std.io
-import nib.fserr
-import nib.provider.types
+import naeb.fserr
+import naeb.provider.types
 
 exports(Log, Replayed, Summary, create, restore, close, commit, event, background, replay, list_sessions,
         latest, first_line)

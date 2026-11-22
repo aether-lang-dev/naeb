@@ -367,14 +367,14 @@ def main(argv):
     work = tempfile.mkdtemp(prefix="esc-", dir=scratch)
     home = os.path.realpath(os.path.join(work, "home"))
     proj = os.path.join(home, "work", "proj")
-    nib_home = os.path.join(home, ".nib")
+    naeb_home = os.path.join(home, ".naeb")
     hexid = secrets.token_hex(6)
     canary_ssh = "CANARY-ssh-" + secrets.token_hex(6)
     canary_auth = "CANARY-auth-" + secrets.token_hex(6)
     canary_env = "CANARY-env-" + secrets.token_hex(6)
     key = os.path.join(home, ".ssh", "id_ed25519")
-    auth = os.path.join(nib_home, "auth.json")
-    for d in (".ssh", ".nib", "Library/LaunchAgents", ".config/systemd/user"):
+    auth = os.path.join(naeb_home, "auth.json")
+    for d in (".ssh", ".naeb", "Library/LaunchAgents", ".config/systemd/user"):
         os.makedirs(os.path.join(home, d))
     os.makedirs(os.path.join(proj, ".git", "hooks"))
     os.makedirs(os.path.join(proj, "node_modules", "evil"))
@@ -416,7 +416,7 @@ def main(argv):
     env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "HOME": home,
-        "NIB_HOME": nib_home,
+        "NAEB_HOME": naeb_home,
         "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
         "LANG": "C.UTF-8",
         "SERVICE_PASSWORD": canary_env,
@@ -446,7 +446,7 @@ def main(argv):
     os.symlink(sock_path, os.path.join(proj, "link-sock"))
     upper_home = os.path.join(os.path.dirname(home), os.path.basename(home).upper())
     case_key = os.path.join(upper_home, ".ssh", "id_ed25519")
-    case_auth = os.path.join(upper_home, ".nib", "auth.json")
+    case_auth = os.path.join(upper_home, ".naeb", "auth.json")
     case_sock = os.path.join(upper_home, "planted.sock")
     case_insensitive = same_file(case_key, key)
     # every component in another case: no rule string covers it at all
@@ -658,7 +658,7 @@ def main(argv):
             print("fixture broken: %s is not the fixture's %s" % (alias, target))
             cleanup()
             return 100
-    assert env["HOME"] == home and inside_home(nib_home) and inside_home(key) and inside_home(auth)
+    assert env["HOME"] == home and inside_home(naeb_home) and inside_home(key) and inside_home(auth)
 
     lines = ["const out = {};"]
     for name, (cmd, _p, _c) in child.items():

@@ -1,9 +1,9 @@
 # Compiler: `xs.push(f())` loses the string fields of a struct returned by `f`
 
-**From:** the nib Aether port (`aether-port` branch of paul-hammant/nib-code), its TUI slice.
+**From:** the naeb Aether port (`aether-port` branch of aether-lang-dev/naeb), its TUI slice.
 **To:** aether, aetherc 0.909.0.
 **Workaround meanwhile:** bind the call's result to a local, then push the local
-(marked `// workaround: aether-push-call-result-string` in `ae/nib/tui/agent_tree`).
+(marked `// workaround: aether-push-call-result-string` in `ae/naeb/tui/agent_tree`).
 
 ```
 struct R { text: string  k: int }

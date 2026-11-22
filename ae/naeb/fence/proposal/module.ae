@@ -2,12 +2,12 @@
 // refused something (docs/naeb/adr/0001, "Approval in the TUI"). Pure text:
 // the refusal records' suggestions grouped into as few lines as are safe,
 // where they go in naeb.ae, and the unified diff the user approves. Reading
-// and writing naeb.ae, the build and the reload are nib.fence.policy's.
+// and writing naeb.ae, the build and the reload are naeb.fence.policy's.
 //
 // Grouping: one allow_host line per host:port; read and write paths under
 // their nearest common directory, unless that directory is $HOME, contains
 // $HOME, is or contains a forbidden path (the secrets list, the policy's
-// own denials, the project, $NIB_HOME) or lies inside one; then each
+// own denials, the project, $NAEB_HOME) or lies inside one; then each
 // subdirectory below it is grouped on its own. A write line also answers
 // the read refusals beneath it (a writable root is readable).
 //

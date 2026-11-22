@@ -9,7 +9,7 @@ import std.string
 import std.tcp
 import std.worker
 import std.sync
-import nib.auth.models
+import naeb.auth.models
 
 item_(l: ptr, i: int) -> *models.Listed {
     return list.list_get_raw(l, i) as *models.Listed

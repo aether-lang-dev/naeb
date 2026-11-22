@@ -10,13 +10,13 @@ import std.string
 import std.list
 import std.json
 import std.fs
-import nib.image
-import nib.jsonx
-import nib.msg
-import nib.provider.types
-import nib.provider.sink
-import nib.provider.sse
-import nib.provider.anthropic
+import naeb.image
+import naeb.jsonx
+import naeb.msg
+import naeb.provider.types
+import naeb.provider.sink
+import naeb.provider.sse
+import naeb.provider.anthropic
 
 cfg_(model: string) -> ptr {
     return types.new_config("anthropic", "", "", model)
@@ -160,7 +160,7 @@ main() {
         }
 
         spec.it("Anthropic images ride in user blocks and tool results with the cache breakpoint last") callback {
-            d, _e = fs.make_temp_dir("", "nib-anth-img")
+            d, _e = fs.make_temp_dir("", "naeb-anth-img")
             shot, serr = image.store("${d}/images", "shot.png", image.sample_png())
             spec.assert_str_eq(serr, "", "stored")
             cp = cfg_("claude-sonnet-5-5")

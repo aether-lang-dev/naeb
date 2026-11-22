@@ -50,8 +50,8 @@ def main():
     work = tempfile.mkdtemp(prefix="policy-", dir=scratch)
     atexit.register(shutil.rmtree, work, True)
     home = os.path.realpath(os.path.join(work, "home"))
-    nib_home = os.path.join(home, ".nib")
-    os.makedirs(nib_home)
+    naeb_home = os.path.join(home, ".naeb")
+    os.makedirs(naeb_home)
     os.makedirs(os.path.join(home, ".m2", "repository"))
     with open(os.path.join(home, ".m2", "settings.xml"), "w") as f:
         f.write("<settings>CANARY-m2</settings>\n")
@@ -60,7 +60,7 @@ def main():
     env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "HOME": home,
-        "NIB_HOME": nib_home,
+        "NAEB_HOME": naeb_home,
         "NAEB_SRC": ROOT,
         "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
         "LANG": "C.UTF-8",
@@ -181,7 +181,7 @@ def main():
 
     # A sub-agent is naeb again: it loads the same policy and runs.
     mock = Mock("chat_completions")
-    menv = {"NIB_PROVIDER": "chat_completions", "NIB_API_KEY": mock.key, "NIB_BASE_URL": mock.url}
+    menv = {"NAEB_PROVIDER": "chat_completions", "NAEB_API_KEY": mock.key, "NAEB_BASE_URL": mock.url}
     r = naeb(a, "ask", "--json", "delegate", extra=menv)
     tool = [c["content"] for _, _, req in mock.requests for c in req.get("messages", []) if c.get("role") == "tool"]
     mock.close()

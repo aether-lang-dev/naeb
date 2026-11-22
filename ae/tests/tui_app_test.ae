@@ -1,5 +1,5 @@
 // The TUI app driven in-process: an in-memory terminal (term.memory), a
-// scripted Session (nib.tui.port.scripted) and the terminal's fake clock.
+// scripted Session (naeb.tui.port.scripted) and the terminal's fake clock.
 // No pty, no sleeps: keys and mouse events go in through term.driver, Session
 // events through the scripted port, `tui.step` handles them and the specs read
 // what the terminal shows.
@@ -25,25 +25,25 @@ import term
 import term.screen
 import term.input
 import term.driver
-import nib.provider.types
-import nib.config.env
-import nib.tui
-import nib.tui.port
-import nib.tui.clock
-import nib.tui.app_queue
-import nib.tui.entry
-import nib.tui.transcript
-import nib.tui.editor
-import nib.tui.selection
-import nib.tui.viewport
-import nib.tui.status
-import nib.tui.commands
-import nib.tui.menu
-import nib.tui.paths
-import nib.tui.frames
-import nib.tui.provider_flow
-import nib.tui.clipboard
-import nib.image
+import naeb.provider.types
+import naeb.config.env
+import naeb.tui
+import naeb.tui.port
+import naeb.tui.clock
+import naeb.tui.app_queue
+import naeb.tui.entry
+import naeb.tui.transcript
+import naeb.tui.editor
+import naeb.tui.selection
+import naeb.tui.viewport
+import naeb.tui.status
+import naeb.tui.commands
+import naeb.tui.menu
+import naeb.tui.paths
+import naeb.tui.frames
+import naeb.tui.provider_flow
+import naeb.tui.clipboard
+import naeb.image
 
 struct Rig {
     t: *term.Terminal
@@ -53,7 +53,7 @@ struct Rig {
 }
 
 home_() -> string {
-    d, err = fs.make_temp_dir("", "nibtui")
+    d, err = fs.make_temp_dir("", "naebtui")
     if err != "" { spec.fail("temp dir: ${err}") }
     return d
 }
@@ -524,8 +524,8 @@ main() {
         spec.it("file paths are links only when open is configured; a click runs the command and reports a failed start") callback {
             r = rig_(40, 8)
             a = r.a
-            fs.write("${a.cwd}/nib-open-probe.txt", "x")
-            line = "see nib-open-probe.txt:12 and nope.zig now"
+            fs.write("${a.cwd}/naeb-open-probe.txt", "x")
+            line = "see naeb-open-probe.txt:12 and nope.zig now"
             transcript.add(a.transcript, entry.KIND_ASSISTANT, line)
             a.has_body = 1
             a.body.top = viewport.Anchor { entry: 0, row: 0 }
@@ -557,7 +557,7 @@ main() {
             tui.handle_input(a, input.Mouse { col: 6, row: 0, button: input.BUTTON_LEFT, mods: 0, kind: input.MOUSE_PRESS })
             tui.handle_input(a, input.Mouse { col: 6, row: 0, button: input.BUTTON_NONE, mods: 0, kind: input.MOUSE_RELEASE })
             spec.assert_str_eq(a.notice, "Could not run open-tool", "failed start")
-            fs.delete("${a.cwd}/nib-open-probe.txt")
+            fs.delete("${a.cwd}/naeb-open-probe.txt")
         }
     }
 
@@ -822,8 +822,8 @@ main() {
         spec.it("/fence shows the project fence in force, and exists only under one") callback {
             r = rig_(80, 24)
             tui.execute(r.a, commands.CMD_FENCE, "", "/fence")
-            spec.assert_str_eq(transcript.at(r.a.transcript, 0).text, "unknown command /fence · /help lists commands", "nib: no fence")
-            spec.assert_eq(string.index_of(commands.help_text_fenced("", 0), "/fence"), -1, "nib's help omits it")
+            spec.assert_str_eq(transcript.at(r.a.transcript, 0).text, "unknown command /fence · /help lists commands", "unfenced: no fence")
+            spec.assert_eq(string.index_of(commands.help_text_fenced("", 0), "/fence"), -1, "the unfenced help omits it")
             spec.assert_true(string.index_of(commands.help_text_fenced("", 1), "/fence · the project fence in force") >= 0, "naeb's help lists it")
             r.s.fence = "{\"platform\":\"macos\",\"policy\":{\"file\":\"/h/work/p/naeb.ae\",\"sha256\":\"aa11\",\"library\":\"/h/.naeb/launchers/p-1/policy.dylib\",\"library_sha256\":\"bb22\"},\"project\":\"/h/work/p\",\"home\":\"/h\",\"home_open\":false,\"reads\":[\"/h/.gitconfig\",\"/h/work/p\"],\"read_denied\":[\"/h\",\"/h/.ssh\"],\"writes\":[\"/h/work/p\",\"/tmp\"],\"read_only\":[\"/h/work/p/.git/hooks\"],\"hosts\":[\"repo.example.com:443\"],\"loopback\":false,\"env_passed\":[\"PATH\",\"JAVA_HOME\"],\"env_set\":[\"A=b\"]}"
             tui.execute(r.a, commands.CMD_FENCE, "", "/fence")

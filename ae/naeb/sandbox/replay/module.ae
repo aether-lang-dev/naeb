@@ -16,8 +16,8 @@ import std.list
 import std.string
 import std.sync
 import std.intarr
-import nib.jsonx
-import nib.sandbox
+import naeb.jsonx
+import naeb.sandbox
 
 exports(Entry, Report, END_OK, END_ERROR, END_TIMEOUT, END_CANCELLED,
         new_entry, entry_set_result, entry_set_error, execute, execute_session, json_equal)

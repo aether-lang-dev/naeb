@@ -27,8 +27,8 @@ import std.strbuilder
 import term.screen
 import term.input
 import term
-import nib.tui.entry
-import nib.tui.sel_history
+import naeb.tui.entry
+import naeb.tui.sel_history
 
 exports(Point, Selection, new, take_click, clear, mouse, mouse_in_history, update_history,
         highlight_history, text_in_history, highlight, text, copy)

@@ -5,7 +5,7 @@
 // child_env followed by process.run.
 //
 // Not ported, each because the feature is outside this slice:
-//  - "only the selected API key reaches nib children ...": the inherit_api_key
+//  - "only the selected API key reaches naeb children ...": the inherit_api_key
 //    half has no counterpart; the strip half runs as "custom keys are
 //    stripped from bash".
 // .cwd is expressed as `cd <tmp>` inside the script (process.run has no cwd).
@@ -16,10 +16,10 @@ import std.string
 import std.sync
 import std.worker
 import std.os
-import nib.tools.process
-import nib.tools.bash
-import nib.tools.secrets
-import nib.tools.registry
+import naeb.tools.process
+import naeb.tools.bash
+import naeb.tools.secrets
+import naeb.tools.registry
 
 struct Capture {
     first_ms: long
@@ -38,7 +38,7 @@ new_capture_() -> ptr {
 }
 
 tmp_() -> string {
-    d, _e = fs.make_temp_dir("", "nib-process")
+    d, _e = fs.make_temp_dir("", "naeb-process")
     real, _k, _m = fs.realpath(d)
     return real
 }
@@ -80,12 +80,12 @@ main() {
                 list.list_add(env, "${n}=fictional-secret")
                 i = i + 1
             }
-            list.list_add(env, "NIB_TEST_ORDINARY=kept")
+            list.list_add(env, "NAEB_TEST_ORDINARY=kept")
             child = bash.child_env(bash_ctx_(env))
             r = run_(argv_("env", "", ""), child, null, 1000)
             spec.assert_eq(r.exit_code, 0, "success")
             spec.assert_eq(contains_(r.output, "fictional-secret"), 0, "no secrets reach the child")
-            spec.assert_eq(contains_(r.output, "NIB_TEST_ORDINARY=kept"), 1, "ordinary kept")
+            spec.assert_eq(contains_(r.output, "NAEB_TEST_ORDINARY=kept"), 1, "ordinary kept")
             spec.assert_true(list.list_size(env) == list.list_size(names) + 1, "the base list is untouched")
         }
         spec.it("custom keys are stripped from bash") callback {

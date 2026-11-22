@@ -25,13 +25,13 @@ import std.json
 import std.list
 import std.string
 import std.strbuilder
-import nib.image
-import nib.jsonx
-import nib.msg
-import nib.provider.types
-import nib.provider.sink
-import nib.provider.sse
-import nib.provider.http
+import naeb.image
+import naeb.jsonx
+import naeb.msg
+import naeb.provider.types
+import naeb.provider.sink
+import naeb.provider.sse
+import naeb.provider.http
 
 exports(reasoning_effort, request_body, read_stream, stream, retry_delay_ms, fatal_code)
 

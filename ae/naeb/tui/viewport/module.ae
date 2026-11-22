@@ -13,7 +13,7 @@
 //    Anchor. Anchor is a plain value struct {entry, row}.
 
 import term.screen
-import nib.tui.entry
+import naeb.tui.entry
 
 exports(Anchor, Viewport, new, at_or_after, observe, removed, bottom, toggled, layout, top)
 

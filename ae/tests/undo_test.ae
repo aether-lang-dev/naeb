@@ -1,7 +1,7 @@
 // Ports the tests of upstream src/tools/undo.zig (each under its upstream
 // name), then a few for what the port adds (the Session-facing notice, the
 // private modes). Each test gets its own temp dir holding the project files,
-// the nib data dir (path locks) and the history root; paths are absolute
+// the naeb data dir (path locks) and the history root; paths are absolute
 // (Zig used cwd-relative .zig-cache paths). The Session calls
 // tools.begin_turn_undo / finish_turn_undo / run_undo; the tests do the same.
 import std.spec
@@ -9,12 +9,12 @@ import std.fs
 import std.list
 import std.string
 import std.strbuilder
-import nib.jsonx
-import nib.sandbox
-import nib.tools
-import nib.tools.undo
-import nib.tools.atomic_file
-import nib.tools.file_state
+import naeb.jsonx
+import naeb.sandbox
+import naeb.tools
+import naeb.tools.undo
+import naeb.tools.atomic_file
+import naeb.tools.file_state
 
 struct Fx {
     d: string
@@ -24,17 +24,17 @@ struct Fx {
 }
 
 tmp_() -> string {
-    d, _e = fs.make_temp_dir("", "nib-undo")
+    d, _e = fs.make_temp_dir("", "naeb-undo")
     real, _k, _m = fs.realpath(d)
     return real
 }
 
-// Tools with undo on: history root <d>/undo, nib data dir <d>/nibhome.
+// Tools with undo on: history root <d>/undo, naeb data dir <d>/naebhome.
 fx_() -> *Fx {
     f = heap.new(Fx)
     f.d = tmp_()
     f.t = tools.new(f.d)
-    (f.t as *tools.Tools).data_home = "${f.d}/nibhome"
+    (f.t as *tools.Tools).data_home = "${f.d}/naebhome"
     tools.enable_undo(f.t, "${f.d}/undo")
     f.s = tools.new_scope(f.t, 1)
     f.h = (f.t as *tools.Tools).undo_history
@@ -44,7 +44,7 @@ fx_() -> *Fx {
 // A sub-agent's Tools on the same data dir, snapshotting into the parent's Turn.
 child_(f: *Fx) -> ptr {
     c = tools.new(f.d)
-    (c as *tools.Tools).data_home = "${f.d}/nibhome"
+    (c as *tools.Tools).data_home = "${f.d}/naebhome"
     tools.attach_turn_undo_dir(c, tools.turn_undo_dir(f.t))
     return tools.new_scope(c, 2)
 }
@@ -155,7 +155,7 @@ main() {
             spec.assert_str_eq(read_("${f.d}/victim"), "new", "victim untouched")
             fs.unlink("${f.d}/a")
             fs.write("${f.d}/a", "new")
-            spec.assert_true(contains_(undo_(f), "restored:"), "undo once the file is what nib wrote")
+            spec.assert_true(contains_(undo_(f), "restored:"), "undo once the file is what naeb wrote")
             begin_(f)
             spec.assert_eq(write_(f.s, path, "first"), 1, "write first")
             fs.write("${f.d}/a", "external")
@@ -291,7 +291,7 @@ main() {
             begin_(f)
             spec.assert_eq(write_(f.s, path_(f, "tracked"), "keep"), 1, "tracked write")
             child_active = undo.attach_new(tools.turn_undo_dir(f.t))
-            nh = tools.nib_home(f.t)
+            nh = tools.naeb_home(f.t)
             path = path_(f, "a")
             w = undo.prepare(child_active, nh, path, 0, "", "written")
             spec.assert_true(w != null, "prepared")
@@ -314,7 +314,7 @@ main() {
             begin_(f)
             spec.assert_eq(write_(f.s, path, "first"), 1, "write first")
             active = (f.t as *tools.Tools).undo
-            nh = tools.nib_home(f.t)
+            nh = tools.naeb_home(f.t)
             abandoned = undo.prepare(active, nh, path, 1, "first", "unwritten")
             spec.assert_true(abandoned != null, "abandoned prepared")
             undo.release(abandoned)

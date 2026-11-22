@@ -73,11 +73,11 @@ main() {
             term.copy_to_clipboard(t, "copied text")
             driver.expect_clipboard(t, "copied text")
             spec.assert_contains(term.written(t), "\x1b]52;c;Y29waWVkIHRleHQ=\x1b\\", "OSC 52")
-            term.set_title(t, "nib")
-            spec.assert_str_eq(term.title(t), "nib", "title")
-            term.notify(t, "nib", "done")
+            term.set_title(t, "naeb")
+            spec.assert_str_eq(term.title(t), "naeb", "title")
+            term.notify(t, "naeb", "done")
             spec.assert_eq(term.notifications(t).len, 1, "one notification")
-            spec.assert_contains(term.written(t), "\x1b]777;notify;nib;done\x1b\\", "OSC 777")
+            spec.assert_contains(term.written(t), "\x1b]777;notify;naeb;done\x1b\\", "OSC 777")
         }
         spec.it("turns on what query_terminal finds and turns it all off on close") callback {
             t = term.memory(10, 2)

@@ -30,18 +30,18 @@ import std.fs
 import std.string
 import std.sync
 import std.worker
-import nib.build_info
-import nib.jsonx
-import nib.lock
-import nib.mcp.mcp_headers
-import nib.provider.sse
-import nib.provider.types
-import nib.tools.jail
-import nib.tools.egress
-import nib.tools.denials
-import nib.fence
-import nib.tools.process
-import nib.tools.secrets
+import naeb.build_info
+import naeb.jsonx
+import naeb.lock
+import naeb.mcp.mcp_headers
+import naeb.provider.sse
+import naeb.provider.types
+import naeb.tools.jail
+import naeb.tools.egress
+import naeb.tools.denials
+import naeb.fence
+import naeb.tools.process
+import naeb.tools.secrets
 
 exports(Transport, Source, new, set_fence, take_refusals, close, ensure, rpc, incoming, checked, watch, source_fixed, read_line,
         PROTOCOL_VERSION, LEGACY_VERSION, TIMEOUT_MS, MAX_MESSAGE)
@@ -101,7 +101,7 @@ struct Http {
 cfg_(t: *Transport) -> *types.McpServer { return t.config as *types.McpServer }
 
 // A transport for `config` (a *types.McpServer). env: "NAME=value" list or
-// null (this process's); writable: extra sandbox roots; self_exe: this nib
+// null (this process's); writable: extra sandbox roots; self_exe: this naeb
 // binary (the Linux sandbox helper).
 new(config: @keep ptr, env: @keep ptr, home: string, user_home: string, writable: @keep ptr, sandboxed: int, self_exe: string) -> ptr {
     t = heap.new(Transport)
@@ -512,7 +512,7 @@ checked(rep: string) -> (string, string) {
 exchange_(t: *Transport, method: string, params_in: string, notification: int, cancel: @keep ptr, ms: long) -> (string, string) {
     params = params_in
     if t.modern == 1 {
-        meta = "{\"io.modelcontextprotocol/protocolVersion\":${jsonx.quote(t.version)},\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"nib\",\"version\":${jsonx.quote(build_info.nib_version())}}}"
+        meta = "{\"io.modelcontextprotocol/protocolVersion\":${jsonx.quote(t.version)},\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"naeb\",\"version\":${jsonx.quote(build_info.nib_version())}}}"
         params = jsonx.with_member(params, "_meta", meta)
     }
     id = t.next_id
@@ -851,7 +851,7 @@ ensure_(t: *Transport, cancel: @keep ptr) -> string {
     if verdict != "legacy" { return verdict }
     t.modern = 0
     t.version = LEGACY_VERSION
-    init = "{\"protocolVersion\":${jsonx.quote(LEGACY_VERSION)},\"capabilities\":{},\"clientInfo\":{\"name\":\"nib\",\"version\":${jsonx.quote(build_info.nib_version())}}}"
+    init = "{\"protocolVersion\":${jsonx.quote(LEGACY_VERSION)},\"capabilities\":{},\"clientInfo\":{\"name\":\"naeb\",\"version\":${jsonx.quote(build_info.nib_version())}}}"
     rep, ierr = exchange_(t, "initialize", init, 0, cancel, TIMEOUT_MS as long)
     if ierr != "" { return ierr }
     result, cerr = checked(rep)

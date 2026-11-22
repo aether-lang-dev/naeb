@@ -13,9 +13,9 @@ import std.encoding
 import std.json
 import std.list
 import std.string
-import nib.image
-import nib.jsonx
-import nib.mcp
+import naeb.image
+import naeb.jsonx
+import naeb.mcp
 
 exports(execute, map_content, take_refusals)
 

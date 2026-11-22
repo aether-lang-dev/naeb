@@ -1,5 +1,5 @@
 // Ports the 7 tests of upstream src/tui/selection.zig under their names; they
-// exercise nib.tui.sel_history (position, highlight, text, append_row) too.
+// exercise naeb.tui.sel_history (position, highlight, text, append_row) too.
 // Not ported: none. Added (not upstream): "copy writes OSC 52 then calls the
 // local copier", "local copy is wanted only with a display".
 // Differences: the Selection is a heap box and optionals are flag/field pairs
@@ -11,11 +11,11 @@ import std.strbuilder
 import term
 import term.screen
 import term.input
-import nib.tui.selection
-import nib.tui.sel_history
-import nib.tui.viewport
-import nib.tui.transcript
-import nib.tui.entry
+import naeb.tui.selection
+import naeb.tui.sel_history
+import naeb.tui.viewport
+import naeb.tui.transcript
+import naeb.tui.entry
 
 mouse_(col: int, row: int, kind: int) -> input.Mouse {
     return input.Mouse { col: col, row: row, button: input.BUTTON_LEFT, mods: 0, kind: kind }

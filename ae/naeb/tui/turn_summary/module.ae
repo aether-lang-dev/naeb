@@ -6,7 +6,7 @@
 // status "completed").
 
 import std.string
-import nib.jsonx
+import naeb.jsonx
 
 exports(Usage, Timing, TurnSummary, usage, timing, new, from_json)
 

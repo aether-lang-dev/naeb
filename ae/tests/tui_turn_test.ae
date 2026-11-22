@@ -4,8 +4,8 @@
 // the transcript half is in tui_app_test.ae). Timestamps are milliseconds.
 import std.spec
 import std.string
-import nib.tui.turn
-import nib.tui.app_queue
+import naeb.tui.turn
+import naeb.tui.app_queue
 
 next_(q: *app_queue.Queue) -> string {
     it, ok = app_queue.take(q)

@@ -1,6 +1,6 @@
 // Ports the inline tests of upstream src/mcp/index.zig, src/mcp/headers.zig,
 // src/mcp/transport.zig and src/tools/mcp.zig under their upstream names,
-// then drives nib.mcp over tests/mock_mcp.py (python3 on PATH) on stdio
+// then drives naeb.mcp over tests/mock_mcp.py (python3 on PATH) on stdio
 // (modern and --legacy) and Streamable HTTP (ae/tests/mock_mcp_http.py: JSON and
 // SSE replies, modern and legacy). Run from the repository root.
 //
@@ -15,15 +15,15 @@ import std.os
 import std.string
 import std.strbuilder
 import std.sync
-import nib.image
-import nib.jsonx
-import nib.mcp
-import nib.mcp.mcp_headers
-import nib.mcp.mcp_index
-import nib.mcp.mcp_transport
-import nib.provider.sse
-import nib.provider.types
-import nib.tools.mcp_tool
+import naeb.image
+import naeb.jsonx
+import naeb.mcp
+import naeb.mcp.mcp_headers
+import naeb.mcp.mcp_index
+import naeb.mcp.mcp_transport
+import naeb.provider.sse
+import naeb.provider.types
+import naeb.tools.mcp_tool
 
 has_(s: string, part: string) -> int {
     if string.index_of(s, part) >= 0 { return 1 }
@@ -31,7 +31,7 @@ has_(s: string, part: string) -> int {
 }
 
 tmp_() -> string {
-    d, _e = fs.make_temp_dir("", "nib-mcp")
+    d, _e = fs.make_temp_dir("", "naeb-mcp")
     real, _k, _m = fs.realpath(d)
     return real
 }
@@ -346,14 +346,14 @@ main() {
             list.list_add(env, "HOME=${os.getenv("HOME")}")
             list.list_add(env, "MCP_TEST_TOKEN=listed-value")
             list.list_add(env, "GITHUB_TOKEN=leak1")
-            list.list_add(env, "NIB_API_KEY=leak2")
+            list.list_add(env, "NAEB_API_KEY=leak2")
             list.list_add(env, "MCP_UNLISTED=leak3")
             c = stdio_client_(home, 0, 1, env)
             res = call_text_(c, "local.env", "{\"text\":\"\"}")
             seen = jsonx.parse(content_of_(res))
             spec.assert_str_eq(jsonx.str_or(seen, "allowed", "?"), "listed-value", "named variable passes")
             spec.assert_eq(jsonx.kind(seen, "github"), 0, "provider token stripped")
-            spec.assert_eq(jsonx.kind(seen, "key"), 0, "nib key stripped")
+            spec.assert_eq(jsonx.kind(seen, "key"), 0, "naeb key stripped")
             spec.assert_eq(jsonx.kind(seen, "unlisted"), 0, "unlisted dropped")
             spec.assert_str_eq(jsonx.str_or(seen, "home", "?"), os.getenv("HOME"), "HOME unchanged")
             spec.assert_true(string.ends_with(jsonx.str_or(seen, "cwd", "?"), "/mcp/local") == 1, "cwd is the state directory")

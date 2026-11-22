@@ -17,7 +17,7 @@
 import std.list
 import std.string
 import std.json
-import nib.jsonx
+import naeb.jsonx
 
 exports(Offer, new, collect, collect_result, pending, take, reset, answer_of, text_of, notes_text, applied_text,
         has_policy, take_young, young_text, fetched_text, java_missing, java_hint, JAVA_HINT, KIND_POLICY, KIND_MAVEN,
@@ -210,7 +210,7 @@ answer_of(text: string, scrolls: bool) -> int {
     return ANSWER_NO
 }
 
-// The refusals a proposal (nib.fence.policy.propose's JSON) offers no line
+// The refusals a proposal (naeb.fence.policy.propose's JSON) offers no line
 // for, one per line with why; "" none.
 notes_text(proposal: string) -> string {
     v = jsonx.parse(proposal)
@@ -245,7 +245,7 @@ java_hint(o: *Offer, text: string) -> string {
     return JAVA_HINT
 }
 
-// The prompt for a proposal (nib.fence.policy.propose's JSON): one line per
+// The prompt for a proposal (naeb.fence.policy.propose's JSON): one line per
 // proposed line saying what it answers, then the diff and the question; or,
 // when naeb cannot place the lines, the lines to add by hand. Notes are
 // notes_text's, not part of it.

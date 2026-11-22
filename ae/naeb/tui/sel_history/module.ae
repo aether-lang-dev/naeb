@@ -17,8 +17,8 @@
 import std.string
 import std.strbuilder
 import term.screen
-import nib.tui.entry
-import nib.tui.viewport
+import naeb.tui.entry
+import naeb.tui.viewport
 
 exports(Frame, Position, History, before, position, ordered_first, ordered_last, highlight,
         text, append_row)

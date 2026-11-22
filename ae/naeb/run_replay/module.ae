@@ -1,8 +1,8 @@
-// run_replay: `nib replay <session-id> --run <step>:<run> [--script <file>]
-// [--json]` and `nib replay <session-id> --all [--json]` (upstream
+// run_replay: `naeb replay <session-id> --run <step>:<run> [--script <file>]
+// [--json]` and `naeb replay <session-id> --all [--json]` (upstream
 // src/replay.zig; docs/replay.md). Reads the Session's main log for each
 // Run's code and model-visible output, its `<id>.calls.jsonl` sidecar for
-// the recorded calls, replays offline (nib.sandbox.replay) and compares.
+// the recorded calls, replays offline (naeb.sandbox.replay) and compares.
 // Named run_replay: the replay core already has the basename `replay`.
 //
 // Nothing reaches a provider or a real tool. Errors are upstream's names
@@ -15,10 +15,10 @@ import std.map
 import std.string
 import std.strbuilder
 import std.fs
-import nib.jsonx
-import nib.sandbox
-import nib.sandbox.replay
-import nib.session.output
+import naeb.jsonx
+import naeb.sandbox
+import naeb.sandbox.replay
+import naeb.session.output
 
 exports(Options, Run, Recording, Report, parse_options, load_main, load_calls, replay_one, run)
 
@@ -610,7 +610,7 @@ abnormal_(end: string) -> int {
     return 0
 }
 
-// `nib replay <args>` with $NIB_HOME `home`: (stdout, stderr, err).
+// `naeb replay <args>` with $NAEB_HOME `home`: (stdout, stderr, err).
 run(home: string, args: ptr) -> (string, string, string) {
     op, perr = parse_options(args)
     if perr != "" { return "", "", perr }

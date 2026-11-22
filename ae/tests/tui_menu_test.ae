@@ -2,9 +2,9 @@
 // a `$` mention lists come from the menu's skill_source (the app sets it to
 // session.skills.load over the four roots, as upstream discoverSkills).
 import std.spec
-import nib.tui.menu
-import nib.tui.editor
-import nib.session.skills
+import naeb.tui.menu
+import naeb.tui.editor
+import naeb.session.skills
 import std.fs
 
 label_(m: *menu.Menu, input: string) -> string {
@@ -37,7 +37,7 @@ main() {
             spec.assert_str_eq(menu.items(m, "/ref")[0].label, "/reflect", "shown")
         }
         spec.it("moving straight from an @ mention to a $ mention loads skills") callback {
-            root, _e = fs.make_temp_dir("", "nibmenu")
+            root, _e = fs.make_temp_dir("", "naebmenu")
             fs.mkdir_p("${root}/skills/review")
             fs.write("${root}/skills/review/SKILL.md", "---\nname: review\ndescription: Review a change.\n---\nBody\n")
             m = menu.new()

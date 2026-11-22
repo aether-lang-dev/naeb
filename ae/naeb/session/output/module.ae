@@ -13,8 +13,8 @@
 import std.string
 import std.strbuilder
 import std.list
-import nib.sandbox
-import nib.sandbox.console
+import naeb.sandbox
+import naeb.sandbox.console
 
 exports(MAX_BYTES, format, format_hook, step_limit_output, format_message, omitted_lines)
 

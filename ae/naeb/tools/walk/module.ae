@@ -24,8 +24,8 @@ import std.string
 import std.list
 import std.strbuilder
 import std.sync
-import nib.tools.rules
-import nib.tools.atomic_file
+import naeb.tools.rules
+import naeb.tools.atomic_file
 
 exports(matches, match_path, options, set_deny, set_rules, set_cancel, set_filter, set_max, set_dirs, free_options,
         files, release, rules_new, rules_free, parse_ignore, ignored,

@@ -1,6 +1,6 @@
 # std.unicode: grapheme iteration and display width
 
-**For:** aether (`std.unicode`). **From:** nib-code's `ae/term`,
+**For:** aether (`std.unicode`). **From:** naeb's `ae/term`,
 2026-11-12, Aether 0.909.0.
 
 ## Motivation
@@ -45,7 +45,7 @@ unicode.is_emoji_presentation(cp: int) -> bool
 ```
 
 The width rules `ae/term` implements are libvaxis's `gwidth.zig` (which
-nib's upstream renders with): see `ae/term/screen/unicode.c` for the exact
+naeb's upstream renders with): see `ae/term/screen/unicode.c` for the exact
 cases and `ae/term/tests/test_screen.ae` ("display width") for the
 expected values, including ZWJ sequences, VS16, skin tones, flags and
 zero-width characters.

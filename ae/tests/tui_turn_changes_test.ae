@@ -3,9 +3,9 @@
 // transcript.zig's tests).
 import std.spec
 import std.list
-import nib.tui.turn_changes
-import nib.tools.changes
-import nib.tools.diff
+import naeb.tui.turn_changes
+import naeb.tools.changes
+import naeb.tools.diff
 
 file_(path: string, added: int, removed: int) -> ptr {
     f = heap.new(changes.File)

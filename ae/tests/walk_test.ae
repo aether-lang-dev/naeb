@@ -4,13 +4,13 @@ import std.string
 import std.list
 import std.fs
 import std.sync
-import nib.tools.walk
+import naeb.tools.walk
 
 check_(on: int, msg: string) { spec.assert_true(on, msg) }
 neg_(on: int, msg: string) { spec.assert_false(on, msg) }
 
 tmp_dir_() -> string {
-    d, err = fs.make_temp_dir("", "nibwalk")
+    d, err = fs.make_temp_dir("", "naebwalk")
     spec.assert_str_eq(err, "", "make_temp_dir")
     return d
 }

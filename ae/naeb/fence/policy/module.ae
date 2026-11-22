@@ -20,13 +20,13 @@ import std.os hiding (exec, run_capture, run_pipe, run_pipe_drain_and_wait, run_
     os_spawn_to_raw)
 import std.string
 import std.cryptography
-import nib.build_info
-import nib.fence
-import nib.fence.proposal
-import nib.jsonx
-import nib.tools.atomic_file
-import nib.tools.jail
-import nib.tools.process
+import naeb.build_info
+import naeb.fence
+import naeb.fence.proposal
+import naeb.jsonx
+import naeb.tools.atomic_file
+import naeb.tools.jail
+import naeb.tools.process
 
 @source("policy_host.c")
 
@@ -461,7 +461,7 @@ build(home: string, cwd: string, src: string, yes: int, confirm: fn) -> int {
 // certainty; without "diff" or "error" when only notes (refusals naeb will
 // not offer a line for, and why) are left; "" when nothing is to be shown.
 // date: the approval comments' YYYY-MM-DD.
-propose(f: ptr, cwd: string, nib_home: string, records: string, date: string) -> string {
+propose(f: ptr, cwd: string, naeb_home: string, records: string, date: string) -> string {
     v = jsonx.parse(records)
     if v == null { return "" }
     refs = list.list_new()
@@ -476,7 +476,7 @@ propose(f: ptr, cwd: string, nib_home: string, records: string, date: string) ->
         i = i + 1
     }
     jsonx.free(v)
-    all = proposal.group(refs, fence.scope(f, cwd, nib_home))
+    all = proposal.group(refs, fence.scope(f, cwd, naeb_home))
     items = proposal.lines_of(all)
     notes = proposal.notes_of(all)
     if list.list_size(all) == 0 { return "" }

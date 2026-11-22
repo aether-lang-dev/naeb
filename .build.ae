@@ -1,5 +1,5 @@
-// The two binaries of the Aether port under ae/: `nib`, upstream's
-// behaviour with no project fence, and `naeb`, always fenced by the
+// The two binaries of the Aether port under ae/: `naeb-unfenced`,
+// upstream's behaviour with no project fence, and `naeb`, always fenced by the
 // project's policy (docs/naeb/adr/0001). Their names are set here and
 // nowhere else.
 
@@ -22,10 +22,10 @@ write_commit_() {
     list.list_add(argv, "HEAD")
     out, code, err = os.run_capture("git", argv, null)
     c = string.trim(out)
-    text = "#define NIB_COMMIT \"${c}\"\n"
+    text = "#define NAEB_COMMIT \"${c}\"\n"
     if err != "" || code != 0 { text = "" }
     text = "${text}#define NAEB_SRC \"${os.getcwd()}\"\n"
-    path = "ae/nib/build_info/commit.h"
+    path = "ae/naeb/build_info/commit.h"
     old, rerr = fs.read(path)
     if rerr == "" && old == text { return }
     fs.write(path, text)
@@ -35,9 +35,9 @@ aeb(cap) {
     write_commit_()
     bldr.build() {
         aether.program() {
-            source("ae/main.ae")
+            source("ae/naeb_unfenced_main.ae")
             lib("ae")
-            output("nib")
+            output("naeb-unfenced")
         }
         aether.program() {
             source("ae/naeb_main.ae")

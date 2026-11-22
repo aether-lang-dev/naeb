@@ -9,11 +9,11 @@ import std.string
 import std.sync
 import std.worker
 import std.os
-import nib.tools.file_state
-import nib.tools.atomic_file
+import naeb.tools.file_state
+import naeb.tools.atomic_file
 
 tmp_() -> string {
-    d, _e = fs.make_temp_dir("", "nib-fstate")
+    d, _e = fs.make_temp_dir("", "naeb-fstate")
     real, _k, _m = fs.realpath(d)
     return real
 }
@@ -120,7 +120,7 @@ main() {
             }
             while sync.atomic_load(done) == 0 { sleep(1) }
         }
-        spec.it("lock paths are per canonical path and stay under the nib home") callback {
+        spec.it("lock paths are per canonical path and stay under the naeb home") callback {
             a = file_state.lock_path("/h", "/p/x")
             b = file_state.lock_path("/h", "/p/y")
             spec.assert_true(string.starts_with(a, "/h/locks/"), "under locks")

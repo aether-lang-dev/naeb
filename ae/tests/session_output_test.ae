@@ -1,13 +1,13 @@
 // Ports the tests of upstream src/session/output.zig, under their names.
 // Where upstream builds a sandbox.Outcome by hand, so does this; where it
-// runs JS, this runs it through nib.sandbox.eval.
+// runs JS, this runs it through naeb.sandbox.eval.
 import std.spec
 import std.string
 import std.strbuilder
 import std.list
-import nib.sandbox
-import nib.sandbox.console
-import nib.session.output
+import naeb.sandbox
+import naeb.sandbox.console
+import naeb.session.output
 
 const MAX = 16384
 

@@ -17,20 +17,20 @@ import std.string
 import std.sync
 import std.os
 import std.worker
-import nib.sandbox
-import nib.tools
-import nib.tools.atomic_file
-import nib.fence
+import naeb.sandbox
+import naeb.tools
+import naeb.tools.atomic_file
+import naeb.fence
 
 tmp_() -> string {
-    d, _e = fs.make_temp_dir("", "nib-tools")
+    d, _e = fs.make_temp_dir("", "naeb-tools")
     real, _k, _m = fs.realpath(d)
     return real
 }
 
 new_tools_(d: string) -> ptr {
     t = tools.new(d)
-    (t as *tools.Tools).data_home = "${d}/nibhome"
+    (t as *tools.Tools).data_home = "${d}/naebhome"
     return t
 }
 
@@ -188,9 +188,9 @@ main() {
         spec.it("a fenced table adds tools.fence and fence_denied; its example reaches the host byte for byte") callback {
             d = tmp_()
             plain = new_tools_(d)
-            spec.assert_eq(contains_(tools.docs(plain), "async fence("), 0, "nib: no fence tool")
-            spec.assert_eq(contains_(tools.docs(plain), "fence_denied"), 0, "nib: no fence_denied")
-            spec.assert_eq(contains_(tools.names_json(plain), "\"fence\""), 0, "nib: not in the API")
+            spec.assert_eq(contains_(tools.docs(plain), "async fence("), 0, "unfenced: no fence tool")
+            spec.assert_eq(contains_(tools.docs(plain), "fence_denied"), 0, "unfenced: no fence_denied")
+            spec.assert_eq(contains_(tools.names_json(plain), "\"fence\""), 0, "unfenced: not in the API")
             t = new_tools_(d)
             tools.set_fence(t, fence.new(d))
             docs = tools.docs(t)

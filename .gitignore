@@ -3,4 +3,4 @@ zig-out/
 zig-pkg/
 __pycache__/
 /target/
-ae/nib/build_info/commit.h
+ae/naeb/build_info/commit.h

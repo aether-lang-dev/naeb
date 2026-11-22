@@ -1,13 +1,13 @@
 // Ports the inline tests of upstream src/config.zig, under their upstream
 // names. The Codex provider is not ported (policy: API keys only), so:
 //   skipped  "Codex transport defaults, TOML selection and environment precedence"
-//            (NIB_CODEX_TRANSPORT / [codex].transport do not exist)
+//            (NAEB_CODEX_TRANSPORT / [codex].transport do not exist)
 //   skipped  "Codex Run tool defaults custom with validated file and
-//            environment fallback" (NIB_CODEX_RUN_TOOL / [codex].run_tool)
+//            environment fallback" (NAEB_CODEX_RUN_TOOL / [codex].run_tool)
 //   adapted  every other test that used `[codex]` or `provider = "codex"` uses
 //            another built-in section instead ([openai] or [chat_completions]),
 //            and the default service is anthropic, the first of startup_order();
-//            Codex login / CODEX_HOME / NIB_AUTH_ISSUER rows are dropped.
+//            Codex login / CODEX_HOME / NAEB_AUTH_ISSUER rows are dropped.
 //   adapted  "summary and Run display budget ...": the `[codex].reasoning_summary`
 //            file key is gone, the environment variable stays.
 // Each adapted assertion says so where it differs. Paths are absolute temp
@@ -16,12 +16,12 @@ import std.spec
 import std.fs
 import std.list
 import std.string
-import nib.config
-import nib.config.env
-import nib.provider.types
+import naeb.config
+import naeb.config.env
+import naeb.provider.types
 
 tmp_() -> string {
-    d, _e = fs.make_temp_dir("", "nib-config")
+    d, _e = fs.make_temp_dir("", "naeb-config")
     real, _k, _m = fs.realpath(d)
     return real
 }
@@ -100,7 +100,7 @@ mode_(p: string) -> int {
 env_home_(d: string) -> ptr {
     e = env.new()
     env.set(e, "HOME", d)
-    env.set(e, "NIB_HOME", d)
+    env.set(e, "NAEB_HOME", d)
     return e
 }
 
@@ -147,7 +147,7 @@ main() {
                     "must be a string", "must be a string", "must be an integer", "must be an integer", "positive u64", "positive u64",
                     "positive u64", "decimal integer", "leading zero", "separator", "invalid effort", "provider must be", "expected key = value",
                     "unterminated section", "after section", "unterminated string", "after value", "unsupported string escape", "duplicate key",
-                    "duplicate section", "use NIB_API_KEY", "use NIB_API_KEY", "use NIB_API_KEY", "use NIB_API_KEY", "carriage return",
+                    "duplicate section", "use NAEB_API_KEY", "use NAEB_API_KEY", "use NAEB_API_KEY", "use NAEB_API_KEY", "carriage return",
                     "invalid UTF-8", "unknown provider key", "unknown 'codex'"]
             // dropped with Codex: the [codex] cases became [openai] / [chat_completions]; [codex] keys are still checked, provider = "codex" is refused
             i = 0
@@ -156,7 +156,7 @@ main() {
                 i = i + 1
             }
             fp, d = config.parse("\napi_key = \"no\"", "test/config.toml")
-            spec.assert_str_eq(d, "test/config.toml:2: secrets are not allowed; use NIB_API_KEY or DEEPSEEK_API_KEY (Codex uses CODEX_HOME/auth.json)", "full secret message")
+            spec.assert_str_eq(d, "test/config.toml:2: secrets are not allowed; use NAEB_API_KEY or DEEPSEEK_API_KEY (Codex uses CODEX_HOME/auth.json)", "full secret message")
         }
         spec.it("provider defaults file environment and command effort precedence") callback {
             e = env.new()
@@ -171,23 +171,23 @@ main() {
             spec.assert_str_eq(cfg_(cp).base_url, "https://chat.test", "file url")
             spec.assert_eq(cfg_(cp).context_window as int, 100000, "file window")
             spec.assert_str_eq(cfg_(cp).reasoning_effort, "medium", "file effort")
-            env.set(e, "NIB_PROVIDER", "anthropic")
+            env.set(e, "NAEB_PROVIDER", "anthropic")
             cp = ok_(e, text)
             spec.assert_str_eq(cfg_(cp).model, "claude-opus-5-5", "env provider picks its section")
             spec.assert_str_eq(cfg_(cp).base_url, "https://anthropic.test", "its url")
             spec.assert_eq(cfg_(cp).context_window as int, 200000, "its window")
-            env.set(e, "NIB_MODEL", "env-model")
-            env.set(e, "NIB_BASE_URL", "https://env.test")
-            env.set(e, "NIB_CONTEXT_WINDOW", "12345")
-            env.set(e, "NIB_REASONING_EFFORT", "low")
-            env.set(e, "NIB_API_KEY", "mock")
+            env.set(e, "NAEB_MODEL", "env-model")
+            env.set(e, "NAEB_BASE_URL", "https://env.test")
+            env.set(e, "NAEB_CONTEXT_WINDOW", "12345")
+            env.set(e, "NAEB_REASONING_EFFORT", "low")
+            env.set(e, "NAEB_API_KEY", "mock")
             cp = ok_(e, text)
             spec.assert_str_eq(cfg_(cp).model, "env-model", "env model")
             spec.assert_str_eq(cfg_(cp).base_url, "https://env.test", "env url")
             spec.assert_eq(cfg_(cp).context_window as int, 12345, "env window")
-            spec.assert_str_eq(cfg_(cp).api_key, "", "NIB_API_KEY is not anthropic's key")
+            spec.assert_str_eq(cfg_(cp).api_key, "", "NAEB_API_KEY is not anthropic's key")
             spec.assert_str_eq(cfg_(cp).reasoning_effort, "low", "env effort")
-            env.set(e, "NIB_THINKING", "off")
+            env.set(e, "NAEB_THINKING", "off")
             cp = ok_(e, text)
             spec.assert_eq(cfg_(cp).thinking, 0, "thinking off")
             spec.assert_str_eq(types.set_effort(cp, "high"), "", "set high")
@@ -196,9 +196,9 @@ main() {
             types.set_effort(cp, "default")
             spec.assert_eq(cfg_(cp).thinking, -1, "default clears thinking")
             spec.assert_str_eq(cfg_(cp).reasoning_effort, "", "default clears effort")
-            env.set(e, "NIB_PROVIDER", "chat_completions")
+            env.set(e, "NAEB_PROVIDER", "chat_completions")
             cp = ok_(e, text)
-            spec.assert_str_eq(cfg_(cp).api_key, "mock", "NIB_API_KEY serves chat_completions")
+            spec.assert_str_eq(cfg_(cp).api_key, "mock", "NAEB_API_KEY serves chat_completions")
             efforts = ["default", "off", "none", "minimal", "low", "medium", "high", "xhigh", "max"]
             i = 0
             while i < 9 {
@@ -211,17 +211,17 @@ main() {
                 i = i + 1
             }
         }
-        spec.it("NIB_HOME alone locates global data and absent configuration is empty") callback {
+        spec.it("NAEB_HOME alone locates global data and absent configuration is empty") callback {
             d = tmp_()
             e = env.new()
             env.set(e, "HOME", "/fictional")
             env.set(e, "XDG_CONFIG_HOME", "/unused")
             env.set(e, "XDG_DATA_HOME", "/unused")
             h, herr = config.home(e)
-            spec.assert_true(herr == "" && h == "/fictional/.nib", "default home ${h}")
-            env.set(e, "NIB_HOME", "/another")
+            spec.assert_true(herr == "" && h == "/fictional/.naeb", "default home ${h}")
+            env.set(e, "NAEB_HOME", "/another")
             h2, _e2 = config.home(e)
-            spec.assert_str_eq(h2, "/another", "NIB_HOME")
+            spec.assert_str_eq(h2, "/another", "NAEB_HOME")
             h3, e3 = config.home(env.new())
             spec.assert_true(h3 == "" && e3 == "MissingHome", "no HOME")
             root = "${d}/absent"
@@ -266,7 +266,7 @@ main() {
         }
         spec.it("environment validation and model-dependent defaults") callback {
             e = env.new()
-            env.set(e, "NIB_PROVIDER", "chat_completions")
+            env.set(e, "NAEB_PROVIDER", "chat_completions")
             cp = ok_(e, "")
             spec.assert_str_eq(cfg_(cp).model, "deepseek-flash", "chat model")
             spec.assert_str_eq(cfg_(cp).base_url, "https://api.deepseek.com", "chat url")
@@ -277,41 +277,41 @@ main() {
             spec.assert_str_eq(cfg_(ok_(e, "")).key_source, "env", "key source")
             spec.assert_str_eq(cfg_(ok_(e, "")).api_key_env, "DEEPSEEK_API_KEY", "key variable")
             // upstream's Codex block, on anthropic
-            env.set(e, "NIB_PROVIDER", "anthropic")
-            env.set(e, "NIB_MODEL", "claude-haiku-5-5")
+            env.set(e, "NAEB_PROVIDER", "anthropic")
+            env.set(e, "NAEB_MODEL", "claude-haiku-5-5")
             cp = ok_(e, "")
             spec.assert_eq(cfg_(cp).context_window as int, 1000000, "catalog window")
             spec.assert_str_eq(types.check_session(cp, "anthropic", "claude-haiku-5-5"), "", "same session")
             spec.assert_str_eq(types.check_session(cp, "chat_completions", ""), "SessionProviderMismatch", "provider mismatch")
-            env.set(e, "NIB_MODEL", "unknown")
+            env.set(e, "NAEB_MODEL", "unknown")
             spec.assert_str_eq(err_(e, ""), "InvalidConfig", "unknown model window")
-            spec.assert_true(contains_(detail_(e, ""), "unknown model context window; set context_window or NIB_CONTEXT_WINDOW") == 1, "detail")
+            spec.assert_true(contains_(detail_(e, ""), "unknown model context window; set context_window or NAEB_CONTEXT_WINDOW") == 1, "detail")
             spec.assert_true(string.starts_with(detail_(e, ""), "test/config.toml:1: "), "detail line")
-            env.set(e, "NIB_CONTEXT_WINDOW", "10000")
+            env.set(e, "NAEB_CONTEXT_WINDOW", "10000")
             spec.assert_eq(cfg_(ok_(e, "")).context_window as int, 10000, "explicit window")
-            env.set(e, "NIB_CONTEXT_WINDOW", "bad")
+            env.set(e, "NAEB_CONTEXT_WINDOW", "bad")
             spec.assert_str_eq(err_(e, ""), "InvalidContextWindow", "bad window")
-            spec.assert_str_eq(detail_(e, ""), "NIB_CONTEXT_WINDOW: expected a positive integer", "bad window detail")
-            env.set(e, "NIB_CONTEXT_WINDOW", "0")
+            spec.assert_str_eq(detail_(e, ""), "NAEB_CONTEXT_WINDOW: expected a positive integer", "bad window detail")
+            env.set(e, "NAEB_CONTEXT_WINDOW", "0")
             spec.assert_str_eq(err_(e, ""), "InvalidContextWindow", "zero window")
-            spec.assert_str_eq(detail_(e, ""), "NIB_CONTEXT_WINDOW: must be greater than zero", "zero window detail")
-            env.set(e, "NIB_CONTEXT_WINDOW", "10000")
-            env.set(e, "NIB_THINKING", "invalid")
+            spec.assert_str_eq(detail_(e, ""), "NAEB_CONTEXT_WINDOW: must be greater than zero", "zero window detail")
+            env.set(e, "NAEB_CONTEXT_WINDOW", "10000")
+            env.set(e, "NAEB_THINKING", "invalid")
             spec.assert_str_eq(err_(e, ""), "InvalidThinking", "bad thinking")
-            spec.assert_str_eq(detail_(e, ""), "NIB_THINKING: expected on or off", "bad thinking detail")
-            env.set(e, "NIB_THINKING", "on")
+            spec.assert_str_eq(detail_(e, ""), "NAEB_THINKING: expected on or off", "bad thinking detail")
+            env.set(e, "NAEB_THINKING", "on")
             cp = ok_(e, "effort = \"off\"")
             spec.assert_eq(cfg_(cp).thinking, 1, "thinking on beats file effort")
             spec.assert_str_eq(cfg_(cp).reasoning_effort, "", "file effort ignored")
-            env.set(e, "NIB_REASONING_EFFORT", "invalid")
+            env.set(e, "NAEB_REASONING_EFFORT", "invalid")
             spec.assert_str_eq(err_(e, ""), "InvalidReasoningEffort", "bad effort")
-            spec.assert_str_eq(detail_(e, ""), "NIB_REASONING_EFFORT: expected default|off|none|minimal|low|medium|high|xhigh|max", "bad effort detail")
-            env.set(e, "NIB_PROVIDER", "invalid")
+            spec.assert_str_eq(detail_(e, ""), "NAEB_REASONING_EFFORT: expected default|off|none|minimal|low|medium|high|xhigh|max", "bad effort detail")
+            env.set(e, "NAEB_PROVIDER", "invalid")
             spec.assert_str_eq(err_(e, ""), "InvalidProvider", "bad provider")
-            spec.assert_str_eq(detail_(e, ""), "NIB_PROVIDER: unknown provider 'invalid'", "bad provider detail")
-            env.set(e, "NIB_PROVIDER", "codex")
+            spec.assert_str_eq(detail_(e, ""), "NAEB_PROVIDER: unknown provider 'invalid'", "bad provider detail")
+            env.set(e, "NAEB_PROVIDER", "codex")
             spec.assert_str_eq(err_(e, ""), "InvalidProvider", "codex is not a provider")
-            env.set(e, "NIB_PROVIDER", "")
+            env.set(e, "NAEB_PROVIDER", "")
             spec.assert_str_eq(err_(e, ""), "InvalidProvider", "empty provider is present")
         }
         spec.it("limits defaults, bounds and diagnostics") callback {
@@ -356,7 +356,7 @@ main() {
                 b = b + 1
             }
         }
-        spec.it("sandbox defaults, file settings and NIB_SANDBOX override") callback {
+        spec.it("sandbox defaults, file settings and NAEB_SANDBOX override") callback {
             e = env.new()
             env.set(e, "HOME", "/home/u")
             d = ok_(e, "")
@@ -369,14 +369,14 @@ main() {
             spec.assert_str_eq(str_(cfg_(f).sandbox_writable, 0), "/home/u/extra", "home expanded")
             spec.assert_str_eq(str_(cfg_(f).sandbox_writable, 1), "/data/shared", "absolute kept")
             spec.assert_eq(cfg_(ok_(e, "[sandbox]\nmode = \"workspace\"")).sandbox_workspace, 1, "file workspace")
-            env.set(e, "NIB_SANDBOX", "workspace")
+            env.set(e, "NAEB_SANDBOX", "workspace")
             spec.assert_eq(cfg_(ok_(e, text)).sandbox_workspace, 1, "env workspace beats file off")
-            env.set(e, "NIB_SANDBOX", "off")
+            env.set(e, "NAEB_SANDBOX", "off")
             spec.assert_eq(cfg_(ok_(e, "[sandbox]\nmode = \"workspace\"")).sandbox_workspace, 0, "env off beats file workspace")
-            env.set(e, "NIB_SANDBOX", "maybe")
+            env.set(e, "NAEB_SANDBOX", "maybe")
             spec.assert_str_eq(err_(e, text), "InvalidConfig", "bad env")
-            spec.assert_true(string.starts_with(detail_(e, text), "NIB_SANDBOX:"), "env detail")
-            spec.assert_str_eq(detail_(e, text), "NIB_SANDBOX: expected workspace or off", "env detail text")
+            spec.assert_true(string.starts_with(detail_(e, text), "NAEB_SANDBOX:"), "env detail")
+            spec.assert_str_eq(detail_(e, text), "NAEB_SANDBOX: expected workspace or off", "env detail text")
             bads = ["[sandbox]\nmode = \"on\"", "[sandbox]\nmode = 1", "[sandbox]\nunknown = 1", "[sandbox]\nmode = \"off\"\nmode = \"off\"",
                     "[sandbox]\nwritable = [\"relative\"]", "[sandbox]\nwritable = [\"/a\"", "[sandbox]\nwritable = \"/a\"",
                     "[sandbox]\nwritable = [\"/a\" \"/b\"]", "[sandbox]\n[sandbox]"]
@@ -395,25 +395,25 @@ main() {
             spec.assert_eq(lim_(d).run_output_bytes, 16384, "default budget")
             text = "[limits]\nrun_output_bytes = 32768\n"
             spec.assert_eq(lim_(ok_(e, text)).run_output_bytes, 32768, "file budget")
-            env.set(e, "NIB_REASONING_SUMMARY", "auto")
+            env.set(e, "NAEB_REASONING_SUMMARY", "auto")
             spec.assert_str_eq(cfg_(ok_(e, text)).reasoning_summary, "auto", "env summary auto")
-            env.set(e, "NIB_REASONING_SUMMARY", "off")
-            env.set(e, "NIB_RUN_OUTPUT_BYTES", "65536")
+            env.set(e, "NAEB_REASONING_SUMMARY", "off")
+            env.set(e, "NAEB_RUN_OUTPUT_BYTES", "65536")
             o = ok_(e, text)
             spec.assert_str_eq(cfg_(o).reasoning_summary, "off", "env summary off")
             spec.assert_eq(lim_(o).run_output_bytes, 65536, "env budget beats file")
             values = ["0", "16383", "16777217", "many"]
             i = 0
             while i < 4 {
-                env.set(e, "NIB_RUN_OUTPUT_BYTES", values[i])
+                env.set(e, "NAEB_RUN_OUTPUT_BYTES", values[i])
                 spec.assert_str_eq(err_(e, text), "InvalidConfig", "budget ${values[i]}")
-                spec.assert_str_eq(detail_(e, text), "NIB_RUN_OUTPUT_BYTES: expected 16384..16777216 bytes", "budget detail")
+                spec.assert_str_eq(detail_(e, text), "NAEB_RUN_OUTPUT_BYTES: expected 16384..16777216 bytes", "budget detail")
                 i = i + 1
             }
-            env.remove(e, "NIB_RUN_OUTPUT_BYTES")
-            env.set(e, "NIB_REASONING_SUMMARY", "invalid")
+            env.remove(e, "NAEB_RUN_OUTPUT_BYTES")
+            env.set(e, "NAEB_REASONING_SUMMARY", "invalid")
             spec.assert_str_eq(err_(e, text), "InvalidConfig", "bad summary")
-            spec.assert_str_eq(detail_(e, text), "NIB_REASONING_SUMMARY: expected off or auto", "bad summary detail")
+            spec.assert_str_eq(detail_(e, text), "NAEB_REASONING_SUMMARY: expected off or auto", "bad summary detail")
             invalid = ["[limits]\nrun_output_bytes = 16383", "[limits]\nrun_output_bytes = 16777217", "[limits]\nrun_output_bytes = true", "[openai]\nreasoning_summary = \"auto\""]
             k = 0
             while k < 4 {
@@ -435,7 +435,7 @@ main() {
             n = fs.dir_list_count(l)
             i = 0
             while i < n {
-                spec.assert_eq(string.starts_with(fs.dir_list_get(l, i), ".nib-"), 0, "no temp file")
+                spec.assert_eq(string.starts_with(fs.dir_list_get(l, i), ".naeb-"), 0, "no temp file")
                 i = i + 1
             }
             fs.remove_tree(d)
@@ -470,7 +470,7 @@ main() {
             i = 0
             while i < list.list_size(ids) {
                 id = str_(ids, i)
-                env.set(e, "NIB_PROVIDER", id)
+                env.set(e, "NAEB_PROVIDER", id)
                 keys = types.definition_key_envs(id)
                 env.set(e, str_(keys, 0), "fake-key")
                 cp = ok_(e, "")
@@ -483,7 +483,7 @@ main() {
                 }
                 i = i + 1
             }
-            env.remove(e, "NIB_PROVIDER")
+            env.remove(e, "NAEB_PROVIDER")
             env.set(e, "SITE_KEY", "fake-custom-key")
             text = "provider = \"mysite\"\n[providers.mysite]\nprotocol = \"responses\"\nbase_url = \"http://localhost:1234/v1\"\nmodel = \"code\"\ncontext_window = 12345\napi_key_env = \"SITE_KEY\"\n"
             cp = ok_(e, text)
@@ -492,8 +492,8 @@ main() {
             spec.assert_str_eq(cfg_(cp).api_key, "fake-custom-key", "key")
             spec.assert_str_eq(types.protocol(cp), "responses", "protocol")
             spec.assert_eq(cfg_(cp).context_window as int, 12345, "window")
-            env.set(e, "NIB_MODEL", "override")
-            env.set(e, "NIB_CONTEXT_WINDOW", "9876")
+            env.set(e, "NAEB_MODEL", "override")
+            env.set(e, "NAEB_CONTEXT_WINDOW", "9876")
             cp = ok_(e, text)
             spec.assert_str_eq(cfg_(cp).model, "override", "model override")
             spec.assert_eq(cfg_(cp).context_window as int, 9876, "window override")
@@ -558,7 +558,7 @@ main() {
             custom = "[providers.local]\nprotocol = \"responses\"\nbase_url = \"http://localhost\"\nmodel = \"old\"\ncontext_window = 1000\n[providers.locked]\nprotocol = \"responses\"\nbase_url = \"http://localhost\"\nmodel = \"old\"\ncontext_window = 1000\napi_key_env = \"SITE_KEY\"\n"
             fs.write("${d}/config.toml", custom)
             ae = env.clone(e)
-            env.set(ae, "NIB_PROVIDER", "anthropic")
+            env.set(ae, "NAEB_PROVIDER", "anthropic")
             anthropic = ok_(ae, custom)
             own, oerr = config.model_entries(d, anthropic)
             spec.assert_str_eq(oerr, "", "entries")
@@ -569,7 +569,7 @@ main() {
                 i = i + 1
             }
             le = env.clone(e)
-            env.set(le, "NIB_PROVIDER", "local")
+            env.set(le, "NAEB_PROVIDER", "local")
             local = ok_(le, custom)
             listed, _e2 = config.model_entries(d, local)
             spec.assert_eq(list.list_size(listed), 1, "custom lists its model")
@@ -592,7 +592,7 @@ main() {
             spec.assert_str_eq(read_("${new_home}/config.toml"), "provider = \"openai\"\n[openai]\nmodel = \"gpt-6.1-sol\"\n", "created")
             spec.assert_eq(mode_("${new_home}/config.toml"), 384, "0600")
             cc = env.clone(e)
-            env.set(cc, "NIB_PROVIDER", "chat_completions")
+            env.set(cc, "NAEB_PROVIDER", "chat_completions")
             fs.write("${d}/chat.toml", "")
             _c3, cerr, _d5 = config.save_model(e, "${d}/chat", "chat_completions", "other-model")
             spec.assert_str_eq(cerr, "UnknownModelContextWindow", "chat_completions needs a window for a new model")
@@ -617,14 +617,14 @@ main() {
             env.set(e, "ANTHROPIC_API_KEY", "env-fake")
             cp, _e3, _x3 = config.load(e, d)
             spec.assert_str_eq(cfg_(cp).provider, "anthropic", "Anthropic first")
-            // A configured service that is credentialed wins over the order; an explicit NIB_PROVIDER is never replaced.
+            // A configured service that is credentialed wins over the order; an explicit NAEB_PROVIDER is never replaced.
             fs.write("${d}/config.toml", "provider = \"deepseek\"\n")
             cp, _e4, _x4 = config.load(e, d)
             spec.assert_str_eq(cfg_(cp).provider, "anthropic", "configured but uncredentialed: pick")
             env.set(e, "DEEPSEEK_API_KEY", "env-fake")
             cp, _e5, _x5 = config.load(e, d)
             spec.assert_str_eq(cfg_(cp).provider, "deepseek", "configured and credentialed")
-            env.set(e, "NIB_PROVIDER", "xai")
+            env.set(e, "NAEB_PROVIDER", "xai")
             fs.write("${d}/auth.json", "{}")
             cp, _e6, _x6 = config.load(e, d)
             spec.assert_str_eq(cfg_(cp).provider, "xai", "explicit provider kept")
@@ -643,7 +643,7 @@ main() {
             spec.assert_str_eq(cfg_(cp).provider, "custom", "custom picked")
             spec.assert_str_eq(types.name(cp), "site", "named site")
             spec.assert_str_eq(cfg_(cp).api_key, "stored-fake", "stored key")
-            spec.assert_str_eq(types.key_hint(cp), "the key stored by nib (run nib login)", "hint")
+            spec.assert_str_eq(types.key_hint(cp), "the key stored by naeb (run naeb login)", "hint")
             env.set(e, "SITE_KEY", "env-fake")
             cp, _e2, _x2 = config.load(e, d)
             spec.assert_str_eq(cfg_(cp).api_key, "env-fake", "environment wins over the store")
@@ -773,25 +773,25 @@ main() {
     spec.describe(fw, "config (port additions)") {
         spec.it("the Codex provider is gone but a [codex] section still loads") callback {
             e = env.new()
-            env.set(e, "NIB_CODEX_TRANSPORT", "bogus")
-            env.set(e, "NIB_CODEX_RUN_TOOL", "bogus")
+            env.set(e, "NAEB_CODEX_TRANSPORT", "bogus")
+            env.set(e, "NAEB_CODEX_RUN_TOOL", "bogus")
             spec.assert_str_eq(err_(e, ""), "", "codex variables are ignored")
             spec.assert_eq(types.known_id("codex"), 0, "codex is not an id")
             expect_parse_error_("[codex]\ntransport = \"tcp\"\n", 2, "transport must be websocket or sse")
             expect_parse_error_("[codex]\nrun_tool = \"x\"\n", 2, "run_tool must be custom or function")
             expect_parse_error_("[codex]\nprotocol = \"responses\"\n", 2, "unknown provider key 'protocol'")
             e2 = env.new()
-            env.set(e2, "NIB_PROVIDER", "openai")
+            env.set(e2, "NAEB_PROVIDER", "openai")
             env.set(e2, "OPENAI_API_KEY", "k")
             cfg, rerr, rdetail = config.resolve(e2, "[codex]\nmodel = \"gpt-6.1-sol\"\ntransport = \"sse\"\nreasoning_summary = \"auto\"\nrun_tool = \"function\"\n", "/c.toml")
             spec.assert_str_eq(rerr, "", "a [codex] section loads: ${rdetail}")
             spec.assert_str_eq(types.name(cfg), "openai", "and is ignored")
         }
-        spec.it("home joins HOME and .nib and rejects nothing else") callback {
+        spec.it("home joins HOME and .naeb and rejects nothing else") callback {
             e = env.new()
             env.set(e, "HOME", "/h/")
             h, err = config.home(e)
-            spec.assert_true(err == "" && h == "/h/.nib", "trailing slash joins once: ${h}")
+            spec.assert_true(err == "" && h == "/h/.naeb", "trailing slash joins once: ${h}")
         }
         spec.it("env.pairs gives a child's environment as NAME=value strings") callback {
             e = env.new()
@@ -809,7 +809,7 @@ main() {
         }
         spec.it("environment variables beat the file for every setting they cover") callback {
             e = env.new()
-            env.set(e, "NIB_PROVIDER", "openai")
+            env.set(e, "NAEB_PROVIDER", "openai")
             env.set(e, "OPENAI_API_KEY", "k1")
             text = "provider = \"anthropic\"\n[openai]\nmodel = \"gpt-6.1-terra\"\nbase_url = \"http://file\"\ncontext_window = 77\n"
             cp = ok_(e, text)
@@ -817,9 +817,9 @@ main() {
             spec.assert_str_eq(cfg_(cp).model, "gpt-6.1-terra", "file model under env provider")
             spec.assert_str_eq(cfg_(cp).base_url, "http://file", "file url")
             spec.assert_eq(cfg_(cp).context_window as int, 77, "file window")
-            env.set(e, "NIB_MODEL", "gpt-6.1-sol")
-            env.set(e, "NIB_BASE_URL", "http://env")
-            env.set(e, "NIB_CONTEXT_WINDOW", "88")
+            env.set(e, "NAEB_MODEL", "gpt-6.1-sol")
+            env.set(e, "NAEB_BASE_URL", "http://env")
+            env.set(e, "NAEB_CONTEXT_WINDOW", "88")
             cp = ok_(e, text)
             spec.assert_true(cfg_(cp).model == "gpt-6.1-sol" && cfg_(cp).base_url == "http://env" && cfg_(cp).context_window == (88 as long), "env wins")
             spec.assert_str_eq(cfg_(cp).api_key, "k1", "key")

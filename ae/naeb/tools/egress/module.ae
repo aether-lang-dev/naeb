@@ -21,16 +21,16 @@ import std.list
 import std.string
 import std.sync
 import std.worker
-import nib.lock
-import nib.fence
+import naeb.lock
+import naeb.fence
 
 @source("resolve.c")
 
 exports(Proxy, Channel, new, channel, child_channel, channel_url, channel_port, channel_sock, channel_close, channel_take, parse_target,
         vet, addresses_for)
 
-extern nibnet_resolve(host: string) -> string @heap
-extern nibnet_vet(addr: string) -> string
+extern naebnet_resolve(host: string) -> string @heap
+extern naebnet_vet(addr: string) -> string
 
 const HEADER_LIMIT = 16384
 const IDLE_MS = 300000
@@ -316,7 +316,7 @@ handle_(chp: @keep ptr, c: @keep ptr) {
 
 // Why the proxy does not connect to the numeric `addr` on its own: a
 // loopback, private, ... address (see the top), or "" for a public one.
-vet(addr: string) -> string { return string.copy(nibnet_vet(addr)) }
+vet(addr: string) -> string { return string.copy(naebnet_vet(addr)) }
 
 // The addresses to try, in order, for an allowed `host`:`port`: (list,
 // "") of those vetted (public, or named for the port by the fence), (empty,
@@ -325,7 +325,7 @@ vet(addr: string) -> string { return string.copy(nibnet_vet(addr)) }
 addresses_for(fp: ptr, host: string, port: int) -> (ptr, string) {
     h = host
     if string.starts_with(h, "[") == 1 && string.ends_with(h, "]") == 1 { h = string.substring(h, 1, string.length(h) - 1) }
-    text = nibnet_resolve(h)
+    text = naebnet_resolve(h)
     out = list.list_new()
     first_why = ""
     n = string.length(text)

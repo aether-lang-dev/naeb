@@ -7,11 +7,11 @@ import std.string
 import std.sync
 import std.worker
 import std.os
-import nib.sandbox
-import nib.sandbox.timing
-import nib.sandbox.record
-import nib.sandbox.replay
-import nib.jsonx
+import naeb.sandbox
+import naeb.sandbox.timing
+import naeb.sandbox.record
+import naeb.sandbox.replay
+import naeb.jsonx
 import std.list
 
 limits_(timeout_ms: long) -> ptr {

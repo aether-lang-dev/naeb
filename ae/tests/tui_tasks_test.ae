@@ -1,8 +1,8 @@
 // Ports the 1 test of upstream src/tui/tasks.zig under its name. Tasks are
 // tasks.Task boxes (see the module header).
 import std.spec
-import nib.tui.tasks
-import nib.tui.agent_tree
+import naeb.tui.tasks
+import naeb.tui.agent_tree
 
 main() {
     fw = spec.init()

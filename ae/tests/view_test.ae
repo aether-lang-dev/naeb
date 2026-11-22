@@ -1,7 +1,7 @@
 // Ports the inline tests of upstream src/tools/view.zig under their names:
 // "view returns metadata and attaches the stored image to the Run" and "view
 // refuses models without vision and rejects bad arguments". Each test makes a
-// Tools with its own temp home and nib data dir and calls through
+// Tools with its own temp home and naeb data dir and calls through
 // tools.call_tool, as files_test does. The image bytes are the sample PNG
 // (it has NUL bytes).
 //
@@ -15,15 +15,15 @@ import std.list
 import std.string
 import std.json
 import std.encoding
-import nib.jsonx
-import nib.image
-import nib.sandbox
-import nib.tools
-import nib.tools.mcp_tool
-import nib.provider.types
+import naeb.jsonx
+import naeb.image
+import naeb.sandbox
+import naeb.tools
+import naeb.tools.mcp_tool
+import naeb.provider.types
 
 tmp_() -> string {
-    d, _e = fs.make_temp_dir("", "nib-view")
+    d, _e = fs.make_temp_dir("", "naeb-view")
     real, _k, _m = fs.realpath(d)
     return real
 }
@@ -31,7 +31,7 @@ tmp_() -> string {
 new_tools_(d: string, session: string) -> ptr {
     t = tools.new(d)
     tt = t as *tools.Tools
-    tt.data_home = "${d}/nibhome"
+    tt.data_home = "${d}/naebhome"
     tt.session_id = session
     return t
 }
@@ -90,10 +90,10 @@ main() {
             spec.assert_str_eq(image.name_of(image.image_at(taken, 0)), "${d}/shot.png", "named by the path as given")
             spec.assert_str_eq(image.name_of(image.image_at(taken, 1)), "${d}/sub/../shot.png", "a non-canonical path stays as given")
             spec.assert_true(has_(taken, "\"media_type\":\"image/png\"") == 1, "media type")
-            spec.assert_true(has_(taken, "${d}/nibhome/sessions/abc.images/") == 1, "stored under the session's images")
+            spec.assert_true(has_(taken, "${d}/naebhome/sessions/abc.images/") == 1, "stored under the session's images")
             spec.assert_str_eq(tools.take_images(s), "", "taken once")
             // content-addressed: four views, one file
-            names, _le = fs.list_dir("${d}/nibhome/sessions/abc.images")
+            names, _le = fs.list_dir("${d}/naebhome/sessions/abc.images")
             spec.assert_eq(fs.dir_list_count(names), 1, "one stored file")
             fs.remove_tree(d)
         }
@@ -110,11 +110,11 @@ main() {
         }
         spec.it("view does not read the credential files the file tools refuse") callback {
             d = tmp_()
-            fs.mkdir_p("${d}/nibhome")
-            write_png_("${d}/nibhome/auth.json")
+            fs.mkdir_p("${d}/naebhome")
+            write_png_("${d}/naebhome/auth.json")
             t = new_tools_(d, "abc")
             s = tools.new_scope(t, 1)
-            r = call_(s, "view", "{\"path\":${jsonx.quote("${d}/nibhome/auth.json")}}")
+            r = call_(s, "view", "{\"path\":${jsonx.quote("${d}/naebhome/auth.json")}}")
             spec.assert_eq(r.ok, 0, "rejected")
             spec.assert_str_eq(r.text, "CredentialAccessDenied", "as read refuses")
             spec.assert_eq(image.attached_count((s as *tools.RunScope).images), 0, "nothing attached")
@@ -142,7 +142,7 @@ main() {
             png = image.sample_png()
             b64 = encode_(png)
             content = "[{\"type\":\"text\",\"text\":\"pic\"},{\"type\":\"image\",\"data\":${jsonx.quote(b64)}}]"
-            tg = image.new_target(1, "${d}/nibhome", "abc", (s as *tools.RunScope).images)
+            tg = image.new_target(1, "${d}/naebhome", "abc", (s as *tools.RunScope).images)
             spec.assert_str_eq(mcp_tool.map_content(content, tg), "pic\n[image attached]", "attached")
             spec.assert_eq(image.attached_count((s as *tools.RunScope).images), 1, "one")
             bad = "[{\"type\":\"image\",\"data\":\"bm90IGFuIGltYWdl\"},{\"type\":\"image\"},{\"type\":\"image\",\"data\":\"!!\"}]"
@@ -154,7 +154,7 @@ main() {
             }
             spec.assert_eq(image.attached_count((s as *tools.RunScope).images), 4, "limit")
             spec.assert_str_eq(mcp_tool.map_content(content, tg), "pic\n[image omitted: Run image limit]", "over the limit")
-            off = image.new_target(0, "${d}/nibhome", "abc", (s as *tools.RunScope).images)
+            off = image.new_target(0, "${d}/naebhome", "abc", (s as *tools.RunScope).images)
             spec.assert_str_eq(mcp_tool.map_content(content, off), "pic\n[image omitted]", "no vision")
             spec.assert_str_eq(mcp_tool.map_content(content, null), "pic\n[image omitted]", "no target")
             fs.remove_tree(d)

@@ -3,7 +3,7 @@
 // src/tui/prediction.zig).
 //
 // Differences from upstream:
-//  - The history is a std.list of message JSON texts (nib.msg values), as
+//  - The history is a std.list of message JSON texts (naeb.msg values), as
 //    Session.history holds. recent_user_messages returns a list of strings
 //    (copies, not borrows).
 //  - skills are not ported: MENTION_INTRO and typed() stand in for
@@ -32,8 +32,8 @@ import std.strbuilder
 import std.list
 import std.sync
 import std.worker
-import nib.msg
-import nib.tui.editor
+import naeb.msg
+import naeb.tui.editor
 
 exports(TIMEOUT_MS, MAX_REPLY_BYTES, MAX_USER_BYTES, MAX_RECENT, MAX_RECENT_MESSAGE_BYTES,
         MAX_RECENT_BYTES, MAX_TOKENS, INSTRUCTION, MENTION_INTRO, State, Worker,

@@ -27,8 +27,8 @@ import std.os hiding (exec, run_capture, run_pipe, run_pipe_drain_and_wait, run_
     os_run_stdio_raw, os_run_full_raw, os_run_supervised_raw, os_spawn_raw,
     os_spawn_to_raw)
 import std.cryptography
-import nib.lock
-import nib.jsonx
+import naeb.lock
+import naeb.jsonx
 
 exports(Recorder, MAX_RESULT_BYTES, END_OK, END_ERROR, END_TIMEOUT, END_CANCELLED,
         new, fork, begin, capture, settle, eval_end, finish, close, buffer_text, seen_count)
@@ -41,7 +41,7 @@ const END_CANCELLED = "cancelled"
 
 struct Recorder {
     parent: ptr        // *Recorder of a Run's fork, null for the Session's
-    guard: ptr         // nib.lock
+    guard: ptr         // naeb.lock
     path: string
     enabled: int
     warned: int

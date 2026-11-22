@@ -10,12 +10,12 @@ import std.json
 import std.list
 import std.string
 import std.sync
-import nib.jsonx
-import nib.lock
-import nib.mcp.mcp_headers
-import nib.mcp.mcp_index
-import nib.mcp.mcp_transport
-import nib.provider.types
+import naeb.jsonx
+import naeb.lock
+import naeb.mcp.mcp_headers
+import naeb.mcp.mcp_index
+import naeb.mcp.mcp_transport
+import naeb.provider.types
 
 exports(Client, new, set_fence, take_refusals, close, prompt, schema, call, server_state, enabled_any, split, checked,
         PROTOCOL_VERSION, LEGACY_VERSION, TIMEOUT_MS, MAX_MESSAGE)
@@ -39,9 +39,9 @@ struct Client {
 }
 
 // servers: list of *types.McpServer (copied). env: "NAME=value" list for
-// stdio children and header_env, or null (this process's). home: $NIB_HOME
+// stdio children and header_env, or null (this process's). home: $NAEB_HOME
 // (each stdio server runs in <home>/mcp/<id>). writable: extra sandbox
-// roots (list of paths, or null). self_exe: this nib binary.
+// roots (list of paths, or null). self_exe: this naeb binary.
 new(servers: ptr, env: @keep ptr, home: string, user_home: string, writable: @keep ptr, sandboxed: int, self_exe: string) -> ptr {
     c = heap.new(Client)
     c.servers = list.list_new()

@@ -14,7 +14,7 @@
 
 /* Every address `host` resolves to, numeric, one per line, IPv4 first as
  * getaddrinfo orders them; "" when it does not resolve. */
-const char *nibnet_resolve(const char *host) {
+const char *naebnet_resolve(const char *host) {
     struct addrinfo hints, *res = NULL;
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;
@@ -63,7 +63,7 @@ static const char *vet4_(uint32_t a) {
  * names that address: "loopback", "private", "link-local", "unspecified",
  * "multicast", ... (IPv4-mapped and NAT64 forms by the address they
  * carry); "" for an ordinary public address; "not an address" otherwise. */
-const char *nibnet_vet(const char *addr) {
+const char *naebnet_vet(const char *addr) {
     struct in_addr v4;
     struct in6_addr v6;
     if (inet_pton(AF_INET, addr, &v4) == 1) return vet4_(ntohl(v4.s_addr));

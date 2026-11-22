@@ -1,12 +1,12 @@
 # ae/term: a terminal layer for Aether
 
-The terminal the Aether port of nib's TUI draws on. Upstream nib uses
+The terminal the Aether port of naeb's TUI draws on. Upstream nib uses
 [libvaxis](https://github.com/rockorager/libvaxis) (Zig); Aether has no
-terminal UI library, so this is one, shaped like the part of libvaxis nib
+terminal UI library, so this is one, shaped like the part of libvaxis naeb
 uses so the TUI screens port line for line.
 
-**It is standalone.** Nothing here imports the rest of nib, and nothing in
-it knows about nib: it depends on Aether's `std` only. It can move out into
+**It is standalone.** Nothing here imports the rest of naeb, and nothing in
+it knows about naeb: it depends on Aether's `std` only. It can move out into
 its own repository as an Aether TUI library without changes.
 
 ## Layout
@@ -72,11 +72,11 @@ the way upstream's pty tests write them.
 Everything is passed explicitly: no module-level state. The C shim's
 restore table (`tty.c`) is process-wide because signal dispositions are.
 
-## What of libvaxis nib uses, and what is here
+## What of libvaxis naeb uses, and what is here
 
 From a census of upstream `src/` (`vaxis.*` symbols and method calls):
 
-| libvaxis, as nib uses it | here |
+| libvaxis, as naeb uses it | here |
 |---|---|
 | `Window` (75 uses): `child` with negative offsets, `print`/`printSegment` with grapheme/word/none wrap and `commit = false` to measure, `readCell`, `writeCell`, `clear`, `fill`, `showCursor`/`hideCursor`, `gwidth` | `screen.child`, `screen.draw` / `draw_segment` (`print` is an Aether builtin), `win_read`, `win_write`, `clear`, `fill`, `show_cursor`, `hide_cursor`, `win_gwidth`; also `child_bordered`, `scroll`, `has_mouse`. Word wrap keeps libvaxis's quirks (the row counted after a broken segment's last line) |
 | `Screen.init`, `screen.buf[i]` edits, `readCell`, `width_method` | `screen.surface`, `s.cells[i]`, `read_cell`, `width_method` |
@@ -89,7 +89,7 @@ From a census of upstream `src/` (`vaxis.*` symbols and method calls):
 | renderer: diff against the last frame, wide-grapheme skip cells, synchronized output, SGR standard/legacy, cursor, cursor shape | all, for the alternate screen |
 | `Tty`: raw mode, `/dev/tty`, SIGWINCH, restore on exit | all, plus restore on SIGTERM/SIGHUP/SIGINT/SIGQUIT and on a panic or a crash (SIGABRT, SIGSEGV, SIGBUS, SIGFPE, SIGILL) |
 
-Not here, because nib does not use them: images (kitty graphics, sixel),
+Not here, because naeb does not use them: images (kitty graphics, sixel),
 scaled text and explicit width (OSC 66), secondary cursors, mouse shapes,
 the primary-screen (inline) renderer, `no_zwj` widths, vxfw widgets,
 cursor-position reports (so `CSI 1;2R` is shift+F3, as without libvaxis's
@@ -123,7 +123,7 @@ win ae/term/tests/test_render.ae`).
 - `tests/fidelity.py`: replays those bytes with upstream's
   `scripts/screen.py`, unchanged; each replay must equal the grid.
 - `tests/test_restore.py`: the demo under a pty with a controlling
-  terminal, as upstream's `tests/test_tui_*.py` run nib: it draws, takes
+  terminal, as upstream's `tests/test_tui_*.py` run naeb: it draws, takes
   keys, mouse and a resize, and the terminal comes back cooked with the
   modes off after `q`, SIGTERM, SIGHUP, SIGINT and a panic.
 

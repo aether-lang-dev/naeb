@@ -1,6 +1,6 @@
 // session.compact: context compaction as pure functions over message texts
 // (upstream src/session/compact.zig). A history is a list of Session message
-// JSON texts (nib.msg); index 0 is the system prompt.
+// JSON texts (naeb.msg); index 0 is the system prompt.
 //
 // compact() does the decision and the rewrite; the model call is a function
 // value, so the module owns no client. What the Session engine must do
@@ -13,10 +13,10 @@
 import std.string
 import std.list
 import std.json
-import nib.image
-import nib.jsonx
-import nib.msg
-import nib.provider.types
+import naeb.image
+import naeb.jsonx
+import naeb.msg
+import naeb.provider.types
 
 exports(without_images, ModelReply, COMPACTED, TOO_FEW_STEPS, INEFFECTIVE, IMAGE_TOKENS, SUMMARY_PROMPT, Result, estimate_tokens,
         compaction_cut, summary_max_tokens, summary_request, replacement, compact, auto_failed_notice,

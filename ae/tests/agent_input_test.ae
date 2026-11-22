@@ -7,9 +7,9 @@
 import std.spec
 import std.list
 import std.string
-import nib.msg
-import nib.provider.types
-import nib.tools.agent_input
+import naeb.msg
+import naeb.provider.types
+import naeb.tools.agent_input
 
 cfg_(p: @into ptr) -> *types.Config { return p as *types.Config }
 

@@ -22,12 +22,12 @@ import std.string
 import std.strbuilder
 import std.sync
 import std.json
-import nib.jsonx
-import nib.lock
-import nib.msg
-import nib.provider
-import nib.provider.sink
-import nib.provider.types
+import naeb.jsonx
+import naeb.lock
+import naeb.msg
+import naeb.provider
+import naeb.provider.sink
+import naeb.provider.types
 
 exports(State, SYSTEM, USAGE_TEXT, new, set_config, config_of, set_gate, admit, call, invoke, add_usage, take_usage,
         options_text, limits_text, fill_docs, snippet_end)

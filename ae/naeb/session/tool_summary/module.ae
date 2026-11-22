@@ -10,8 +10,8 @@
 import std.list
 import std.string
 import std.strbuilder
-import nib.jsonx
-import nib.sandbox.timing
+import naeb.jsonx
+import naeb.sandbox.timing
 
 exports(Count, File, Summary, init, empty, clone, to_json, annotate_views)
 

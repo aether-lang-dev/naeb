@@ -3,22 +3,22 @@
 //   store.zig "timestamps are RFC 3339"  the timestamp serves only the Codex
 //                                        OAuth `last_refresh` field (not ported)
 // Adapted: the Codex rows and token halves of "service status names sources
-// and never keys", "sign out removes only nib's credential and reports the
+// and never keys", "sign out removes only naeb's credential and reports the
 // rest" and "store round trip ..." / "invalid files ..." are dropped; every
 // other assertion is kept. The login/logout tests at the end are new (the
-// port's `nib login` / `nib logout` are functions returning their output).
+// port's `naeb login` / `naeb logout` are functions returning their output).
 import std.spec
 import std.fs
 import std.json
 import std.list
 import std.string
-import nib.config.env
-import nib.provider.types
-import nib.auth
-import nib.auth.store
+import naeb.config.env
+import naeb.provider.types
+import naeb.auth
+import naeb.auth.store
 
 tmp_() -> string {
-    d, _e = fs.make_temp_dir("", "nib-auth")
+    d, _e = fs.make_temp_dir("", "naeb-auth")
     real, _k, _m = fs.realpath(d)
     return real
 }
@@ -83,7 +83,7 @@ main() {
             spec.assert_str_eq(svc_(l, 0).name, "Anthropic", "display name")
             fs.remove_tree(d)
         }
-        spec.it("sign out removes only nib's credential and reports the rest") callback {
+        spec.it("sign out removes only naeb's credential and reports the rest") callback {
             d = tmp_()
             e = env.new()
             env.set(e, "HOME", d)
@@ -99,7 +99,7 @@ main() {
             o3, _e3 = auth.sign_out(e, d, "xai")
             spec.assert_true((o3 as *auth.SignOut).removed == 1 && (o3 as *auth.SignOut).env_name == "", "xai removed, no env key")
             spec.assert_str_eq(auth.sign_out_text("OpenAI", o), "OpenAI · signed out · key still set in OPENAI_API_KEY", "text")
-            spec.assert_str_eq(auth.sign_out_text("OpenAI", o2), "OpenAI · nothing stored by nib · key still set in OPENAI_API_KEY", "text 2")
+            spec.assert_str_eq(auth.sign_out_text("OpenAI", o2), "OpenAI · nothing stored by naeb · key still set in OPENAI_API_KEY", "text 2")
             spec.assert_str_eq(auth.sign_out_text("xAI", o3), "xAI · signed out", "text 3")
             fs.remove_tree(d)
         }
@@ -125,7 +125,7 @@ main() {
             spec.assert_str_eq(auth.describe(cp), "key from ANTHROPIC_API_KEY", "env")
             spec.assert_eq(contains_(auth.describe(cp), "sk-zzz-secret"), 0, "env text never the key")
             c.key_source = "store"
-            spec.assert_str_eq(auth.describe(cp), "key stored by nib", "store")
+            spec.assert_str_eq(auth.describe(cp), "key stored by naeb", "store")
             spec.assert_eq(contains_(auth.describe(cp), "sk-zzz-secret"), 0, "store text never the key")
             c.key_source = "none"
             c.api_key = ""
@@ -133,7 +133,7 @@ main() {
         }
         spec.it("store round trip keeps unknown fields, mode 0600 and removes cleanly") callback {
             d = tmp_()
-            p = "${d}/nib/auth.json"
+            p = "${d}/naeb/auth.json"
             doc, err = store.load(p)
             spec.assert_str_eq(err, "", "missing file is empty")
             spec.assert_eq(json.object_size(store.root(doc)), 0, "empty")
@@ -255,29 +255,29 @@ main() {
             empty = list.list_new()
             code, out, errtext = auth.login(d, e, empty, answers_(list.list_new()), answers_(list.list_new()))
             spec.assert_eq(code, 1, "end of input at the menu")
-            spec.assert_str_eq(errtext, "nib: Invalid arguments · run nib --help\n", "stderr")
+            spec.assert_str_eq(errtext, "naeb: Invalid arguments · run naeb --help\n", "stderr")
             spec.assert_str_eq(out, "", "stdout empty")
             nope = list.list_new()
             list.list_add(nope, "nope")
             code2, _o2, e2 = auth.login(d, e, nope, answers_(list.list_new()), answers_(list.list_new()))
             spec.assert_eq(code2, 1, "unknown service")
-            spec.assert_str_eq(e2, "nib: Unknown service · run nib login to list services\n", "unknown")
+            spec.assert_str_eq(e2, "naeb: Unknown service · run naeb login to list services\n", "unknown")
             one = list.list_new()
             list.list_add(one, "openai")
             blank = list.list_new()
             list.list_add(blank, "")
             code3, _o3, e3 = auth.login(d, e, one, answers_(list.list_new()), answers_(blank))
             spec.assert_eq(code3, 1, "empty key")
-            spec.assert_str_eq(e3, "nib: API key cannot be empty\n", "empty key text")
+            spec.assert_str_eq(e3, "naeb: API key cannot be empty\n", "empty key text")
             flag = list.list_new()
             list.list_add(flag, "--device")
             code4, _o4, e4 = auth.login(d, e, flag, answers_(list.list_new()), answers_(list.list_new()))
             spec.assert_eq(code4, 1, "an option")
-            spec.assert_str_eq(e4, "nib: Invalid arguments · run nib --help\n", "option text")
+            spec.assert_str_eq(e4, "naeb: Invalid arguments · run naeb --help\n", "option text")
             spec.assert_eq(fs.exists("${d}/auth.json"), 0, "nothing was stored")
             fs.remove_tree(d)
         }
-        spec.it("logout removes only nib's key and says what is left") callback {
+        spec.it("logout removes only naeb's key and says what is left") callback {
             d = tmp_()
             e = env.new()
             env.set(e, "ANTHROPIC_API_KEY", "from-env")
@@ -290,16 +290,16 @@ main() {
             spec.assert_str_eq(out, "Anthropic · signed out · key still set in ANTHROPIC_API_KEY\n", "stdout")
             code2, out2, _e2 = auth.logout(d, env.new(), args)
             spec.assert_eq(code2, 0, "second exit")
-            spec.assert_str_eq(out2, "Anthropic · nothing stored by nib\n", "nothing stored")
+            spec.assert_str_eq(out2, "Anthropic · nothing stored by naeb\n", "nothing stored")
             doc, _e3 = store.load("${d}/auth.json")
             spec.assert_str_eq(store.key(doc, "xai"), "k2", "xai kept")
             store.free(doc)
             code3, _o3, e3 = auth.logout(d, e, list.list_new())
-            spec.assert_true(code3 == 1 && e3 == "nib: Invalid arguments · run nib --help\n", "no argument")
+            spec.assert_true(code3 == 1 && e3 == "naeb: Invalid arguments · run naeb --help\n", "no argument")
             bogus = list.list_new()
             list.list_add(bogus, "nope")
             code4, _o4, e4 = auth.logout(d, e, bogus)
-            spec.assert_true(code4 == 1 && e4 == "nib: Unknown service · run nib login to list services\n", "unknown")
+            spec.assert_true(code4 == 1 && e4 == "naeb: Unknown service · run naeb login to list services\n", "unknown")
             fs.remove_tree(d)
         }
     }

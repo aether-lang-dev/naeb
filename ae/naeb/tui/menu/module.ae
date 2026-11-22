@@ -3,7 +3,7 @@
 // a pinned list that replaces it (the /provider service menu and pickers),
 // and the `@` path completions from the paths index.
 //
-// Differences: the Session is a nib.tui.port.Port; the index is created by
+// Differences: the Session is a naeb.tui.port.Port; the index is created by
 // the app with its clock and wake (paths.new(root, now)) and handed in with
 // set_index. The skills a `$` mention lists come from `skill_source`, a
 // closure the app sets (upstream Session.discoverSkills): || -> std.list of
@@ -13,14 +13,14 @@
 
 import std.list
 import std.string
-import nib.jsonx
-import nib.config
-import nib.provider.types
-import nib.tui.commands
-import nib.tui.editor
-import nib.tui.paths
-import nib.tui.port
-import nib.session.skills
+import naeb.jsonx
+import naeb.config
+import naeb.provider.types
+import naeb.tui.commands
+import naeb.tui.editor
+import naeb.tui.paths
+import naeb.tui.port
+import naeb.session.skills
 
 exports(Menu, MENTION_NONE, MENTION_FILE, MENTION_SKILL, new, free, is_pinned, pin, unpin, items,
         sync, selected, move, input_changed, forget_sessions, load, resolve_session, set_index,

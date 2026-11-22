@@ -26,13 +26,13 @@ import std.fs
 import std.list
 import std.string
 import std.time
-import nib.jsonx
-import nib.msg
-import nib.session.log
-import nib.provider.types
+import naeb.jsonx
+import naeb.msg
+import naeb.session.log
+import naeb.provider.types
 
 tmp_() -> string {
-    d, _e = fs.make_temp_dir("", "nib-slog")
+    d, _e = fs.make_temp_dir("", "naeb-slog")
     real, _k, _m = fs.realpath(d)
     return real
 }

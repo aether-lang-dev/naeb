@@ -1,7 +1,7 @@
 // session.prompt: the system prompt, the run tool schema, the prompt patches
 // and the Step-budget texts (upstream src/session/prompt.zig).
 //
-// Differences from upstream, all in what is passed: NIB_PATCHES_OFF is a
+// Differences from upstream, all in what is passed: NAEB_PATCHES_OFF is a
 // parameter (the caller reads the environment), render_system takes the
 // tools documentation text, the Run output budget and the model name
 // instead of a Tools host (model "" and bytes output.MAX_BYTES when the
@@ -11,9 +11,9 @@ import std.string
 import std.strbuilder
 import std.list
 import std.cryptography
-import nib.sandbox
-import nib.session.profile
-import nib.session.output
+import naeb.sandbox
+import naeb.session.profile
+import naeb.session.output
 
 exports(TOOLS_JSON, SYSTEM_TEMPLATE, Patch, patches, patch_lines, render_patches, patch_disabled,
         disabled_patches, system_sha, render_system, turn_budget_text, step_limit_prompt)
@@ -22,10 +22,10 @@ const TOOLS_JSON = "[{\"type\":\"function\",\"function\":{\"name\":\"run\",\n\"d
 
 // Four "{s}" markers (cwd, tools docs, output budget, patch lines) and one
 // "{d}" (tool concurrency), as upstream's format string after its comptime step.
-const SYSTEM_TEMPLATE = "You are nib, a coding agent working in {s}.\n\nYou act by calling the `run` tool with JavaScript. Each call runs in a fresh sandbox: no variables survive between calls, so write anything you need later to a file. The script can affect the outside world only through these functions:\n\n```js\n{s}```\n\nWriting scripts:\n- Top-level `await` works. Each Step is a full model round trip, usually 10 s or more; one Run can read several files, make all independent edits, then build and test, returning only what you need (such as failures).\n- Tool calls started without awaiting each one (e.g. Promise.all) run concurrently, up to {d} at a time; commands chained inside one bash call (&&, ;) run one after another.\n- Long Runs auto-background while awaiting tools; scripts and captured output stay intact. Background Run/bash/agent results arrive automatically as messages. Continue useful work meanwhile; never check or wait for them with ps, cat/tail logs, sleep, empty Runs or timeout reruns. Do not read their redirected logs before completion. If no independent work remains, end the model response immediately with a brief text reply and no run/tool call (not even console.log); Session waits locally, delivers the result and continues the Turn. After edit/write changes, rerun the same command/cwd directly: older Run bash stops with {superseded_by}, not failure. Do not wait for the stale result.\n- Default to doing the task yourself. Unless the user requests delegation, delegate only independent read-only investigations that can run in parallel with useful parent work and whose results can be discarded. Keep serial edits, builds, tests and reviews in the main loop. Waiting on a foreground agent is serial; background delegation does not help if you must wait for it to proceed.\n- The last expression and console.log output share {s} per Run, truncated by console call and final result with markers; tool results inside JS remain complete. Locate with grep, then read needed line ranges. Large multi-file output can exceed this display budget: batch reads or print only needed snippets.\n- Before full builds/tests, finish implementation, known regression tests, expected results/fixtures and formatting; aim for one full validation. On failure, fix the failures and revalidate. Keep all necessary checks.\n- A run script's syntax or runtime error means the script needs correction. Fix it and continue the task; do not end the Turn just because a script failed.\n{s}\nWhen the task is done, answer the user directly without calling the tool."
+const SYSTEM_TEMPLATE = "You are naeb, a coding agent working in {s}.\n\nYou act by calling the `run` tool with JavaScript. Each call runs in a fresh sandbox: no variables survive between calls, so write anything you need later to a file. The script can affect the outside world only through these functions:\n\n```js\n{s}```\n\nWriting scripts:\n- Top-level `await` works. Each Step is a full model round trip, usually 10 s or more; one Run can read several files, make all independent edits, then build and test, returning only what you need (such as failures).\n- Tool calls started without awaiting each one (e.g. Promise.all) run concurrently, up to {d} at a time; commands chained inside one bash call (&&, ;) run one after another.\n- Long Runs auto-background while awaiting tools; scripts and captured output stay intact. Background Run/bash/agent results arrive automatically as messages. Continue useful work meanwhile; never check or wait for them with ps, cat/tail logs, sleep, empty Runs or timeout reruns. Do not read their redirected logs before completion. If no independent work remains, end the model response immediately with a brief text reply and no run/tool call (not even console.log); Session waits locally, delivers the result and continues the Turn. After edit/write changes, rerun the same command/cwd directly: older Run bash stops with {superseded_by}, not failure. Do not wait for the stale result.\n- Default to doing the task yourself. Unless the user requests delegation, delegate only independent read-only investigations that can run in parallel with useful parent work and whose results can be discarded. Keep serial edits, builds, tests and reviews in the main loop. Waiting on a foreground agent is serial; background delegation does not help if you must wait for it to proceed.\n- The last expression and console.log output share {s} per Run, truncated by console call and final result with markers; tool results inside JS remain complete. Locate with grep, then read needed line ranges. Large multi-file output can exceed this display budget: batch reads or print only needed snippets.\n- Before full builds/tests, finish implementation, known regression tests, expected results/fixtures and formatting; aim for one full validation. On failure, fix the failures and revalidate. Keep all necessary checks.\n- A run script's syntax or runtime error means the script needs correction. Fix it and continue the task; do not end the Turn just because a script failed.\n{s}\nWhen the task is done, answer the user directly without calling the tool."
 
 // A prompt line that compensates for current models. Each id is registered
-// in docs/compromises.md; NIB_PATCHES_OFF=<id,...|all> drops them.
+// in docs/compromises.md; NAEB_PATCHES_OFF=<id,...|all> drops them.
 struct Patch {
     id: string
     text: string
@@ -58,7 +58,7 @@ trim_spaces_(s: string) -> string {
     return string.substring(s, from, to)
 }
 
-// Whether NIB_PATCHES_OFF value `off` (comma-separated, spaces trimmed) names `id` or "all".
+// Whether NAEB_PATCHES_OFF value `off` (comma-separated, spaces trimmed) names `id` or "all".
 patch_disabled(off: string, id: string) -> int {
     parts = string.split(off, ",")
     n = string.array_size(parts)

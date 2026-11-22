@@ -2,9 +2,9 @@
 // Differences: the Viewport is a heap box (`viewport.new()`), `top` is
 // has_top/top_entry/top_row; anchors compare by their two fields.
 import std.spec
-import nib.tui.viewport
-import nib.tui.transcript
-import nib.tui.entry
+import naeb.tui.viewport
+import naeb.tui.transcript
+import naeb.tui.entry
 import term.screen
 
 anchor_eq_(a: viewport.Anchor, entry_: int, row: int, msg: string) {

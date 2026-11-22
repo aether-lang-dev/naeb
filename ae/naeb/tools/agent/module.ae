@@ -1,4 +1,4 @@
-// tools.agent: a subagent is a child `nib ask --json --agent-input -` with its
+// tools.agent: a subagent is a child `naeb ask --json --agent-input -` with its
 // own Session (upstream src/tools/agent.zig, docs/tool-delegation.md, ADR
 // 0015). The parent writes the prompt and its Config (and, for fork, its
 // history) to the child's stdin and reads the child's NDJSON events as they
@@ -21,14 +21,14 @@ import std.os hiding (exec, run_capture, run_pipe, run_pipe_drain_and_wait, run_
     os_run_stdio_raw, os_run_full_raw, os_run_supervised_raw, os_spawn_raw,
     os_spawn_to_raw)
 import std.sync
-import nib.jsonx
-import nib.lock
-import nib.provider.types
-import nib.tools.progress
-import nib.tools.agent_sessions
-import nib.tools.agent_input
-import nib.tools.process
-import nib.tools.secrets
+import naeb.jsonx
+import naeb.lock
+import naeb.provider.types
+import naeb.tools.progress
+import naeb.tools.agent_sessions
+import naeb.tools.agent_input
+import naeb.tools.process
+import naeb.tools.secrets
 
 exports(Ctx, Gate, Args, Begun, Output, Tracker, Change, new_ctx, new_gate, parse_args, begin, agent, execute, new_output,
         observe, result, new_tracker, tracker_observe, tracker_line, USAGE_TEXT, DEFAULT_TIMEOUT_MS)
@@ -721,8 +721,8 @@ child_env_(c: *Ctx, cfg: ptr) -> ptr {
     cc = cfg as *types.Config
     source = c.env
     if source == null { source = process.environ() }
-    source = env_set_(source, "NIB_AGENT_DEPTH", "${c.depth + 1}")
-    source = env_set_(source, "NIB_PARENT_SESSION_ID", c.session_id)
+    source = env_set_(source, "NAEB_AGENT_DEPTH", "${c.depth + 1}")
+    source = env_set_(source, "NAEB_PARENT_SESSION_ID", c.session_id)
     env = secrets.remove_from(source)
     keep = list.list_new()
     if cc.api_key_env != "" { list.list_add(keep, cc.api_key_env) }

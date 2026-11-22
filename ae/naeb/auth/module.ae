@@ -1,46 +1,46 @@
 // auth: where each service's key comes from and what the UI says about it
 // (upstream src/auth.zig and src/auth/cli.zig, API keys only).
-// Precedence: environment key, then nib's `auth.json`. Keys never leave this
+// Precedence: environment key, then naeb's `auth.json`. Keys never leave this
 // module in text meant for people: describe() and the service status name the
-// SOURCE (an environment variable, "key stored by nib"), never the key.
+// SOURCE (an environment variable, "key stored by naeb"), never the key.
 //
 // Not ported, by policy (API keys only): the Codex login (oauth, device flow,
-// the Codex CLI's auth.json, CODEX_HOME, `nib login codex`, `--device`).
+// the Codex CLI's auth.json, CODEX_HOME, `naeb login codex`, `--device`).
 //
-// login()/logout() are the `nib login` / `nib logout` commands without any
+// login()/logout() are the `naeb login` / `naeb logout` commands without any
 // terminal I/O of their own. They return (exit_code, stdout_text, stderr_text);
 // main prints the two texts and exits with the code. login asks for input
 // through two closures main supplies:
 //   read_line(prompt: string) -> string   shows `prompt` on stdout, flushes, reads one line
 //   read_secret(prompt: string) -> string the same with the terminal echo off when stdin is a tty
 // Both return the line without its newline, or EOF_LINE ("\n", which no line
-// can contain) at end of input. Errors come back as stderr "nib: <message>\n"
+// can contain) at end of input. Errors come back as stderr "naeb: <message>\n"
 // with the message text of upstream's main.zig errorMessage.
 
 import std.string
 import std.list
-import nib.config
-import nib.config.env
-import nib.provider.types
-import nib.auth.store
+import naeb.config
+import naeb.config.env
+import naeb.provider.types
+import naeb.auth.store
 
 exports(Service, SignOut, EOF_LINE, USAGE_LOGIN, services, find, known_service, describe, set_key,
         sign_out, sign_out_text, env_key, login, logout)
 
 const EOF_LINE = "\n"
-const USAGE_LOGIN = "Usage: nib login [service]"
+const USAGE_LOGIN = "Usage: naeb login [service]"
 
 struct Service {
     id: string
     name: string
     custom: int
     signed_in: int            // requests can be sent now
-    stored: int               // nib itself holds a key that sign-out would remove
+    stored: int               // naeb itself holds a key that sign-out would remove
     status: string
 }
 
 struct SignOut {
-    removed: int              // nib's own credential was removed
+    removed: int              // naeb's own credential was removed
     env_name: string          // "" or the variable a key still comes from
 }
 
@@ -155,7 +155,7 @@ describe(cp: ptr) -> string {
         if c.api_key_env != "" { return "key from ${c.api_key_env}" }
         return "key from environment"
     }
-    if c.key_source == "store" { return "key stored by nib" }
+    if c.key_source == "store" { return "key stored by naeb" }
     if types.missing_key(cp) == 1 { return "no key" }
     return "no key needed"
 }
@@ -171,7 +171,7 @@ set_key(home: string, id: string, key_text: string) -> string {
     return serr
 }
 
-// Removes nib's own key for `id` (and nothing else); reports a key that still
+// Removes naeb's own key for `id` (and nothing else); reports a key that still
 // comes from the environment. (*SignOut, error name).
 sign_out(envp: ptr, home: string, id: string) -> (ptr, string) {
     file = store.path(home)
@@ -212,13 +212,13 @@ sign_out(envp: ptr, home: string, id: string) -> (ptr, string) {
 // The confirmation after signing out; says what is left behind.
 sign_out_text(name: string, op: ptr) -> string {
     o = op as *SignOut
-    t = "${name} · nothing stored by nib"
+    t = "${name} · nothing stored by naeb"
     if o.removed == 1 { t = "${name} · signed out" }
     if o.env_name != "" { t = "${t} · key still set in ${o.env_name}" }
     return t
 }
 
-// ---- nib login / nib logout ---------------------------------------------
+// ---- naeb login / naeb logout ---------------------------------------------
 
 trim_nl_(s: string) -> string {
     a = 0
@@ -255,13 +255,13 @@ number_(s: string) -> int {
 }
 
 failure_(message_text: string) -> (int, string, string) {
-    return 1, "", "nib: ${message_text}\n"
+    return 1, "", "naeb: ${message_text}\n"
 }
 
-const INVALID_ARGUMENTS = "Invalid arguments · run nib --help"
-const UNKNOWN_SERVICE = "Unknown service · run nib login to list services"
+const INVALID_ARGUMENTS = "Invalid arguments · run naeb --help"
+const UNKNOWN_SERVICE = "Unknown service · run naeb login to list services"
 
-// `nib login [service]`: a service name or its menu number, then its key.
+// `naeb login [service]`: a service name or its menu number, then its key.
 login(home: string, envp: ptr, args: ptr, read_line: fn, read_secret: fn) -> (int, string, string) {
     wanted = ""
     have = 0
@@ -313,7 +313,7 @@ login(home: string, envp: ptr, args: ptr, read_line: fn, read_secret: fn) -> (in
     return 0, "${s.name} · key stored\n", ""
 }
 
-// `nib logout <service>`.
+// `naeb logout <service>`.
 logout(home: string, envp: ptr, args: ptr) -> (int, string, string) {
     if list.list_size(args) != 1 { return failure_(INVALID_ARGUMENTS) }
     id, _g = list.get_string(args, 0)

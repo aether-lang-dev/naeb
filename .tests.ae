@@ -1,6 +1,6 @@
 // The Aether port's unit tests: one program per file under ae/tests/, each
 // a std.spec suite that exits non-zero on a failure. Upstream's Python
-// end-to-end tests (tests/*.py) drive a full nib and wait for the session
+// end-to-end tests (tests/*.py) drive a full naeb and wait for the session
 // slices; PORT_STATUS.md lists which of them apply to what is ported.
 
 import bldr
@@ -176,7 +176,7 @@ aeb(cap) {
             source("ae/tests/provider_test.ae")
             lib("ae")
         }
-        // The TUI (ae/nib/tui), upstream src/tui*.
+        // The TUI (ae/naeb/tui), upstream src/tui*.
         aether.program_test() {
             source("ae/tests/tui_app_test.ae")
             lib("ae")

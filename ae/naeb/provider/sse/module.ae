@@ -3,7 +3,7 @@
 // (provider.http) or fixed text (tests), so readers are tested on fixtures.
 
 import std.string
-import nib.provider.http
+import naeb.provider.http
 
 exports(Parser, Lines, parser, feed, fixed, from_http, next)
 

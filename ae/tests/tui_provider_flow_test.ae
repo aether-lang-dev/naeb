@@ -10,8 +10,8 @@ import std.spec
 import std.list
 import std.string
 import std.sync
-import nib.auth.models
-import nib.tui.provider_flow
+import naeb.auth.models
+import naeb.tui.provider_flow
 
 taken_() -> ptr {
     l = list.list_new()

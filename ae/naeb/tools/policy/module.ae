@@ -198,13 +198,13 @@ basename(p: string) -> string {
 
 // ---- credentials ---------------------------------------------------------
 
-check_credentials(command: string, codex_home: string, nib_home: string) -> string {
+check_credentials(command: string, codex_home: string, naeb_home: string) -> string {
     if has(command, "auth.json") == 1 {
         named = 0
-        if has(command, ".nib") == 1 || has(command, "NIB_HOME") == 1 { named = 1 }
+        if has(command, ".naeb") == 1 || has(command, "NAEB_HOME") == 1 { named = 1 }
         located = 0
-        if string.length(nib_home) > 0 && has(command, nib_home) == 1 { located = 1 }
-        if named == 1 || located == 1 { return "access to nib credentials" }
+        if string.length(naeb_home) > 0 && has(command, naeb_home) == 1 { located = 1 }
+        if named == 1 || located == 1 { return "access to naeb credentials" }
     }
     if has(command, ".codex") == 1 || has(command, "$CODEX_HOME") == 1 || has(command, "\${CODEX_HOME}") == 1 {
         return "access to Codex credentials"

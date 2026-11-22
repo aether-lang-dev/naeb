@@ -2,16 +2,16 @@
 // only metadata; the pixels are attached to the Run's result for the next
 // request. The image is copied into the Session's image store under a
 // content-hash name and its reference (not its bytes) is what the Run keeps.
-// What a call needs comes in its Target (nib.image: the model's vision, the
+// What a call needs comes in its Target (naeb.image: the model's vision, the
 // data home, the Session id, the Run's Attached) and the credential paths
 // the file tools refuse, and a project fence's read rules. No module state.
 
 import std.list
 import std.string
-import nib.image
-import nib.jsonx
-import nib.tools.atomic_file
-import nib.tools.rules
+import naeb.image
+import naeb.jsonx
+import naeb.tools.atomic_file
+import naeb.tools.rules
 
 exports(view)
 

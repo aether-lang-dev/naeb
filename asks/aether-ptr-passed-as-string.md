@@ -1,6 +1,6 @@
 # Type checker: a `ptr` is accepted where a `string` parameter is declared
 
-**From:** the nib Aether port (`aether-port` branch of paul-hammant/nib-code), its TUI slice.
+**From:** the naeb Aether port (`aether-port` branch of aether-lang-dev/naeb), its TUI slice.
 **To:** aether, aetherc 0.909.0.
 
 The TUI passed a parsed JSON node (`ptr`) to `jsonx.long_of(text: string)`

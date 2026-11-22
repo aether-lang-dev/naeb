@@ -17,11 +17,11 @@
 import std.string
 import std.strbuilder
 import std.list
-import nib.tui.format
-import nib.tui.long_text
+import naeb.tui.format
+import naeb.tui.long_text
 import std.json
-import nib.jsonx
-import nib.tools.progress
+import naeb.jsonx
+import naeb.tools.progress
 import term.screen
 
 exports(Agent, Row, Tree, BK_AGENT, BK_BASH, BK_RUN,

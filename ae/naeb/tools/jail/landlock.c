@@ -3,8 +3,8 @@
  * (docs/naeb/adr/0001): read rules, a user + mount + network namespace with
  * read-only binds and a loopback relay to naeb's egress proxy, and a seccomp
  * refusal of AF_UNIX sockets where Landlock cannot mediate them (ABI < 9).
- * Called only by `nib __jail ... -- <command>...` in the child, never in
- * nib's own process. A STAND-IN for Aether primitives (asks/
+ * Called only by `naeb __jail ... -- <command>...` in the child, never in
+ * naeb's own process. A STAND-IN for Aether primitives (asks/
  * aether-landlock-write-roots.md, asks/aether-fence-confinement.md). */
 #ifdef __linux__
 #ifndef _GNU_SOURCE
@@ -21,7 +21,7 @@ extern char **environ;
 
 /* The account's home directory from the user database, which a child
  * falls back to when $HOME is unset or points elsewhere; "" unknown. */
-const char *nibjail_account_home(void) {
+const char *naebjail_account_home(void) {
     struct passwd *pw = getpwuid(getuid());
     return pw && pw->pw_dir ? pw->pw_dir : "";
 }
@@ -31,7 +31,7 @@ const char *nibjail_account_home(void) {
  * user can read: macOS's KERN_PROCARGS2, Linux's /proc/<pid>/environ.
  * naeb under a project fence calls it first thing. Returns how many
  * entries it moved. */
-int nibjail_scrub_environ(void) {
+int naebjail_scrub_environ(void) {
     size_t n = 0;
     while (environ && environ[n]) n++;
     char **orig = (char **)malloc((n + 1) * sizeof(char *));
@@ -101,30 +101,30 @@ int nibjail_scrub_environ(void) {
 #define LL_RESOLVE_UNIX (1ull << 16)
 #define LL_SCOPE_ABSTRACT_UNIX (1ull << 0)
 #define LL_SCOPE_SIGNAL (1ull << 1)
-#define NIB_RELAY_PORT 3128
-struct nib_ll_attr { uint64_t handled_fs; uint64_t handled_net; uint64_t scoped; };
-struct __attribute__((packed)) nib_ll_rule { uint64_t allowed; int32_t parent; };
+#define NAEB_RELAY_PORT 3128
+struct naeb_ll_attr { uint64_t handled_fs; uint64_t handled_net; uint64_t scoped; };
+struct __attribute__((packed)) naeb_ll_rule { uint64_t allowed; int32_t parent; };
 
-static long nib_ll_abi(void) {
+static long naeb_ll_abi(void) {
     return syscall(__NR_landlock_create_ruleset, NULL, 0, LL_CREATE_VERSION);
 }
 
 /* 0 available, 1 no Landlock, 2 disabled, 3 ABI below 2. */
-int nibjail_probe(void) {
-    long abi = nib_ll_abi();
+int naebjail_probe(void) {
+    long abi = naeb_ll_abi();
     if (abi < 0) return errno == EOPNOTSUPP ? 2 : 1;
     return abi >= 2 ? 0 : 3;
 }
 
 /* The Landlock ABI (0 none, -1 disabled). */
-int nibjail_abi(void) {
-    long abi = nib_ll_abi();
+int naebjail_abi(void) {
+    long abi = naeb_ll_abi();
     if (abi < 0) return errno == EOPNOTSUPP ? -1 : 0;
     return (int)abi;
 }
 
 /* 1 when an unprivileged user + mount + network namespace can be entered. */
-int nibjail_probe_userns(void) {
+int naebjail_probe_userns(void) {
     pid_t pid = fork();
     if (pid < 0) return 0;
     if (pid == 0) _exit(unshare(CLONE_NEWUSER | CLONE_NEWNS | CLONE_NEWNET) == 0 ? 0 : 1);
@@ -133,7 +133,7 @@ int nibjail_probe_userns(void) {
     return WIFEXITED(st) && WEXITSTATUS(st) == 0;
 }
 
-static void nib_add_rules(long fd, const char *list, uint64_t rights, uint64_t file_rights, int nofollow) {
+static void naeb_add_rules(long fd, const char *list, uint64_t rights, uint64_t file_rights, int nofollow) {
     const char *p = list;
     char path[4096];
     while (p && *p) {
@@ -146,7 +146,7 @@ static void nib_add_rules(long fd, const char *list, uint64_t rights, uint64_t f
             if (parent >= 0) {
                 uint64_t tries[2] = { rights, file_rights };
                 for (int i = 0; i < 2; i++) {
-                    struct nib_ll_rule rule = { tries[i], parent };
+                    struct naeb_ll_rule rule = { tries[i], parent };
                     if (tries[i] && syscall(__NR_landlock_add_rule, fd, LL_RULE_PATH_BENEATH, &rule, 0) == 0) break;
                 }
                 close(parent);
@@ -158,23 +158,23 @@ static void nib_add_rules(long fd, const char *list, uint64_t rights, uint64_t f
 }
 
 /* roots: '\n'-separated canonical paths. 0 or -1. */
-int nibjail_restrict(const char *roots) {
-    long abi = nib_ll_abi();
+int naebjail_restrict(const char *roots) {
+    long abi = naeb_ll_abi();
     if (abi < 0) return -1;
     uint64_t handled = LL_BASE_WRITE;
     if (abi >= 2) handled |= LL_REFER;
     if (abi >= 3) handled |= LL_TRUNCATE;
-    struct nib_ll_attr attr = { handled, 0, 0 };
+    struct naeb_ll_attr attr = { handled, 0, 0 };
     long fd = syscall(__NR_landlock_create_ruleset, &attr, sizeof(uint64_t), 0);
     if (fd < 0) return -1;
-    nib_add_rules(fd, roots, handled, handled & (LL_WRITE_FILE | LL_TRUNCATE), 0);
+    naeb_add_rules(fd, roots, handled, handled & (LL_WRITE_FILE | LL_TRUNCATE), 0);
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) return -1;
     if (syscall(__NR_landlock_restrict_self, fd, 0) != 0) return -1;
     close((int)fd);
     return 0;
 }
 
-static int nib_write_file(const char *path, const char *text) {
+static int naeb_write_file(const char *path, const char *text) {
     int fd = open(path, O_WRONLY | O_CLOEXEC);
     if (fd < 0) return -1;
     ssize_t n = write(fd, text, strlen(text));
@@ -183,7 +183,7 @@ static int nib_write_file(const char *path, const char *text) {
 }
 
 /* Locked flags of the mount holding `path`, which a remount must keep. */
-static unsigned long nib_locked_flags(const char *path) {
+static unsigned long naeb_locked_flags(const char *path) {
     struct statvfs sv;
     unsigned long f = 0;
     if (statvfs(path, &sv) != 0) return 0;
@@ -196,7 +196,7 @@ static unsigned long nib_locked_flags(const char *path) {
     return f;
 }
 
-static int nib_readonly_binds(const char *list) {
+static int naeb_readonly_binds(const char *list) {
     const char *p = list;
     char path[4096];
     while (p && *p) {
@@ -207,7 +207,7 @@ static int nib_readonly_binds(const char *list) {
             path[n] = 0;
             if (access(path, F_OK) == 0) {
                 if (mount(path, path, NULL, MS_BIND | MS_REC, NULL) != 0) return -1;
-                if (mount(NULL, path, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY | nib_locked_flags(path), NULL) != 0) return -1;
+                if (mount(NULL, path, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY | naeb_locked_flags(path), NULL) != 0) return -1;
             }
         }
         if (!e) break;
@@ -216,7 +216,7 @@ static int nib_readonly_binds(const char *list) {
     return 0;
 }
 
-static int nib_loopback_up(void) {
+static int naeb_loopback_up(void) {
     int s = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
     if (s < 0) return -1;
     struct ifreq ifr;
@@ -231,7 +231,7 @@ static int nib_loopback_up(void) {
     return rc;
 }
 
-static void nib_splice(int a, int b) {
+static void naeb_splice(int a, int b) {
     char buf[65536];
     struct pollfd p[2] = { { a, POLLIN, 0 }, { b, POLLIN, 0 } };
     for (;;) {
@@ -267,7 +267,7 @@ static void nib_splice(int a, int b) {
  * it left running (a daemon) still holds the filter, a copy of the relay
  * stays to let its calls continue, unreported, until the kernel says the
  * filter is unused (POLLHUP); without it they would fail with ENOSYS. */
-struct nib_watch {
+struct naeb_watch {
     int fd;                 /* the seccomp listener, -1 none */
     const char *report;     /* the report file's path */
     int out;                /* its descriptor once opened, -1 before */
@@ -279,44 +279,44 @@ struct nib_watch {
 };
 
 #ifdef SECCOMP_IOCTL_NOTIF_SET_FLAGS
-#define NIB_NOTIF_SET_FLAGS SECCOMP_IOCTL_NOTIF_SET_FLAGS
+#define NAEB_NOTIF_SET_FLAGS SECCOMP_IOCTL_NOTIF_SET_FLAGS
 #else
-#define NIB_NOTIF_SET_FLAGS _IOW('!', 4, uint64_t)
+#define NAEB_NOTIF_SET_FLAGS _IOW('!', 4, uint64_t)
 #endif
-#define NIB_NOTIF_SYNC_WAKE_UP 1ULL
+#define NAEB_NOTIF_SYNC_WAKE_UP 1ULL
 
-enum { NIB_W_OPEN = 1, NIB_W_OPEN2, NIB_W_CREATE, NIB_W_REMOVE, NIB_W_RENAME, NIB_W_TRUNC };
-struct nib_wsys { long nr; int kind; int dirfd; int path; int flags; int dirfd2; int path2; };
-static const struct nib_wsys nib_wsys[] = {
-    { __NR_openat, NIB_W_OPEN, 0, 1, 2, -1, -1 },
+enum { NAEB_W_OPEN = 1, NAEB_W_OPEN2, NAEB_W_CREATE, NAEB_W_REMOVE, NAEB_W_RENAME, NAEB_W_TRUNC };
+struct naeb_wsys { long nr; int kind; int dirfd; int path; int flags; int dirfd2; int path2; };
+static const struct naeb_wsys naeb_wsys[] = {
+    { __NR_openat, NAEB_W_OPEN, 0, 1, 2, -1, -1 },
 #ifdef __NR_openat2
-    { __NR_openat2, NIB_W_OPEN2, 0, 1, 2, -1, -1 },
+    { __NR_openat2, NAEB_W_OPEN2, 0, 1, 2, -1, -1 },
 #endif
-    { __NR_mkdirat, NIB_W_CREATE, 0, 1, -1, -1, -1 },
-    { __NR_mknodat, NIB_W_CREATE, 0, 1, -1, -1, -1 },
-    { __NR_symlinkat, NIB_W_CREATE, 1, 2, -1, -1, -1 },
-    { __NR_linkat, NIB_W_CREATE, 2, 3, -1, -1, -1 },
-    { __NR_unlinkat, NIB_W_REMOVE, 0, 1, -1, -1, -1 },
-    { __NR_renameat2, NIB_W_RENAME, 0, 1, -1, 2, 3 },
-    { __NR_truncate, NIB_W_TRUNC, -1, 0, -1, -1, -1 },
+    { __NR_mkdirat, NAEB_W_CREATE, 0, 1, -1, -1, -1 },
+    { __NR_mknodat, NAEB_W_CREATE, 0, 1, -1, -1, -1 },
+    { __NR_symlinkat, NAEB_W_CREATE, 1, 2, -1, -1, -1 },
+    { __NR_linkat, NAEB_W_CREATE, 2, 3, -1, -1, -1 },
+    { __NR_unlinkat, NAEB_W_REMOVE, 0, 1, -1, -1, -1 },
+    { __NR_renameat2, NAEB_W_RENAME, 0, 1, -1, 2, 3 },
+    { __NR_truncate, NAEB_W_TRUNC, -1, 0, -1, -1, -1 },
 #ifdef __NR_renameat
-    { __NR_renameat, NIB_W_RENAME, 0, 1, -1, 2, 3 },
+    { __NR_renameat, NAEB_W_RENAME, 0, 1, -1, 2, 3 },
 #endif
 #ifdef __NR_open
-    { __NR_open, NIB_W_OPEN, -1, 0, 1, -1, -1 },
-    { __NR_creat, NIB_W_OPEN, -1, 0, -2, -1, -1 },
-    { __NR_mkdir, NIB_W_CREATE, -1, 0, -1, -1, -1 },
-    { __NR_mknod, NIB_W_CREATE, -1, 0, -1, -1, -1 },
-    { __NR_symlink, NIB_W_CREATE, -1, 1, -1, -1, -1 },
-    { __NR_link, NIB_W_CREATE, -1, 1, -1, -1, -1 },
-    { __NR_unlink, NIB_W_REMOVE, -1, 0, -1, -1, -1 },
-    { __NR_rmdir, NIB_W_REMOVE, -1, 0, -1, -1, -1 },
-    { __NR_rename, NIB_W_RENAME, -1, 0, -1, -1, 1 },
+    { __NR_open, NAEB_W_OPEN, -1, 0, 1, -1, -1 },
+    { __NR_creat, NAEB_W_OPEN, -1, 0, -2, -1, -1 },
+    { __NR_mkdir, NAEB_W_CREATE, -1, 0, -1, -1, -1 },
+    { __NR_mknod, NAEB_W_CREATE, -1, 0, -1, -1, -1 },
+    { __NR_symlink, NAEB_W_CREATE, -1, 1, -1, -1, -1 },
+    { __NR_link, NAEB_W_CREATE, -1, 1, -1, -1, -1 },
+    { __NR_unlink, NAEB_W_REMOVE, -1, 0, -1, -1, -1 },
+    { __NR_rmdir, NAEB_W_REMOVE, -1, 0, -1, -1, -1 },
+    { __NR_rename, NAEB_W_RENAME, -1, 0, -1, -1, 1 },
 #endif
 };
-#define NIB_WSYS_N ((int)(sizeof nib_wsys / sizeof nib_wsys[0]))
+#define NAEB_WSYS_N ((int)(sizeof naeb_wsys / sizeof naeb_wsys[0]))
 
-static int nib_send_fd(int s, int fd) {
+static int naeb_send_fd(int s, int fd) {
     char b = 0;
     struct iovec io = { &b, 1 };
     char c[CMSG_SPACE(sizeof(int))];
@@ -336,7 +336,7 @@ static int nib_send_fd(int s, int fd) {
 }
 
 /* The listener the command sent, or -1 when it sent none within 5 s. */
-static int nib_recv_fd(int s) {
+static int naeb_recv_fd(int s) {
     struct pollfd p = { s, POLLIN, 0 };
     if (poll(&p, 1, 5000) <= 0) return -1;
     char b;
@@ -358,7 +358,7 @@ static int nib_recv_fd(int s) {
 
 /* The filter that sends the path syscalls above to the relay; the
  * listener, or -1 (no user notification on this kernel). */
-static int nib_seccomp_watch(void) {
+static int naeb_seccomp_watch(void) {
 #if defined(__x86_64__)
     const uint32_t arch = AUDIT_ARCH_X86_64;
 #elif defined(__aarch64__)
@@ -366,14 +366,14 @@ static int nib_seccomp_watch(void) {
 #else
     return -1;
 #endif
-    struct sock_filter f[4 + NIB_WSYS_N + 2];
+    struct sock_filter f[4 + NAEB_WSYS_N + 2];
     int n = 0;
     f[n++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch));
     f[n++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, arch, 1, 0);
     f[n++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
     f[n++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr));
-    for (int i = 0; i < NIB_WSYS_N; i++)
-        f[n++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (uint32_t)nib_wsys[i].nr, (uint8_t)(NIB_WSYS_N - i), 0);
+    for (int i = 0; i < NAEB_WSYS_N; i++)
+        f[n++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (uint32_t)naeb_wsys[i].nr, (uint8_t)(NAEB_WSYS_N - i), 0);
     f[n++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
     f[n++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_USER_NOTIF);
     struct sock_fprog prog = { (unsigned short)n, f };
@@ -381,7 +381,7 @@ static int nib_seccomp_watch(void) {
 }
 
 /* 1 when `path` is one of the '\n'-separated `list` or lies beneath one. */
-static int nib_beneath(const char *list, const char *path) {
+static int naeb_beneath(const char *list, const char *path) {
     size_t pl = strlen(path);
     const char *p = list;
     while (p && *p) {
@@ -395,7 +395,7 @@ static int nib_beneath(const char *list, const char *path) {
 }
 
 /* A NUL-terminated string of the target's memory, or -1. */
-static int nib_peek(pid_t pid, uint64_t addr, char *out, size_t n) {
+static int naeb_peek(pid_t pid, uint64_t addr, char *out, size_t n) {
     if (!addr) return -1;
     size_t got = 0;
     while (got < n - 1) {
@@ -413,7 +413,7 @@ static int nib_peek(pid_t pid, uint64_t addr, char *out, size_t n) {
 }
 
 /* The absolute form of `path` as the target sees it (dirfd, its cwd). */
-static int nib_absolute(pid_t pid, long dirfd, const char *path, char *out, size_t n) {
+static int naeb_absolute(pid_t pid, long dirfd, const char *path, char *out, size_t n) {
     if (path[0] == '/') {
         if (strlen(path) >= n) return -1;
         strcpy(out, path);
@@ -432,7 +432,7 @@ static int nib_absolute(pid_t pid, long dirfd, const char *path, char *out, size
 /* The canonical path of an existing `abs` (whole: 1), or of its parent
  * joined with its last component (whole: 0, for a name being made,
  * removed or renamed). -1 when it cannot be resolved. */
-static int nib_resolve(const char *abs, int whole, char *out) {
+static int naeb_resolve(const char *abs, int whole, char *out) {
     char tmp[4096];
     if (whole) return realpath(abs, out) ? 0 : -1;
     size_t l = strlen(abs);
@@ -453,7 +453,7 @@ static int nib_resolve(const char *abs, int whole, char *out) {
     return 0;
 }
 
-static void nib_note(struct nib_watch *w, const char *op, const char *path) {
+static void naeb_note(struct naeb_watch *w, const char *op, const char *path) {
     if (!w->report) return;
     if (strncmp(path, "/proc/", 6) == 0 || strncmp(path, "/dev/", 5) == 0 || strncmp(path, "/sys/", 5) == 0) return;
     char line[512];
@@ -469,18 +469,18 @@ static void nib_note(struct nib_watch *w, const char *op, const char *path) {
     if (write(w->out, line, (size_t)n) == n) w->lines++;
 }
 
-static int nib_readable(struct nib_watch *w, const char *path) {
-    return !w->reads_on || nib_beneath(w->reads, path) || nib_beneath(w->writes, path);
+static int naeb_readable(struct naeb_watch *w, const char *path) {
+    return !w->reads_on || naeb_beneath(w->reads, path) || naeb_beneath(w->writes, path);
 }
 
-static int nib_writable(struct nib_watch *w, const char *path) {
-    return nib_beneath(w->writes, path) && !nib_beneath(w->wdeny, path);
+static int naeb_writable(struct naeb_watch *w, const char *path) {
+    return naeb_beneath(w->writes, path) && !naeb_beneath(w->wdeny, path);
 }
 
 /* One trapped call: check it, note a refusal, let it continue. */
-static void nib_watch_one(struct nib_watch *w, struct seccomp_notif *req) {
-    const struct nib_wsys *sy = NULL;
-    for (int i = 0; i < NIB_WSYS_N; i++) if ((long)req->data.nr == nib_wsys[i].nr) sy = &nib_wsys[i];
+static void naeb_watch_one(struct naeb_watch *w, struct seccomp_notif *req) {
+    const struct naeb_wsys *sy = NULL;
+    for (int i = 0; i < NAEB_WSYS_N; i++) if ((long)req->data.nr == naeb_wsys[i].nr) sy = &naeb_wsys[i];
     if (!sy) return;
     pid_t pid = (pid_t)req->pid;
     char raw[4096], abs[4096], real[4096];
@@ -488,14 +488,14 @@ static void nib_watch_one(struct nib_watch *w, struct seccomp_notif *req) {
         int pa = which ? sy->path2 : sy->path;
         int da = which ? sy->dirfd2 : sy->dirfd;
         if (pa < 0) continue;
-        if (which && sy->kind != NIB_W_RENAME) continue;
+        if (which && sy->kind != NAEB_W_RENAME) continue;
         long dirfd = da < 0 ? AT_FDCWD : (long)(int)req->data.args[da];
-        if (nib_peek(pid, req->data.args[pa], raw, sizeof raw) != 0) continue;
-        if (nib_absolute(pid, dirfd, raw, abs, sizeof abs) != 0) continue;
-        if (sy->kind == NIB_W_OPEN || sy->kind == NIB_W_OPEN2) {
+        if (naeb_peek(pid, req->data.args[pa], raw, sizeof raw) != 0) continue;
+        if (naeb_absolute(pid, dirfd, raw, abs, sizeof abs) != 0) continue;
+        if (sy->kind == NAEB_W_OPEN || sy->kind == NAEB_W_OPEN2) {
             uint64_t flags = 0;
             if (sy->flags == -2) flags = O_CREAT | O_WRONLY | O_TRUNC;
-            else if (sy->kind == NIB_W_OPEN2) {
+            else if (sy->kind == NAEB_W_OPEN2) {
                 uint64_t how[1];
                 struct iovec l = { how, sizeof how }, r = { (void *)(uintptr_t)req->data.args[2], sizeof how };
                 if (process_vm_readv(pid, &l, 1, &r, 1, 0) != (ssize_t)sizeof how) continue;
@@ -503,22 +503,22 @@ static void nib_watch_one(struct nib_watch *w, struct seccomp_notif *req) {
             } else flags = req->data.args[sy->flags];
             if (flags & O_PATH) continue;
             int acc = (int)(flags & O_ACCMODE);
-            int exists = nib_resolve(abs, 1, real) == 0;
+            int exists = naeb_resolve(abs, 1, real) == 0;
             if (exists) {
-                if ((acc == O_RDONLY || acc == O_RDWR) && !nib_readable(w, real)) nib_note(w, "read", real);
-                else if ((acc == O_WRONLY || acc == O_RDWR || (flags & O_TRUNC)) && !nib_writable(w, real)) nib_note(w, "write", real);
-            } else if ((flags & O_CREAT) && nib_resolve(abs, 0, real) == 0 && !nib_writable(w, real)) {
-                nib_note(w, "write", real);
+                if ((acc == O_RDONLY || acc == O_RDWR) && !naeb_readable(w, real)) naeb_note(w, "read", real);
+                else if ((acc == O_WRONLY || acc == O_RDWR || (flags & O_TRUNC)) && !naeb_writable(w, real)) naeb_note(w, "write", real);
+            } else if ((flags & O_CREAT) && naeb_resolve(abs, 0, real) == 0 && !naeb_writable(w, real)) {
+                naeb_note(w, "write", real);
             }
-        } else if (sy->kind == NIB_W_TRUNC) {
-            if (nib_resolve(abs, 1, real) == 0 && !nib_writable(w, real)) nib_note(w, "write", real);
+        } else if (sy->kind == NAEB_W_TRUNC) {
+            if (naeb_resolve(abs, 1, real) == 0 && !naeb_writable(w, real)) naeb_note(w, "write", real);
         } else {
-            if (nib_resolve(abs, 0, real) == 0 && !nib_writable(w, real)) nib_note(w, "write", real);
+            if (naeb_resolve(abs, 0, real) == 0 && !naeb_writable(w, real)) naeb_note(w, "write", real);
         }
     }
 }
 
-static void nib_watch_serve(struct nib_watch *w) {
+static void naeb_watch_serve(struct naeb_watch *w) {
     static struct seccomp_notif_sizes sz;
     static struct seccomp_notif *req;
     static struct seccomp_notif_resp *resp;
@@ -530,7 +530,7 @@ static void nib_watch_serve(struct nib_watch *w) {
     }
     memset(req, 0, sz.seccomp_notif);
     if (ioctl(w->fd, SECCOMP_IOCTL_NOTIF_RECV, req) != 0) return;
-    nib_watch_one(w, req);
+    naeb_watch_one(w, req);
     memset(resp, 0, sz.seccomp_notif_resp);
     resp->id = req->id;
     resp->flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
@@ -540,7 +540,7 @@ static void nib_watch_serve(struct nib_watch *w) {
 /* After the command exited: serves the watch for the processes it left,
  * in a session of its own (naeb stops the command's group), until none
  * uses the filter. Never returns. */
-static void nib_watch_linger(struct nib_watch *wt) {
+static void naeb_watch_linger(struct naeb_watch *wt) {
     pid_t k = fork();
     if (k != 0) return;
     setsid();
@@ -558,7 +558,7 @@ static void nib_watch_linger(struct nib_watch *wt) {
         int r = poll(&p, 1, -1);
         if (r < 0 && errno == EINTR) continue;
         if (r <= 0 || (p.revents & (POLLHUP | POLLERR | POLLNVAL))) _exit(0);
-        if (p.revents & POLLIN) nib_watch_serve(wt);
+        if (p.revents & POLLIN) naeb_watch_serve(wt);
     }
 }
 
@@ -566,19 +566,19 @@ static void nib_watch_linger(struct nib_watch *wt) {
  * namespace to the proxy's Unix socket until the command exits, then exits
  * as it did, and serves the command's file watch (wt->fd >= 0) meanwhile.
  * Never returns. */
-static int nib_chld_pipe[2] = { -1, -1 };
+static int naeb_chld_pipe[2] = { -1, -1 };
 
-static void nib_on_chld(int sig) {
+static void naeb_on_chld(int sig) {
     (void)sig;
     int e = errno;
-    if (nib_chld_pipe[1] >= 0) (void)!write(nib_chld_pipe[1], "c", 1);
+    if (naeb_chld_pipe[1] >= 0) (void)!write(naeb_chld_pipe[1], "c", 1);
     errno = e;
 }
 
-static void nib_relay(pid_t child, int listener, const char *sock, struct nib_watch *wt) {
+static void naeb_relay(pid_t child, int listener, const char *sock, struct naeb_watch *wt) {
     signal(SIGPIPE, SIG_IGN);
     /* A child's exit wakes the poll below at once (not at its timeout). */
-    if (pipe2(nib_chld_pipe, O_CLOEXEC | O_NONBLOCK) == 0) signal(SIGCHLD, nib_on_chld);
+    if (pipe2(naeb_chld_pipe, O_CLOEXEC | O_NONBLOCK) == 0) signal(SIGCHLD, naeb_on_chld);
     for (;;) {
         int st = 0;
         pid_t w;
@@ -586,7 +586,7 @@ static void nib_relay(pid_t child, int listener, const char *sock, struct nib_wa
             if (w == child) {
                 if (wt->fd >= 0) {
                     close(listener);
-                    nib_watch_linger(wt);
+                    naeb_watch_linger(wt);
                 }
                 if (WIFSIGNALED(st)) {
                     signal(WTERMSIG(st), SIG_DFL);
@@ -596,13 +596,13 @@ static void nib_relay(pid_t child, int listener, const char *sock, struct nib_wa
                 _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 1);
             }
         }
-        struct pollfd p[3] = { { listener, POLLIN, 0 }, { nib_chld_pipe[0], POLLIN, 0 }, { wt->fd, POLLIN, 0 } };
+        struct pollfd p[3] = { { listener, POLLIN, 0 }, { naeb_chld_pipe[0], POLLIN, 0 }, { wt->fd, POLLIN, 0 } };
         if (poll(p, wt->fd >= 0 ? 3 : 2, 100) <= 0) continue;
         if (p[1].revents & POLLIN) {
             char drain[64];
-            while (read(nib_chld_pipe[0], drain, sizeof drain) > 0) {}
+            while (read(naeb_chld_pipe[0], drain, sizeof drain) > 0) {}
         }
-        if (wt->fd >= 0 && (p[2].revents & POLLIN)) nib_watch_serve(wt);
+        if (wt->fd >= 0 && (p[2].revents & POLLIN)) naeb_watch_serve(wt);
         if (wt->fd >= 0 && (p[2].revents & (POLLHUP | POLLERR | POLLNVAL))) wt->fd = -1;
         if (!(p[0].revents & POLLIN)) continue;
         int c = accept4(listener, NULL, NULL, SOCK_CLOEXEC);
@@ -617,14 +617,14 @@ static void nib_relay(pid_t child, int listener, const char *sock, struct nib_wa
             memset(&a, 0, sizeof a);
             a.sun_family = AF_UNIX;
             strncpy(a.sun_path, sock, sizeof a.sun_path - 1);
-            if (u >= 0 && connect(u, (struct sockaddr *)&a, sizeof a) == 0) nib_splice(c, u);
+            if (u >= 0 && connect(u, (struct sockaddr *)&a, sizeof a) == 0) naeb_splice(c, u);
             _exit(0);
         }
         close(c);
     }
 }
 
-static int nib_relay_listener(void) {
+static int naeb_relay_listener(void) {
     int s = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (s < 0) return -1;
     int one = 1;
@@ -632,7 +632,7 @@ static int nib_relay_listener(void) {
     struct sockaddr_in a;
     memset(&a, 0, sizeof a);
     a.sin_family = AF_INET;
-    a.sin_port = htons(NIB_RELAY_PORT);
+    a.sin_port = htons(NAEB_RELAY_PORT);
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (bind(s, (struct sockaddr *)&a, sizeof a) != 0 || listen(s, 64) != 0) {
         close(s);
@@ -642,7 +642,7 @@ static int nib_relay_listener(void) {
 }
 
 /* socket(AF_UNIX, ...) fails with EACCES, io_uring_setup with ENOSYS. */
-static int nib_seccomp_unix(void) {
+static int naeb_seccomp_unix(void) {
 #if defined(__x86_64__)
     const uint32_t arch = AUDIT_ARCH_X86_64;
 #elif defined(__aarch64__)
@@ -670,7 +670,7 @@ static int nib_seccomp_unix(void) {
     return prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog, 0, 0);
 }
 
-/* The project fence for this process (`nib __jail` with fence options):
+/* The project fence for this process (`naeb __jail` with fence options):
  * writes: writable roots; wdeny: paths in them bound read-only; reads:
  * read grants ("" with reads_on: nothing readable); sock: the egress
  * proxy's Unix socket ("" when the network stays open); report: the file
@@ -679,8 +679,8 @@ static int nib_seccomp_unix(void) {
  * case the caller's process stays behind as the relay and only the forked
  * child returns. 0, or a negative step that failed:
  * -1 Landlock, -2 namespace, -3 mounts, -4 loopback, -5 relay, -6 seccomp. */
-int nibjail_fence(const char *writes, const char *wdeny, const char *reads, int reads_on, const char *sock, const char *report) {
-    long abi = nib_ll_abi();
+int naebjail_fence(const char *writes, const char *wdeny, const char *reads, int reads_on, const char *sock, const char *report) {
+    long abi = naeb_ll_abi();
     if (abi < 1) return -1;
     int net = sock && *sock;
     int binds = wdeny && *wdeny;
@@ -691,22 +691,22 @@ int nibjail_fence(const char *writes, const char *wdeny, const char *reads, int 
         int flags = CLONE_NEWUSER | CLONE_NEWNS | (net ? CLONE_NEWNET : 0);
         if (unshare(flags) != 0) return -2;
         char m[64];
-        nib_write_file("/proc/self/setgroups", "deny");
+        naeb_write_file("/proc/self/setgroups", "deny");
         snprintf(m, sizeof m, "%u %u 1", (unsigned)uid, (unsigned)uid);
-        if (nib_write_file("/proc/self/uid_map", m) != 0) return -2;
+        if (naeb_write_file("/proc/self/uid_map", m) != 0) return -2;
         snprintf(m, sizeof m, "%u %u 1", (unsigned)gid, (unsigned)gid);
-        if (nib_write_file("/proc/self/gid_map", m) != 0) return -2;
+        if (naeb_write_file("/proc/self/gid_map", m) != 0) return -2;
         if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0) return -3;
-        if (binds && nib_readonly_binds(wdeny) != 0) return -3;
+        if (binds && naeb_readonly_binds(wdeny) != 0) return -3;
         if (net) {
-            if (nib_loopback_up() != 0) return -4;
-            int listener = nib_relay_listener();
+            if (naeb_loopback_up() != 0) return -4;
+            int listener = naeb_relay_listener();
             if (listener < 0) return -5;
             if (report && *report && socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, watch_sv) != 0) watch_sv[0] = watch_sv[1] = -1;
             pid_t child = fork();
             if (child < 0) return -5;
             if (child > 0) {
-                struct nib_watch w;
+                struct naeb_watch w;
                 memset(&w, 0, sizeof w);
                 w.fd = -1;
                 w.out = -1;
@@ -717,12 +717,12 @@ int nibjail_fence(const char *writes, const char *wdeny, const char *reads, int 
                 w.reads_on = reads_on;
                 if (watch_sv[0] >= 0) {
                     close(watch_sv[1]);
-                    w.fd = nib_recv_fd(watch_sv[0]);
+                    w.fd = naeb_recv_fd(watch_sv[0]);
                     close(watch_sv[0]);
                     /* Kernel 6.6+: the trapped caller hands its CPU to the relay and back. */
-                    if (w.fd >= 0) ioctl(w.fd, NIB_NOTIF_SET_FLAGS, NIB_NOTIF_SYNC_WAKE_UP);
+                    if (w.fd >= 0) ioctl(w.fd, NAEB_NOTIF_SET_FLAGS, NAEB_NOTIF_SYNC_WAKE_UP);
                 }
-                nib_relay(child, listener, sock, &w);
+                naeb_relay(child, listener, sock, &w);
             }
             close(listener);
             if (watch_sv[0] >= 0) close(watch_sv[0]);
@@ -734,7 +734,7 @@ int nibjail_fence(const char *writes, const char *wdeny, const char *reads, int 
     uint64_t readr = reads_on ? (LL_READ_FILE | LL_READ_DIR) : 0;
     handled |= readr;
     if (net && abi >= 9) handled |= LL_RESOLVE_UNIX;
-    struct nib_ll_attr attr = { handled, 0, 0 };
+    struct naeb_ll_attr attr = { handled, 0, 0 };
     size_t size = sizeof(uint64_t);
     if (abi >= 6) {
         attr.scoped = LL_SCOPE_ABSTRACT_UNIX | LL_SCOPE_SIGNAL;
@@ -743,16 +743,16 @@ int nibjail_fence(const char *writes, const char *wdeny, const char *reads, int 
     long fd = syscall(__NR_landlock_create_ruleset, &attr, size, 0);
     if (fd < 0) return -1;
     uint64_t wr = (handled & ~(LL_RESOLVE_UNIX | LL_READ_FILE | LL_READ_DIR)) | readr;
-    nib_add_rules(fd, writes, wr, wr & (LL_WRITE_FILE | LL_TRUNCATE | LL_READ_FILE), 0);
-    if (reads_on) nib_add_rules(fd, reads, readr, LL_READ_FILE, 1);
+    naeb_add_rules(fd, writes, wr, wr & (LL_WRITE_FILE | LL_TRUNCATE | LL_READ_FILE), 0);
+    if (reads_on) naeb_add_rules(fd, reads, readr, LL_READ_FILE, 1);
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) return -1;
     if (syscall(__NR_landlock_restrict_self, fd, 0) != 0) return -1;
     close((int)fd);
-    if (net && abi < 9 && nib_seccomp_unix() != 0) return -6;
+    if (net && abi < 9 && naeb_seccomp_unix() != 0) return -6;
     if (watch_sv[1] >= 0) {
-        int lfd = nib_seccomp_watch();
+        int lfd = naeb_seccomp_watch();
         if (lfd >= 0) {
-            nib_send_fd(watch_sv[1], lfd);
+            naeb_send_fd(watch_sv[1], lfd);
             close(lfd);
         }
         close(watch_sv[1]);
@@ -760,11 +760,11 @@ int nibjail_fence(const char *writes, const char *wdeny, const char *reads, int 
     return 0;
 }
 #else
-int nibjail_probe(void) { return 4; }
-int nibjail_abi(void) { return 0; }
-int nibjail_probe_userns(void) { return 0; }
-int nibjail_restrict(const char *roots) { (void)roots; return -1; }
-int nibjail_fence(const char *writes, const char *wdeny, const char *reads, int reads_on, const char *sock, const char *report) {
+int naebjail_probe(void) { return 4; }
+int naebjail_abi(void) { return 0; }
+int naebjail_probe_userns(void) { return 0; }
+int naebjail_restrict(const char *roots) { (void)roots; return -1; }
+int naebjail_fence(const char *writes, const char *wdeny, const char *reads, int reads_on, const char *sock, const char *report) {
     (void)writes; (void)wdeny; (void)reads; (void)reads_on; (void)sock;
     return -1;
 }

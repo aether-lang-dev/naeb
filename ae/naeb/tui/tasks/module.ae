@@ -14,8 +14,8 @@
 
 import std.string
 import std.strbuilder
-import nib.tui.agent_tree
-import nib.tui.format
+import naeb.tui.agent_tree
+import naeb.tui.format
 
 exports(Task, new_task, format)
 

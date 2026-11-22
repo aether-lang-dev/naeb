@@ -1,7 +1,7 @@
 // session: the Session engine (upstream src/session.zig, session/run.zig,
 // session/history.zig's role in a Turn, session/inbox.zig's background
 // delivery for bash): Session/Turn/Step/Run lifecycle over the append-only
-// log, model requests through nib.provider, Runs in the sandbox with the
+// log, model requests through naeb.provider, Runs in the sandbox with the
 // ported Tools, and resume.
 //
 // A frontend observes a Session only through a Sink: every event arrives as
@@ -32,54 +32,54 @@ import std.string
 import std.sync
 import std.worker
 import std.cryptography
-import nib.jsonx
-import nib.image
-import nib.lock
-import nib.msg
-import nib.sandbox
-import nib.sandbox.timing
-import nib.sandbox.record
-import nib.tools
-import nib.tools.atomic_file
-import nib.tools.background
-import nib.tools.progress
-import nib.tools.diff
-import nib.provider
-import nib.provider.types
-import nib.provider.sink
-import nib.provider.timing as modeltiming
-import nib.session.log
-import nib.session.output
-import nib.session.prompt
-import nib.session.profile
-import nib.session.instructions
-import nib.session.compact
-import nib.session.tool_summary
-import nib.session.fork_history
-import nib.build_info
-import nib.session.hooks
-import nib.session.skills
-import nib.mcp
-import nib.tools.agent_input
-import nib.tools.agent_sessions
+import naeb.jsonx
+import naeb.image
+import naeb.lock
+import naeb.msg
+import naeb.sandbox
+import naeb.sandbox.timing
+import naeb.sandbox.record
+import naeb.tools
+import naeb.tools.atomic_file
+import naeb.tools.background
+import naeb.tools.progress
+import naeb.tools.diff
+import naeb.provider
+import naeb.provider.types
+import naeb.provider.sink
+import naeb.provider.timing as modeltiming
+import naeb.session.log
+import naeb.session.output
+import naeb.session.prompt
+import naeb.session.profile
+import naeb.session.instructions
+import naeb.session.compact
+import naeb.session.tool_summary
+import naeb.session.fork_history
+import naeb.build_info
+import naeb.session.hooks
+import naeb.session.skills
+import naeb.mcp
+import naeb.tools.agent_input
+import naeb.tools.agent_sessions
 
 exports(Session, Options, Sink, Ran, new_options, new_sink, init, turn, turn_with_images, image_directory, run, compact_now, close, swap_fence, start_turn_end_hooks, finish_hooks, error_message, timing_json, undo,
         set_activity, enqueue, take_queued, switch_config, steps_logged,
         VERSION)
 
-const VERSION = "0.13.0-ae"   // `nib --version`; Session headers record build_info.nib_version()
+const VERSION = "0.13.0-ae"   // `naeb --version`; Session headers record build_info.nib_version()
 
 struct Options {
-    home: string             // $NIB_HOME
+    home: string             // $NAEB_HOME
     user_home: string        // $HOME
     depth: int
     parent_session_id: string
     resume_id: string
     continue_latest: int
-    patches_off: string      // NIB_PATCHES_OFF
+    patches_off: string      // NAEB_PATCHES_OFF
     self_exe: string
-    record_env: string       // NIB_RECORD
-    undo_enabled: int        // the TUI's /undo (nib ask has none, as upstream)
+    record_env: string       // NAEB_RECORD
+    undo_enabled: int        // the TUI's /undo (naeb ask has none, as upstream)
     fork: ptr                // *agent_input.Fork: a forked subagent's inherited history, or null
     undo_dir: string         // a subagent's: the parent Turn's undo directory
     fence: ptr               // the launcher's *fence.Fence, or null (docs/naeb/adr/0001)
@@ -90,7 +90,7 @@ struct Sink {
     emit: fn                 // |ctx: ptr, event_json: string|
     guard: ptr               // events are written one at a time
     // The TUI's activity callbacks (upstream Sink.onModelActivity,
-    // onToolActivity, onUserInserted); `nib ask` has none.
+    // onToolActivity, onUserInserted); `naeb ask` has none.
     on_activity: fn          // |ctx: ptr, kind: string, value: string|: model <state>, tool <name>, user_inserted <id>
     has_activity: int
 }
@@ -125,7 +125,7 @@ struct Session {
     ticker_stop: ptr         // std.sync cells of the poll thread
     ticker_done: ptr
     bg_runs: ptr             // *RunJob of Runs in the background, until finished
-    recorder: ptr            // *record.Recorder of <id>.calls.jsonl (NIB_RECORD=off: disabled)
+    recorder: ptr            // *record.Recorder of <id>.calls.jsonl (NAEB_RECORD=off: disabled)
     hook_jobs: ptr           // *HookJob of turn_end hooks still running or not yet reaped
     fence_guard: ptr         // held around in_run and staged_fence
     in_run: int              // 1 while a Run executes (its foreground part)
@@ -230,17 +230,17 @@ switch_config(sp: ptr, cp: @keep ptr) -> string {
 
 error_message(err: string) -> string {
     match err {
-        "InvalidArguments" -> { return "Invalid arguments · run nib --help" }
-        "MissingPrompt" -> { return "Missing prompt · run nib --help" }
+        "InvalidArguments" -> { return "Invalid arguments · run naeb --help" }
+        "MissingPrompt" -> { return "Missing prompt · run naeb --help" }
         "AgentSessionParentMismatch" -> { return "Cannot continue a session that is not a child of this parent session." }
         "SessionBusy" -> { return "Session is busy in another process; wait for its current task to finish." }
         "InvalidSessionId" -> { return "Session ID must be exactly 32 lowercase hexadecimal characters." }
         "InvalidReasoningEffort" -> { return "Use --effort default|off|none|minimal|low|medium|high|xhigh|max (model support varies)." }
         "MissingReasoningEffort" -> { return "Use --effort default|off|none|minimal|low|medium|high|xhigh|max (model support varies)." }
-        "UnknownService" -> { return "Unknown service · run nib login to list services" }
+        "UnknownService" -> { return "Unknown service · run naeb login to list services" }
         "EmptyKey" -> { return "API key cannot be empty" }
-        "SessionProviderMismatch" -> { return "Cannot resume this session with a different provider; use its original NIB_PROVIDER or start a new session." }
-        "SessionModelMismatch" -> { return "Cannot resume this Codex session with a different model; set NIB_MODEL to its original model or start a new session." }
+        "SessionProviderMismatch" -> { return "Cannot resume this session with a different provider; use its original NAEB_PROVIDER or start a new session." }
+        "SessionModelMismatch" -> { return "Cannot resume this Codex session with a different model; set NAEB_MODEL to its original model or start a new session." }
         _ -> { return err }
     }
 }
@@ -800,7 +800,7 @@ after_edit_(s: *Session, j: *RunJob) {
 // Starts the Session's turn_end hooks for a Turn that ended with `status`
 // on their own thread and returns (upstream TurnJob.start); finished jobs
 // are reaped first. A failure reaches `notify(ctx, notice)` from that thread
-// when has_notify is 1 (the TUI posts it; `nib ask` passes none).
+// when has_notify is 1 (the TUI posts it; `naeb ask` passes none).
 // close (finish_hooks) waits for them.
 start_turn_end_hooks(sp: @keep ptr, status: string, ctx: @keep ptr, notify: @keep fn, has_notify: int) {
     s = sp as *Session
@@ -883,7 +883,7 @@ run(sp: @keep ptr, code: string, cancel: @keep ptr) -> *Ran {
     return r
 }
 
-// naeb's TUI: a Fence the user approved (nib.fence.policy.approve) takes
+// naeb's TUI: a Fence the user approved (naeb.fence.policy.approve) takes
 // the place of the Session's. Swapped in now when no Run executes, else as
 // the running Run ends: a Run never sees two fences. 1: swapped now.
 swap_fence(sp: ptr, f: @keep ptr) -> int {
@@ -1314,7 +1314,7 @@ image_directory(sp: ptr) -> string {
     return image.image_dir((s.options as *Options).home, s.id)
 }
 
-// One Turn whose user message carries `images` (a JSON array of nib.image
+// One Turn whose user message carries `images` (a JSON array of naeb.image
 // Images, "" none): upstream turnWithImages.
 turn_with_images(sp: @keep ptr, user_text: string, images: string, sk: @keep ptr, cancel: @keep ptr) -> (string, string) {
     s = sp as *Session

@@ -1,11 +1,11 @@
-// Ports the tests of upstream src/replay.zig (a2dd439), `nib replay`'s
-// loaders and options (nib.run_replay).
+// Ports the tests of upstream src/replay.zig (a2dd439), `naeb replay`'s
+// loaders and options (naeb.run_replay).
 
 import std.spec
 import std.string
 import std.list
-import nib.sandbox.replay
-import nib.run_replay
+import naeb.sandbox.replay
+import naeb.run_replay
 
 const RAW_MAIN = <<LOG
 {"messages":[{"role":"system","content":"s"},{"role":"user","content":"one"}]}

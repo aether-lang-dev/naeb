@@ -1,6 +1,6 @@
 // turn: the app's side of a running Turn or /compact (upstream
 // src/tui/turn.zig). Upstream's Turn owns the thread that runs the Session;
-// here the port runs it (nib.tui.live on a worker, a scripted port inline)
+// here the port runs it (naeb.tui.live on a worker, a scripted port inline)
 // and this keeps what upstream's Turn keeps for the app: the cancel cell Esc
 // sets, whether it is a compaction, the failure stage, and the model-activity
 // throttle (data events at most once a second, request boundaries at once).
@@ -9,8 +9,8 @@
 // app loop's poll timeout instead: an empty poll while busy is a tick.
 
 import std.sync
-import nib.jsonx
-import nib.tui.app_queue
+import naeb.jsonx
+import naeb.tui.app_queue
 
 exports(Turn, new, model_activity_at, tool_activity, user_inserted, cancel, is_canceled, STATES)
 

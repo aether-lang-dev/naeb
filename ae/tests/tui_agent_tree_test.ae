@@ -3,8 +3,8 @@
 import std.spec
 import std.string
 import std.list
-import nib.tui.agent_tree
-import nib.tools.progress
+import naeb.tui.agent_tree
+import naeb.tools.progress
 import term.screen
 
 // Each grapheme of `expected` is at its cell and dim; the rest of the row is blank.

@@ -33,8 +33,8 @@ import std.strbuilder
 import std.list
 import std.sync
 import std.worker
-import nib.config
-import nib.auth.models
+import naeb.config
+import naeb.auth.models
 
 exports(DEFAULT_WINDOW, STEP_NAME, STEP_BASE_URL, STEP_KEY, STEP_PROTOCOL, STEP_MODEL, STEP_WINDOW,
         OUT_NEXT, OUT_INVALID, OUT_LIST_MODELS, OUT_READY,

@@ -1,7 +1,7 @@
 // Ports src/tools/html.zig's tests.
 import std.spec
 import std.string
-import nib.tools.html
+import naeb.tools.html
 
 const BASE = "https://ziglang.org/documentation/master/index.html"
 

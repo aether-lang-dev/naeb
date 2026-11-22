@@ -6,7 +6,7 @@ import std.spec
 import std.string
 import std.list
 import term.screen
-import nib.tui.intraline
+import naeb.tui.intraline
 
 struct Collected {
     lines: string[]

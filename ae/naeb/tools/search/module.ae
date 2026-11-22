@@ -15,9 +15,9 @@ import std.json
 import std.string
 import std.list
 import std.strbuilder
-import nib.jsonx
-import nib.tools.walk
-import nib.tools.grep
+import naeb.jsonx
+import naeb.tools.walk
+import naeb.tools.grep
 
 exports(grep, glob)
 

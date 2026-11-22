@@ -1,7 +1,7 @@
 // tools.web (upstream src/tools/web.zig): render, the text cap, refused schemes.
 import std.spec
 import std.string
-import nib.tools.web
+import naeb.tools.web
 
 repeat_(c: string, n: int) -> string {
     out = c

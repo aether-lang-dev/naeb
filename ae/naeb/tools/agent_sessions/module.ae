@@ -6,7 +6,7 @@
 
 import std.list
 import std.string
-import nib.lock
+import naeb.lock
 
 exports(Registry, Entry, new, add, set_fork, is_fork, reserve, release, session, bind)
 

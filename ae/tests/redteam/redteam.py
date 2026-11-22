@@ -9,7 +9,7 @@ real host or real provider is touched.
 
     python3 -I ae/tests/redteam/redteam.py [case-prefix ...]
 
-NAEB names the binary to drive (default target/build/bin/nib in workspace
+NAEB names the binary to drive (default target/build/bin/naeb-unfenced in workspace
 mode, the strictest mode upstream has). With NAEB_FENCED=1 the binary is naeb:
 the fixture project gets a naeb.ae allowing the allowed listener's
 host:port, built with `naeb build -y` (against this checkout, NAEB_SRC)
@@ -31,7 +31,7 @@ import tempfile
 import threading
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-NAEB = os.environ.get("NAEB", os.path.join(ROOT, "target/build/bin/nib"))
+NAEB = os.environ.get("NAEB", os.path.join(ROOT, "target/build/bin/naeb-unfenced"))
 FENCED = os.environ.get("NAEB_FENCED") == "1"
 
 
@@ -164,18 +164,18 @@ def main(argv):
     work = tempfile.mkdtemp(prefix="w-", dir=scratch)
     home = os.path.realpath(os.path.join(work, "home"))
     proj = os.path.join(home, "work", "proj")
-    nib_home = os.path.join(home, ".nib")
+    naeb_home = os.path.join(home, ".naeb")
     canary_ssh = "CANARY-ssh-" + secrets.token_hex(6)
     canary_auth = "CANARY-auth-" + secrets.token_hex(6)
     canary_env = "CANARY-env-" + secrets.token_hex(6)
     os.makedirs(os.path.join(home, ".ssh"))
-    os.makedirs(nib_home)
+    os.makedirs(naeb_home)
     os.makedirs(os.path.join(home, ".m2"))
     os.makedirs(os.path.join(proj, ".git", "hooks"))
     os.makedirs(os.path.join(proj, "node_modules", "evil"))
     with open(os.path.join(home, ".ssh", "id_ed25519"), "w") as f:
         f.write("-----BEGIN OPENSSH PRIVATE KEY-----\n%s\n-----END OPENSSH PRIVATE KEY-----\n" % canary_ssh)
-    with open(os.path.join(nib_home, "auth.json"), "w") as f:
+    with open(os.path.join(naeb_home, "auth.json"), "w") as f:
         json.dump({"anthropic": {"type": "api_key", "key": canary_auth}}, f)
     with open(os.path.join(home, ".zshrc"), "w") as f:
         f.write("# rc\n")
@@ -207,7 +207,7 @@ def main(argv):
     env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "HOME": home,
-        "NIB_HOME": nib_home,
+        "NAEB_HOME": naeb_home,
         "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
         "LANG": "C.UTF-8",
         "SERVICE_PASSWORD": canary_env,
@@ -275,7 +275,7 @@ def main(argv):
     script = "\n".join(lines)
 
     if not FENCED:
-        env["NIB_SANDBOX"] = "workspace"
+        env["NAEB_SANDBOX"] = "workspace"
     try:
         p = subprocess.run([NAEB, "js", script], cwd=proj, env=env, capture_output=True, text=True, timeout=600)
     except BaseException:

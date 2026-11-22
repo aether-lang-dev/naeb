@@ -9,13 +9,13 @@
 //  - Result is a struct {kind, png, error} instead of a union: kind is one of
 //    KIND_PNG (png holds the bytes), KIND_NO_TOOL, KIND_NO_IMAGE,
 //    KIND_TOO_LARGE; `error` is "" or the spawn error upstream would raise.
-//  - The script runs through nib.tools.process (output to a file, 2 s deadline,
+//  - The script runs through naeb.tools.process (output to a file, 2 s deadline,
 //    killed with its group on timeout) because std.os has no timed capture;
 //    that merges stderr into the output, so the Linux branches of the script
 //    redirect the tool's stderr to /dev/null (upstream discards it separately).
 //    `env` is a list of "NAME=value" or null (inherit); the app passes its
 //    environment (config.env.pairs), as upstream passes app.environ.
-//  - The image check is nib.image's probe and MAX_BYTES, as upstream.
+//  - The image check is naeb.image's probe and MAX_BYTES, as upstream.
 //  - read_script(script, env, timeout_ms) is the part below read_image, exposed
 //    so the shell/exit-code/timeout handling can be tested with other scripts.
 //  - Writing text (upstream selection.zig localCopy) lives here too, since this
@@ -30,8 +30,8 @@
 
 import std.string
 import std.list
-import nib.image
-import nib.tools.process
+import naeb.image
+import naeb.tools.process
 import std.worker
 
 exports(Result, Clipboard, KIND_PNG, KIND_NO_TOOL, KIND_NO_IMAGE, KIND_TOO_LARGE,
@@ -48,7 +48,7 @@ const TIMEOUT_MS = 2000
 
 const SCRIPT = "case \"$(uname)\" in
   Darwin)
-    f=$(mktemp -t nibclip) || exit 1
+    f=$(mktemp -t naebclip) || exit 1
     osascript -e 'on run argv' -e 'set d to the clipboard as «class PNGf»' -e 'set f to open for access POSIX file (item 1 of argv) with write permission' -e 'set eof f to 0' -e 'write d to f' -e 'close access f' -e 'end run' \"$f\" >/dev/null 2>&1 && cat \"$f\"
     status=$?
     rm -f \"$f\"

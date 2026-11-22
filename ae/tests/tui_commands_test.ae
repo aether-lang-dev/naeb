@@ -1,10 +1,10 @@
 // Ports all 8 tests of upstream src/tui/commands.zig under their names.
 // None of them needs the App; modelSelection/select/execute (which do) are
-// not part of nib.tui.commands and have no tests here.
+// not part of naeb.tui.commands and have no tests here.
 import std.spec
 import std.string
-import nib.tui.mode
-import nib.tui.commands
+import naeb.tui.mode
+import naeb.tui.commands
 
 none_() -> commands.Choice[] {
     commands.Choice[] out = []

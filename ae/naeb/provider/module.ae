@@ -10,12 +10,12 @@
 import std.list
 import std.string
 import std.sync
-import nib.provider.types
-import nib.provider.sink
-import nib.provider.timing
-import nib.provider.anthropic
-import nib.provider.responses
-import nib.provider.openai
+import naeb.provider.types
+import naeb.provider.sink
+import naeb.provider.timing
+import naeb.provider.anthropic
+import naeb.provider.responses
+import naeb.provider.openai
 
 exports(Retry, MAX_ATTEMPTS, retry_new, stream, complete, complete_with, transient, effective_effort,
         logged_effort)

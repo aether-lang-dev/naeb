@@ -1,6 +1,6 @@
 // Ports src/sandbox/timing.zig's tests.
 import std.spec
-import nib.sandbox.timing
+import naeb.sandbox.timing
 
 main() {
     fw = spec.init()

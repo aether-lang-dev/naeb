@@ -3,7 +3,7 @@ import std.spec
 import std.fs
 import std.list
 import std.string
-import nib.tools.jail
+import naeb.tools.jail
 
 contains_(l: ptr, s: string) -> int {
     n = list.list_size(l)
@@ -17,7 +17,7 @@ contains_(l: ptr, s: string) -> int {
 }
 
 tmp_() -> string {
-    d, _e = fs.make_temp_dir("", "nib-jail")
+    d, _e = fs.make_temp_dir("", "naeb-jail")
     real, _k, _m = fs.realpath(d)
     return real
 }

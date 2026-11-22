@@ -1,5 +1,5 @@
 """The demo program in a real pseudo-terminal, the way upstream's
-tests/test_tui_*.py drive nib: what it draws (replayed with upstream's
+tests/test_tui_*.py drive naeb: what it draws (replayed with upstream's
 scripts/screen.py), keys and resizes reaching it, and the terminal coming
 back as it was however the program ends: quitting, SIGTERM, SIGHUP, a panic.
 

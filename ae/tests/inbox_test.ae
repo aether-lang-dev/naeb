@@ -6,7 +6,7 @@
 import std.spec
 import std.list
 import std.string
-import nib.tools.background
+import naeb.tools.background
 
 item_(items: ptr, i: int) -> *background.Item { return list.list_get_raw(items, i) as *background.Item }
 

@@ -13,8 +13,8 @@
 import std.json
 import std.list
 import std.string
-import nib.jsonx
-import nib.provider.types
+import naeb.jsonx
+import naeb.provider.types
 
 exports(system, user, user_from, assistant, tool, role, content, has_content, str_or, bool_of, raw,
         set_raw, without, tool_calls, tool_call_count, reasoning_provider, reasoning_data,

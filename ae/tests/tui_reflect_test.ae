@@ -11,10 +11,10 @@ import std.fs
 import std.list
 import std.string
 import std.sync
-import nib.tui.reflect
+import naeb.tui.reflect
 
 tmp_() -> string {
-    d, _e = fs.make_temp_dir("", "nib-reflect")
+    d, _e = fs.make_temp_dir("", "naeb-reflect")
     real, _k, _m = fs.realpath(d)
     return real
 }
@@ -68,8 +68,8 @@ main() {
     fw = spec.init()
     spec.describe(fw, "tui.reflect") {
         spec.it("prompt fills the session, log path, issue repo and optional focus") callback {
-            plain = reflect.prompt("abc123", "/h/.nib/sessions/abc123.jsonl", "o/r", "")
-            spec.assert_true(has_(plain, "This session's log is /h/.nib/sessions/abc123.jsonl") == 1, "log path")
+            plain = reflect.prompt("abc123", "/h/.naeb/sessions/abc123.jsonl", "o/r", "")
+            spec.assert_true(has_(plain, "This session's log is /h/.naeb/sessions/abc123.jsonl") == 1, "log path")
             spec.assert_true(has_(plain, "This session's ID is abc123") == 1, "id")
             spec.assert_true(has_(plain, "Read only the explicitly specified main log path for this session") == 1, "scope")
             spec.assert_true(has_(plain, "Do not enumerate, glob, or search the sessions directory") == 1, "no enumeration")
@@ -86,7 +86,7 @@ main() {
         }
         spec.it("append creates the file, then adds entries after earlier ones") callback {
             root = tmp_()
-            path = "${root}/nib/reflections.md"
+            path = "${root}/naeb/reflections.md"
             base = reflect.Entry { unix_seconds: 1793600000 as long, session_id: "0123456789abcdef", cwd: "/p", model: "m", effort: "high", focus: "", answer: "\n### Summary\nEverything is normal\n" }
             spec.assert_str_eq(reflect.append(path, base), "", "first append")
             second = reflect.Entry { unix_seconds: 1793600000 as long, session_id: "0123456789abcdef", cwd: "/p", model: "m", effort: "high", focus: "timeout", answer: "Second time" }
@@ -130,11 +130,11 @@ main() {
             spec.assert_str_eq(read_("${root}/args"), "issue create --repo o/r --title New bug --body-file -\n", "create args")
         }
         spec.it("sanitize replaces private paths and refuses credential-like drafts") callback {
-            clean, ok = reflect.sanitize(draft_("write fails in /home/u/work/acme", "/home/u/work/acme/app.py and /home/u/.nib"), "/home/u", "/home/u/work/acme")
+            clean, ok = reflect.sanitize(draft_("write fails in /home/u/work/acme", "/home/u/work/acme/app.py and /home/u/.naeb"), "/home/u", "/home/u/work/acme")
             spec.assert_eq(ok, 1, "kept")
             c = clean as *reflect.Draft
             spec.assert_str_eq(c.title, "write fails in <project>", "title")
-            spec.assert_str_eq(c.body, "<project>/app.py and ~/.nib", "body")
+            spec.assert_str_eq(c.body, "<project>/app.py and ~/.naeb", "body")
             _x, ok2 = reflect.sanitize(draft_("t", "token ghp_abc"), "/home/u", "/w")
             spec.assert_eq(ok2, 0, "credential refused")
         }

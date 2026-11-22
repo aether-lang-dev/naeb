@@ -5,7 +5,7 @@
 import std.spec
 import std.list
 import std.os
-import nib.session.hooks
+import naeb.session.hooks
 
 main() {
     fw = spec.init()

@@ -22,11 +22,11 @@ import std.spec
 import std.string
 import std.list
 import std.sync
-import nib.provider.types
-import nib.provider.sink
-import nib.provider.sse
-import nib.provider
-import nib.provider.http
+import naeb.provider.types
+import naeb.provider.sink
+import naeb.provider.sse
+import naeb.provider
+import naeb.provider.http
 
 // ---- provider.zig -------------------------------------------------------
 

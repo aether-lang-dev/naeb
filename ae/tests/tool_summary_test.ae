@@ -5,8 +5,8 @@
 import std.spec
 import std.string
 import std.list
-import nib.sandbox.timing
-import nib.session.tool_summary
+import naeb.sandbox.timing
+import naeb.session.tool_summary
 
 count_at_(s: *tool_summary.Summary, i: int) -> *tool_summary.Count {
     return list.list_get_raw(s.counts, i) as *tool_summary.Count

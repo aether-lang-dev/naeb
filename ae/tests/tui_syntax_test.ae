@@ -4,7 +4,7 @@
 // k keyword.
 import std.spec
 import std.string
-import nib.tui.syntax
+import naeb.tui.syntax
 
 class_letter_(c: int) -> string {
     if c == syntax.CLASS_PLAIN {

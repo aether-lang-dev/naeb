@@ -3,8 +3,8 @@
 import std.spec
 import std.string
 import std.list
-import nib.sandbox
-import nib.sandbox.replay
+import naeb.sandbox
+import naeb.sandbox.replay
 
 contains_(s: string, part: string) -> int {
     if string.index_of(s, part) >= 0 { return 1 }

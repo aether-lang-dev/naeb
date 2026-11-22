@@ -2,13 +2,13 @@
 // These tests are added: the reader field is replaceable per instance, and
 // the shell machinery (read_script: PNG check, exit 127, other failure,
 // deadline, size limit) is exercised with stand-in scripts, never the real
-// clipboard. The image check is nib.image's probe, as upstream. Writing text:
+// clipboard. The image check is naeb.image's probe, as upstream. Writing text:
 // which copier each OS gets, and the text reaching a stand-in copier's stdin.
 import std.spec
 import std.string
 import std.list
 import std.fs
-import nib.tui.clipboard
+import naeb.tui.clipboard
 
 fake_reader_(env: ptr) -> ptr {
     r = heap.new(clipboard.Result)
@@ -41,7 +41,7 @@ main() {
             spec.assert_eq(r.png[8] & 255, 0, "NUL bytes survive")
             heap.free(r)
         }
-        spec.it("(extra) any image nib.image probes counts; a bare PNG signature does not") callback {
+        spec.it("(extra) any image naeb.image probes counts; a bare PNG signature does not") callback {
             g = clipboard.read_script("printf 'GIF89a\\001\\000\\001\\000'", null, 2000 as long) as *clipboard.Result
             spec.assert_eq(g.kind, clipboard.KIND_PNG, "a gif")
             heap.free(g)

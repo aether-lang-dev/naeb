@@ -1,13 +1,13 @@
 // session.fork_history: a Step's history prefix for `tools.agent({fork:
 // true})`, and the child's inherited copy of it (upstream
-// src/session/history.zig, ADR 0015). Messages are the JSON texts nib.msg
+// src/session/history.zig, ADR 0015). Messages are the JSON texts naeb.msg
 // writes; a copy is a fresh string per message, so nothing the parent later
 // changes in its own lists reaches a snapshot.
 
 import std.list
 import std.string
-import nib.msg
-import nib.provider.types
+import naeb.msg
+import naeb.provider.types
 
 exports(snapshot, inherit)
 

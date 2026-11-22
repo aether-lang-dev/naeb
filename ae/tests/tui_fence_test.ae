@@ -1,7 +1,7 @@
 // naeb's approval prompt in the TUI (docs/naeb/adr/0001), driven
 // in-process: an in-memory terminal and a scripted Session whose fence
 // answer makes the app naeb's. The proposal is the port's (scripted here;
-// nib.fence.policy.propose for real), so these specs cover when it is
+// naeb.fence.policy.propose for real), so these specs cover when it is
 // offered, how it looks and what each key does.
 import std.spec
 import std.string
@@ -9,16 +9,16 @@ import std.fs
 import term
 import term.screen
 import term.driver
-import nib.provider.types
-import nib.config.env
-import nib.tui
-import nib.tui.port
-import nib.tui.clock
-import nib.tui.app_queue
-import nib.tui.entry
-import nib.tui.transcript
-import nib.tui.editor
-import nib.tui.fence_offer
+import naeb.provider.types
+import naeb.config.env
+import naeb.tui
+import naeb.tui.port
+import naeb.tui.clock
+import naeb.tui.app_queue
+import naeb.tui.entry
+import naeb.tui.transcript
+import naeb.tui.editor
+import naeb.tui.fence_offer
 
 struct Rig {
     t: *term.Terminal
@@ -280,9 +280,9 @@ main() {
             tui.step(r2.a)
             key_(r2, "enter")
             emit_(r2, "{\"run_end\":{\"ok\":false,\"output\":\"Unable to locate a Java Runtime\",\"changes\":[],\"tool_summary\":{\"counts\":[],\"omitted\":0}}}")
-            spec.assert_eq(r2.a.fence.java_hinted, 0, "nib: no fence, no hint")
+            spec.assert_eq(r2.a.fence.java_hinted, 0, "unfenced: no fence, no hint")
         }
-        spec.it("nib (no fence) collects nothing and never asks") callback {
+        spec.it("the unfenced build (no fence) collects nothing and never asks") callback {
             r = rig_(false)
             refused_turn_(r)
             port.end_turn(r.s, 1)

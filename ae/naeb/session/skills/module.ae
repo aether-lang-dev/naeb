@@ -25,7 +25,7 @@ import std.os hiding (exec, run_capture, run_pipe, run_pipe_drain_and_wait, run_
     os_run_pipe_raw, os_run_pipe_drain_and_wait_raw, os_run_socket_raw,
     os_run_stdio_raw, os_run_full_raw, os_run_supervised_raw, os_spawn_raw,
     os_spawn_to_raw)
-import nib.jsonx
+import naeb.jsonx
 
 exports(Skill, Diagnostic, Summary, Result, MAX_SKILL_BYTES, MAX_DESCRIPTION_CHARS, mention_intro,
         scalar, quoted_end, parse, discover, load, select, append,
@@ -475,14 +475,14 @@ join_(a: string, b: string) -> string {
     return "${a}/${b}"
 }
 
-// The roots, in order: ~/.agents/skills, $NIB_HOME/skills, <root>/.agents/skills,
-// <root>/.nib/skills.
+// The roots, in order: ~/.agents/skills, $NAEB_HOME/skills, <root>/.agents/skills,
+// <root>/.naeb/skills.
 roots_(home: string, user_home: string, root: string) -> ptr {
     l = list.list_new()
     list.list_add(l, join_(user_home, ".agents/skills"))
     list.list_add(l, join_(home, "skills"))
     list.list_add(l, join_(root, ".agents/skills"))
-    list.list_add(l, join_(root, ".nib/skills"))
+    list.list_add(l, join_(root, ".naeb/skills"))
     return l
 }
 
@@ -659,7 +659,7 @@ expand(text: string, found: ptr) -> string {
 // The root `path` lies under, as the prompt labels it, or `path`.
 source(path: string, home: string, user_home: string, root: string) -> string {
     dirs = roots_(home, user_home, root)
-    labels = ["~/.agents/skills", "$NIB_HOME/skills", ".agents/skills", ".nib/skills"]
+    labels = ["~/.agents/skills", "$NAEB_HOME/skills", ".agents/skills", ".naeb/skills"]
     i = 0
     while i < 4 {
         d, _g = list.get_string(dirs, i)

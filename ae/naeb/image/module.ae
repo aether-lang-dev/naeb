@@ -1,9 +1,9 @@
 // image: image attachments (upstream src/image.zig): header probing, content-
-// hash storage under `$NIB_HOME/sessions/<id>.images/`, base64 request parts,
+// hash storage under `$NAEB_HOME/sessions/<id>.images/`, base64 request parts,
 // the omitted-image text and pasted-path detection. Pixels are never decoded
 // or resized.
 //
-// An Image is the JSON object text the Session log records (nib.msg's
+// An Image is the JSON object text the Session log records (naeb.msg's
 // `images` array holds them): {"path","name","media_type","bytes","width",
 // "height"}, in upstream's field order. File data are Aether strings read
 // binary-safely (fs.read_binary keeps NULs; string.bytes(s) is the whole
@@ -21,10 +21,10 @@ import std.bytes
 import std.fs
 import std.cryptography
 import std.encoding
-import nib.jsonx
-import nib.lock
-import nib.fserr
-import nib.tools.atomic_file
+import naeb.jsonx
+import naeb.lock
+import naeb.fserr
+import naeb.tools.atomic_file
 
 exports(MAX_BYTES, MAX_PER_RUN, ESTIMATED_TOKENS, probe, probe_json, media_type, extension, store, rejection, image_json,
         omitted_text, omitted_text_at, count, image_at, name_of, width_of, height_of, bytes_of, part_at, data_url, pasted_path, read_pasted,

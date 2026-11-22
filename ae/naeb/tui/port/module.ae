@@ -1,26 +1,26 @@
 // port: what the TUI needs from a Session, as an instance of closures, so the
-// app runs on the real Session (nib.tui.live) or on a scripted one a spec
+// app runs on the real Session (naeb.tui.live) or on a scripted one a spec
 // drives ("emit reasoning, then text, then a Run with these results").
 // Upstream's App holds a *Session and calls into it; every such call is one
 // field here. Each closure takes `ctx` first and is called with `call`.
 //
-// Turn events reach the app through its queue (nib.tui.app_queue) as the JSON
-// text `nib ask --json` prints for them, plus the app-side events upstream's
+// Turn events reach the app through its queue (naeb.tui.app_queue) as the JSON
+// text `naeb ask --json` prints for them, plus the app-side events upstream's
 // Turn posts: {"model_activity":{"state":..,"at":ms}}, {"tool_activity":name},
 // {"user_inserted":id}, {"turn_end":{status,steps,usage,timing}}, and last
 // {"done":{}} or {"failed":{"message":..,"reason":..}} (reason: model, tool,
 // timeout, canceled, limit).
 //
-// Not here, because the app reads them itself from $NIB_HOME and the
+// Not here, because the app reads them itself from $NAEB_HOME and the
 // environment as upstream does: config writes (simple, effort, model),
 // stored keys, the service list.
 
 import std.list
 import std.string
 import std.sync
-import nib.jsonx
-import nib.provider.types
-import nib.tui.app_queue
+import naeb.jsonx
+import naeb.provider.types
+import naeb.tui.app_queue
 
 exports(Port, Script, scripted, script_of, emit, end_turn, fail_turn, play_next, turn_text,
         turn_images, turn_count, canceled, set_stats, add_history_message, set_reply, queue_events, queue_progress,
@@ -29,14 +29,14 @@ exports(Port, Script, scripted, script_of, emit, end_turn, fail_turn, play_next,
 // Signatures (all called with `call(p.f, p.ctx, ...)`):
 //   start_turn(ctx, text: string, images: string, compact: int, q: *app_queue.Queue, cancel: std.sync cell)
 //       starts a Turn (or /compact) and returns; its events go to q. images is
-//       the user message's images, a JSON array of nib.image Images ("" none).
+//       the user message's images, a JSON array of naeb.image Images ("" none).
 //   finish_turn(ctx)                  joins the finished Turn's thread
 //   enqueue(ctx, text) -> string      a user interjection while a Turn runs: its id
 //   take_queued(ctx) -> ptr           std.list of the interjections not yet sent
 //   history(ctx) -> ptr               std.list of the Session's message JSON texts
 //   stats(ctx) -> string              {"usage":{...},"steps":n,"context":n}
 //   cfg(ctx) -> ptr                   the Session's *types.Config
-//   home(ctx) -> string               $NIB_HOME
+//   home(ctx) -> string               $NAEB_HOME
 //   session_id(ctx) -> string
 //   undo(ctx) -> string               {"text":..} or {"error":..}
 //   reopen(ctx, id) -> string         "" or an error name; id "" opens a new Session
@@ -54,9 +54,9 @@ exports(Port, Script, scripted, script_of, emit, end_turn, fail_turn, play_next,
 //                                     a Run outside a Turn (upstream session.run): committed to the log;
 //                                     run is its Run id, error the commit's ("" none)
 //   sandbox_status(ctx) -> string
-//   fence(ctx) -> string              the project fence in force (fence.describe), "" none (nib)
+//   fence(ctx) -> string              the project fence in force (fence.describe), "" none (unfenced)
 //   fence_propose(ctx, records) -> string   naeb: the naeb.ae change offered for refusal
-//                                     records (a JSON array): nib.fence.policy.propose's JSON, "" none
+//                                     records (a JSON array): naeb.fence.policy.propose's JSON, "" none
 //   fence_apply(ctx, proposal, q)     naeb: the user approved `proposal`; applies it off the app's
 //                                     thread and posts {"fence_applied":{"ok":..,"error"?,"output"?}} to q
 //   maven_override(ctx, record, q)    naeb: the user approved a too-young Maven version (a
@@ -144,7 +144,7 @@ struct Events {
 
 script_of(p: *Port) -> *Script { return p.ctx as *Script }
 
-// A Port over a fresh Script. `cfg` is a *types.Config; home is $NIB_HOME.
+// A Port over a fresh Script. `cfg` is a *types.Config; home is $NAEB_HOME.
 scripted(cfg: @keep ptr, home: string) -> *Port {
     s = heap.new(Script)
     s.cfg = cfg

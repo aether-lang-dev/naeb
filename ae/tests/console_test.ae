@@ -2,7 +2,7 @@
 import std.spec
 import std.string
 import std.list
-import nib.sandbox.console
+import naeb.sandbox.console
 
 entry_bytes_(call: long) -> long { return (call - 1) % 10 + 1 }
 

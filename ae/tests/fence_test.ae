@@ -8,14 +8,14 @@ import std.fs
 import std.list
 import std.string
 import std.tcp
-import nib.jsonx
-import nib.fence
-import nib.tools.rules
-import nib.tools.jail
-import nib.tools.search
-import nib.tools.files
-import nib.tools.file_state
-import nib.tools.egress
+import naeb.jsonx
+import naeb.fence
+import naeb.tools.rules
+import naeb.tools.jail
+import naeb.tools.search
+import naeb.tools.files
+import naeb.tools.file_state
+import naeb.tools.egress
 
 tmp_() -> string {
     d, _e = fs.make_temp_dir("", "naeb-fence")
@@ -110,12 +110,12 @@ main() {
         spec.it("resolves to a closed home, the project and the secrets denied") callback {
             base = fixture_()
             f = fence.new("${base}/home")
-            sp = fence.resolve(f, "${base}/home/work/proj", "${base}/home/.nib", null) as *jail.Spec
+            sp = fence.resolve(f, "${base}/home/work/proj", "${base}/home/.naeb", null) as *jail.Spec
             spec.assert_eq(rules.allows(sp.reads, "${base}/home/work/proj/a.txt"), 1, "project")
             spec.assert_eq(rules.allows(sp.reads, "${base}/home/other/notes"), 0, "home")
             spec.assert_eq(rules.allows(sp.reads, "${base}/home/.ssh/id"), 0, "secret")
             spec.assert_eq(rules.allows(sp.reads, "${base}/home/.gitconfig"), 1, "gitconfig")
-            spec.assert_eq(rules.allows(sp.reads, "${base}/home/.nib/auth.json"), 0, "nib home")
+            spec.assert_eq(rules.allows(sp.reads, "${base}/home/.naeb/auth.json"), 0, "naeb home")
             spec.assert_eq(rules.allows(sp.reads, "/usr/bin/env"), 1, "system")
             spec.assert_eq(has_(sp.writes, "${base}/home/work/proj"), 1, "project writable")
             spec.assert_eq(has_(sp.write_deny, "${base}/home/work/proj/.git/hooks"), 1, "hooks read-only")
@@ -268,9 +268,9 @@ main() {
         spec.it("read names the closed path; write refuses read-only paths in the project") callback {
             base = fixture_()
             f = fence.new("${base}/home")
-            sp = fence.resolve(f, "${base}/home/work/proj", "${base}/home/.nib", null) as *jail.Spec
-            fs.mkdir_p("${base}/home/.nib")
-            c = files.new_ctx("${base}/home/.nib", null, file_state.new(), sp.writes, list.list_new()) as *files.Ctx
+            sp = fence.resolve(f, "${base}/home/work/proj", "${base}/home/.naeb", null) as *jail.Spec
+            fs.mkdir_p("${base}/home/.naeb")
+            c = files.new_ctx("${base}/home/.naeb", null, file_state.new(), sp.writes, list.list_new()) as *files.Ctx
             c.reads = sp.reads
             c.wdeny = sp.write_deny
             ok, text = files.read(c as ptr, "{\"path\":${jsonx.quote("${base}/home/.ssh/id")}}")
@@ -373,15 +373,15 @@ main() {
             f = fence.new(home)
             fence.deny_read(f, "${base}/opt/secret")
             fence.deny_write(f, "${base}/opt")
-            r = fence.refusal(f, proj, "${home}/.nib", "read ${home}/.ssh/id_fake", "child", "b3")
+            r = fence.refusal(f, proj, "${home}/.naeb", "read ${home}/.ssh/id_fake", "child", "b3")
             spec.assert_str_eq(r, "{\"op\":\"read\",\"resource\":\"${home}/.ssh/id_fake\",\"layer\":\"child\",\"command_id\":\"b3\",\"note\":\"not offered: naeb keeps ~/.ssh closed; open it only by editing naeb.ae yourself\"}", "a secret: a note, no line")
-            r2 = fence.refusal(f, proj, "${home}/.nib", "write ${home}/.m2", "child", "b2")
+            r2 = fence.refusal(f, proj, "${home}/.naeb", "write ${home}/.m2", "child", "b2")
             spec.assert_eq(contains_(r2, "suggestion"), 0, "never ~/.m2: ${r2}")
             spec.assert_eq(contains_(r2, "holds ~/.m2/settings.xml"), 1, "says why: ${r2}")
             spec.assert_str_eq(fence.suggestion(f, proj, "", "write", "${home}/planted"), "policy.allow_write(p, \"~/planted\")", "write")
             spec.assert_str_eq(fence.suggestion(f, proj, "", "write", "${proj}/.git/hooks/pre-commit"), "", "built-in read-only")
             spec.assert_str_eq(fence.suggestion(f, proj, "", "read", "${home}/.naeb/x"), "", "naeb's own")
-            spec.assert_str_eq(fence.suggestion(f, proj, "${home}/.nib", "read", "${home}/.nib/auth.json"), "", "naeb's data")
+            spec.assert_str_eq(fence.suggestion(f, proj, "${home}/.naeb", "read", "${home}/.naeb/auth.json"), "", "naeb's data")
             spec.assert_str_eq(fence.suggestion(f, proj, "", "read", "${base}/opt/secret/k"), "", "the policy's own deny_read")
             spec.assert_str_eq(fence.suggestion(f, proj, "", "write", "${base}/opt/x"), "", "the policy's own deny_write")
             spec.assert_str_eq(fence.suggestion(f, proj, "", "egress", "example.invalid:443"), "policy.allow_host(p, \"example.invalid\", 443)", "egress")

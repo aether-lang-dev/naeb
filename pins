@@ -29,10 +29,10 @@
 # stand-ins are removed in the same commit.
 # 0.915.0 (2026-11-14): std.fs's stat (inode, mode, ns mtime), flock, O_EXCL,
 # fd ops and positional writes, std.os.environ and signal_watch, std.io.set_echo
-# replace nib.sysgap, which is deleted.
+# replace naeb.sysgap, which is deleted.
 # 0.916.0 (2026-11-14): contrib.quickjs gains eval_async, a host deadline with
 # cancel and stop cells, promise_state/promise_result and a to_string that
-# returns (string, error); quickjs-ng 0.18.0. nib.qjsgap is deleted.
+# returns (string, error); quickjs-ng 0.18.0. naeb.qjsgap is deleted.
 # 0.923.0 (2026-11-18): fs.unlink and fs.create_dir_with_mode return
 # (ok, kind, msg), and std.fs has KIND_READ_ONLY_FS, KIND_BUSY and
 # KIND_FILE_TOO_BIG (aether #3728); /undo's stat guess and fserr's POSIX errno

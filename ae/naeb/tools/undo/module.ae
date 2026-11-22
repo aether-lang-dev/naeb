@@ -1,7 +1,7 @@
 // tools.undo: Turn undo history (upstream src/tools/undo.zig). Before edit or
 // write changes a file, the file's bytes are snapshotted into the Turn's
 // directory under the Session's `<id>.undo` directory; /undo restores the
-// last Turn's files when each still holds what nib last wrote, and otherwise
+// last Turn's files when each still holds what naeb last wrote, and otherwise
 // refuses without touching anything.
 //
 // Two instances cooperate and neither is module state:
@@ -22,11 +22,11 @@ import std.strbuilder
 import std.list
 import std.sync
 import std.cryptography
-import nib.jsonx
-import nib.fserr
-import nib.tools.atomic_file
-import nib.tools.file_state
-import nib.tools.registry
+import naeb.jsonx
+import naeb.fserr
+import naeb.tools.atomic_file
+import naeb.tools.file_state
+import naeb.tools.registry
 
 exports(Active, History, Write, Entry,
         FILE_LIMIT, TURN_LIMIT, PATH_LIMIT, HISTORY_LIMIT,
@@ -80,7 +80,7 @@ struct History {
 struct Entry {
     path: string
     created: int
-    hash: string       // sha256 hex of what nib last wrote
+    hash: string       // sha256 hex of what naeb last wrote
     pending: int
     tainted: int
     undone: int
@@ -181,10 +181,10 @@ active_dir(ap: ptr) -> string {
 
 // The first Reason this process or any holder of the directory's lock file
 // recorded: (reason, "") or (0, error name).
-recorded_reason_(a: *Active, nib_home: string, dirpath: string) -> (int, string) {
+recorded_reason_(a: *Active, naeb_home: string, dirpath: string) -> (int, string) {
     local = sync.atomic_load(a.failure)
     if local != 0 { return local as int, "" }
-    fd, err = file_state.lock(nib_home, dirpath, null)
+    fd, err = file_state.lock(naeb_home, dirpath, null)
     if err != "" { return 0, err }
     code = size_of_(fd)
     file_state.unlock(fd)
@@ -195,12 +195,12 @@ recorded_reason_(a: *Active, nib_home: string, dirpath: string) -> (int, string)
 
 // Records that the running Turn has no complete undo record. The first
 // Reason wins, locally and in the lock file shared with children.
-mark_incomplete(ap: ptr, nib_home: string, reason: int) {
+mark_incomplete(ap: ptr, naeb_home: string, reason: int) {
     if ap == null { return }
     a = ap as *Active
     if a.dir == "" { return }
     sync.atomic_cas(a.failure, 0, reason)
-    fd, err = file_state.lock(nib_home, a.dir, null)
+    fd, err = file_state.lock(naeb_home, a.dir, null)
     if err != "" { return }
     if size_of_(fd) == 0 { fs.fd_truncate(fd, reason as long) }
     file_state.unlock(fd)
@@ -227,11 +227,11 @@ names_(path: string) -> (ptr, string) {
 // (Write, 0): snapshot saved, entry pending. (null, 0): nothing to track.
 // (null, reason): the Turn cannot be fully undone. The directory lock is
 // released on every path except a returned Write.
-tracked_(a: *Active, nib_home: string, path: string, has_before: int, before: string, after_text: string) -> (ptr, int) {
+tracked_(a: *Active, naeb_home: string, path: string, has_before: int, before: string, after_text: string) -> (ptr, int) {
     dirpath = a.dir
     if string.length(after_text) > FILE_LIMIT { return null, REASON_FILE_TOO_LARGE }
     if has_before == 1 && string.length(before) > FILE_LIMIT { return null, REASON_FILE_TOO_LARGE }
-    fd, lerr = file_state.lock(nib_home, dirpath, null)
+    fd, lerr = file_state.lock(naeb_home, dirpath, null)
     if lerr != "" { return null, REASON_UNAVAILABLE }
     if size_of_(fd) != 0 {
         file_state.unlock(fd)
@@ -340,19 +340,19 @@ tracked_(a: *Active, nib_home: string, path: string, has_before: int, before: st
 // when there is nothing to track or the Turn is not undoable (then the
 // Reason is recorded). Call it before the first byte is changed; hold it
 // through the change, then commit on success, and always release.
-prepare(ap: ptr, nib_home: string, path: string, has_before: int, before: string, after_text: string) -> ptr {
+prepare(ap: ptr, naeb_home: string, path: string, has_before: int, before: string, after_text: string) -> ptr {
     if ap == null { return null }
     a = ap as *Active
     if a.dir == "" { return null }
     if sync.atomic_load(a.failure) != 0 { return null }
     if has_before == 1 && before == after_text { return null }
-    w, reason = tracked_(a, nib_home, path, has_before, before, after_text)
-    if reason != 0 { mark_incomplete(ap, nib_home, reason) }
+    w, reason = tracked_(a, naeb_home, path, has_before, before, after_text)
+    if reason != 0 { mark_incomplete(ap, naeb_home, reason) }
     return w
 }
 
 // The change reached the file: its new bytes are what a later undo expects.
-commit(ap: ptr, nib_home: string, wp: ptr, after_text: string) {
+commit(ap: ptr, naeb_home: string, wp: ptr, after_text: string) {
     if wp == null { return }
     w = wp as *Write
     a = ap as *Active
@@ -443,7 +443,7 @@ begin(hp: ptr) {
 // Ends the Turn: the directory stops being written. A Turn that changed
 // nothing and failed nothing leaves no record. Returns NOTICE_INCOMPLETE
 // when the Turn has no complete undo record, else "".
-finish(hp: ptr, nib_home: string) -> string {
+finish(hp: ptr, naeb_home: string) -> string {
     h = hp as *History
     if h.root == "" { return "" }
     a = h.active as *Active
@@ -453,7 +453,7 @@ finish(hp: ptr, nib_home: string) -> string {
     turn = turn_at_(h, n - 1)
     path = turn.path
     if turn.reason == 0 {
-        r, rerr = recorded_reason_(a, nib_home, path)
+        r, rerr = recorded_reason_(a, naeb_home, path)
         if rerr != "" { r = REASON_UNAVAILABLE }
         turn.reason = r
     }
@@ -503,7 +503,7 @@ size_of_(fd: int) -> long {
     return n
 }
 
-// 1 when the file is not exactly what nib last wrote.
+// 1 when the file is not exactly what naeb last wrote.
 conflicted_(e: *Entry) -> int {
     if e.pending != 0 || e.tainted != 0 { return 1 }
     canonical, cerr = atomic_file.canonical_path(e.path)
@@ -521,7 +521,7 @@ conflicted_(e: *Entry) -> int {
 // Restores the last Turn's files, or says why it did not. The result is the
 // text the Session records as the /undo outcome (both the refusals and
 // the report); `seen` is the Tools' file_state and `reg` its registry.
-undo(hp: ptr, nib_home: string, seen: ptr, reg: ptr) -> string {
+undo(hp: ptr, naeb_home: string, seen: ptr, reg: ptr) -> string {
     h = hp as *History
     n = list.list_size(h.turns)
     if n == 0 { return "Nothing to undo in this process. Restored sessions cannot undo earlier Turns." }
@@ -529,7 +529,7 @@ undo(hp: ptr, nib_home: string, seen: ptr, reg: ptr) -> string {
     path = turn.path
     a = h.active as *Active
     if turn.reason == 0 {
-        r, rerr = recorded_reason_(a, nib_home, path)
+        r, rerr = recorded_reason_(a, naeb_home, path)
         if rerr != "" { r = REASON_UNAVAILABLE }
         turn.reason = r
     }
@@ -569,7 +569,7 @@ undo(hp: ptr, nib_home: string, seen: ptr, reg: ptr) -> string {
     k = 0
     while k < list.list_size(items) {
         it = list.list_get_raw(items, k) as *Item
-        fd, lerr2 = file_state.lock(nib_home, it.entry.path, null)
+        fd, lerr2 = file_state.lock(naeb_home, it.entry.path, null)
         if lerr2 != "" {
             release_items_(items)
             return "Undo failed: ${lerr2}"

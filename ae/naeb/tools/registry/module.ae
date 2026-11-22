@@ -12,8 +12,8 @@ import std.os hiding (exec, run_capture, run_pipe, run_pipe_drain_and_wait, run_
     os_run_pipe_raw, os_run_pipe_drain_and_wait_raw, os_run_socket_raw,
     os_run_stdio_raw, os_run_full_raw, os_run_supervised_raw, os_spawn_raw,
     os_spawn_to_raw)
-import nib.lock
-import nib.jsonx
+import naeb.lock
+import naeb.jsonx
 
 exports(Registry, Command, new, new_command, changed, revision, replaces, start, finish, set_log)
 

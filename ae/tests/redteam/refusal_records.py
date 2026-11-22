@@ -3,7 +3,7 @@
 model"): in-process tools, bash, hooks, MCP stdio servers and sub-agents all
 report a fence refusal as {op, resource, layer, command_id?, reason?, suggestion?,
 note?}, the suggestion a naeb.ae line as text, the note why there is none (a
-secret is never offered); without a fence (nib) the shapes are upstream's.
+secret is never offered); without a fence (unfenced) the shapes are upstream's.
 
 Local only: a fixture HOME of fake files, a fixture project with no naeb.ae
 (the default fence), hosts under `.invalid` (the proxy refuses them before
@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.join(ROOT, "tests"))
 from mock_providers import Mock  # noqa: E402
 
 NAEB = os.environ.get("NAEB", os.path.join(ROOT, "target/build/bin/naeb"))
-NIB = os.environ.get("NIB", os.path.join(os.path.dirname(NAEB), "nib"))
+UNFENCED = os.environ.get("NAEB_UNFENCED", os.path.join(os.path.dirname(NAEB), "naeb-unfenced"))
 SECRET_NOTE = "not offered: naeb keeps ~/.ssh closed; open it only by editing naeb.ae yourself"
 
 SCRIPT = r'''
@@ -78,10 +78,10 @@ def main():
     atexit.register(shutil.rmtree, work, True)
     home = os.path.realpath(os.path.join(work, "home"))
     proj = os.path.join(home, "work", "proj")
-    nib_home = os.path.join(home, ".nib")
+    naeb_home = os.path.join(home, ".naeb")
     os.makedirs(os.path.join(proj, ".git", "hooks"))
     os.makedirs(os.path.join(home, ".ssh"))
-    os.makedirs(nib_home)
+    os.makedirs(naeb_home)
     with open(os.path.join(proj, ".git", "HEAD"), "w") as f:
         f.write("ref: refs/heads/main\n")
     key = os.path.join(home, ".ssh", "id_fake")
@@ -90,7 +90,7 @@ def main():
     env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "HOME": home,
-        "NIB_HOME": nib_home,
+        "NAEB_HOME": naeb_home,
         "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
         "LANG": "C.UTF-8",
     }
@@ -165,18 +165,18 @@ def main():
     check("uncaught-shows-records", "fence_denied: [{" in p.stdout + p.stderr and '"layer":"tool"' in p.stdout + p.stderr,
           "the Run said %r" % (p.stdout + p.stderr)[-500:])
 
-    # Without a fence (nib): upstream's shapes.
-    plain = js(NIB)
+    # Without a fence (unfenced): upstream's shapes.
+    plain = js(UNFENCED)
     pr = json.loads(plain.get("read", "{}")) if plain else {}
     pt = json.loads(plain.get("tool_other", "{}")) if plain else {}
-    check("nib-unchanged", plain is not None and "fence_denied" not in pr and set(pr) == {"exit_code", "output"} and pt.get("fence_denied") is None,
-          "nib returned %r / %r" % (pr, pt))
+    check("naeb-unchanged", plain is not None and "fence_denied" not in pr and set(pr) == {"exit_code", "output"} and pt.get("fence_denied") is None,
+          "the unfenced build returned %r / %r" % (pr, pt))
 
     # A hook's payload, an MCP server's result, a sub-agent's result.
-    with open(os.path.join(nib_home, "config.toml"), "w") as f:
+    with open(os.path.join(naeb_home, "config.toml"), "w") as f:
         f.write('[hooks]\nafter_edit = ["cat ~/.ssh/id_fake"]\n')
     mock = Mock("chat_completions", code='await tools.write({path: "touched.txt", content: "x\\n"}); console.log("wrote");')
-    menv = dict(env, NIB_PROVIDER="chat_completions", NIB_API_KEY=mock.key, NIB_BASE_URL=mock.url)
+    menv = dict(env, NAEB_PROVIDER="chat_completions", NAEB_API_KEY=mock.key, NAEB_BASE_URL=mock.url)
     subprocess.run([NAEB, "ask", "--json", "probe"], cwd=proj, env=menv, capture_output=True, text=True, timeout=120)
     tool = [c["content"] for _, _, req in mock.requests for c in req.get("messages", []) if c.get("role") == "tool"]
     system = [c["content"] for _, _, req in mock.requests for c in req.get("messages", []) if c.get("role") == "system"]
@@ -195,10 +195,10 @@ def main():
     server = os.path.join(proj, "rr_mcp.py")
     with open(server, "w") as f:
         f.write(MCP_SERVER)
-    with open(os.path.join(nib_home, "config.toml"), "w") as f:
+    with open(os.path.join(naeb_home, "config.toml"), "w") as f:
         f.write('[mcp]\nrr = true\n\n[mcp.rr]\ncommand = "python3"\nargs = ["-I", %s]\n' % json.dumps(server))
     mock = Mock("chat_completions", code='console.log(JSON.stringify(await tools.mcp("rr.peek", {})));')
-    menv = dict(env, NIB_PROVIDER="chat_completions", NIB_API_KEY=mock.key, NIB_BASE_URL=mock.url)
+    menv = dict(env, NAEB_PROVIDER="chat_completions", NAEB_API_KEY=mock.key, NAEB_BASE_URL=mock.url)
     subprocess.run([NAEB, "ask", "--json", "probe"], cwd=proj, env=menv, capture_output=True, text=True, timeout=120)
     tool = [c["content"] for _, _, req in mock.requests for c in req.get("messages", []) if c.get("role") == "tool"]
     mock.close()
@@ -210,9 +210,9 @@ def main():
     rec = find(mres.get("fence_denied"), "read", key)
     check("mcp-record", rec is not None and rec.get("command_id") == "mcp:rr" and rec.get("layer") == "child", "the MCP result was %r" % mres)
 
-    os.remove(os.path.join(nib_home, "config.toml"))
+    os.remove(os.path.join(naeb_home, "config.toml"))
     mock = Mock("chat_completions", code=AGENT_CODE)
-    menv = dict(env, NIB_PROVIDER="chat_completions", NIB_API_KEY=mock.key, NIB_BASE_URL=mock.url)
+    menv = dict(env, NAEB_PROVIDER="chat_completions", NAEB_API_KEY=mock.key, NAEB_BASE_URL=mock.url)
     a = subprocess.run([NAEB, "ask", "--json", "probe"], cwd=proj, env=menv, capture_output=True, text=True, timeout=300)
     tool = [c["content"] for _, _, req in mock.requests for c in req.get("messages", []) if c.get("role") == "tool"]
     mock.close()

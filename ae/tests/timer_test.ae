@@ -5,9 +5,9 @@ import std.string
 import std.sync
 import std.worker
 import std.os
-import nib.sandbox
-import nib.sandbox.timing
-import nib.sandbox.replay
+import naeb.sandbox
+import naeb.sandbox.timing
+import naeb.sandbox.replay
 import std.list
 
 struct Counter {

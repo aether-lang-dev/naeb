@@ -1,4 +1,4 @@
-// live: the TUI's Session port over the real Session (nib.session), the
+// live: the TUI's Session port over the real Session (naeb.session), the
 // half of upstream src/tui/turn.zig that runs a Turn on its own thread plus
 // the Session calls upstream's App makes directly (reopen, switchConfig,
 // enqueue, takeQueued, undo, the background tasks, recovery, /js).
@@ -6,7 +6,7 @@
 // A Turn runs on a std.worker thread; its events reach the app's queue as the
 // JSON text the Session emits, with what upstream's Turn.emit adds: the Step
 // on deltas and Run starts, the context and Step count on usage events. Model
-// activity goes through nib.tui.turn's throttle. The Turn ends with its
+// activity goes through naeb.tui.turn's throttle. The Turn ends with its
 // summary ({"turn_end":..}) and {"done":{}} or {"failed":..}.
 //
 // After a Turn the Session's turn_end hooks run on a thread of their own
@@ -23,31 +23,31 @@ import std.os hiding (exec, run_capture, run_pipe, run_pipe_drain_and_wait, run_
     os_run_pipe_raw, os_run_pipe_drain_and_wait_raw, os_run_socket_raw,
     os_run_stdio_raw, os_run_full_raw, os_run_supervised_raw, os_spawn_raw,
     os_spawn_to_raw)
-import nib.jsonx
-import nib.provider
-import nib.provider.types
-import nib.provider.sink as psink
-import nib.msg
-import nib.tui.prediction
-import nib.config
-import nib.session.skills
-import nib.session.instructions
-import nib.session
-import nib.session.log
-import nib.tools
-import nib.tools.background
-import nib.tools.progress
-import nib.tools.jail
-import nib.tools.changes
-import nib.tools.diff
-import nib.mcp
-import nib.sandbox
-import nib.tui.app_queue
-import nib.tui.port
-import nib.tui.turn
-import nib.fence
-import nib.fence.policy
-import nib.sysenv
+import naeb.jsonx
+import naeb.provider
+import naeb.provider.types
+import naeb.provider.sink as psink
+import naeb.msg
+import naeb.tui.prediction
+import naeb.config
+import naeb.session.skills
+import naeb.session.instructions
+import naeb.session
+import naeb.session.log
+import naeb.tools
+import naeb.tools.background
+import naeb.tools.progress
+import naeb.tools.jail
+import naeb.tools.changes
+import naeb.tools.diff
+import naeb.mcp
+import naeb.sandbox
+import naeb.tui.app_queue
+import naeb.tui.port
+import naeb.tui.turn
+import naeb.fence
+import naeb.fence.policy
+import naeb.sysenv
 import std.time
 
 exports(Live, new, session_of, set_naeb_src)
@@ -337,7 +337,7 @@ new(sp: @keep ptr, cfg: @keep ptr, op: @keep ptr, home: string) -> *port.Port {
         if t.fence == null {
             return ""
         }
-        string out = policy.propose(t.fence, os.getcwd(), tools.nib_home(t as ptr), records, time.strftime(time.now(), "%Y-%m-%d"))
+        string out = policy.propose(t.fence, os.getcwd(), tools.naeb_home(t as ptr), records, time.strftime(time.now(), "%Y-%m-%d"))
         return out
     }
     p.fence_apply = |ctx: @keep ptr, prop: string, qp: @keep ptr| {
@@ -490,7 +490,7 @@ sessions_json_(l: *Live) -> string {
     return "${out}]"
 }
 
-// The user's approval of a proposal (nib.fence.policy.propose's JSON):
+// The user's approval of a proposal (naeb.fence.policy.propose's JSON):
 // naeb.ae and the policy rebuilt and loaded, the new Fence swapped into the
 // Session between Runs, the approval in the session log. The result for
 // fence_applied: {"ok":true} or {"ok":false,"error":..,"output":..}.

@@ -1,7 +1,7 @@
 // tui.turn_changes: the line under a Turn footer and its opened per-file rows,
 // and the changed-file text of one Run (upstream
 // src/tui/transcript/changes.zig; renamed because the module basename
-// `changes` is taken by nib.tools.changes).
+// `changes` is taken by naeb.tools.changes).
 //
 // Differences from upstream:
 //  - `turn_changes(files)` takes the list (std.list of *changes.File, what
@@ -11,14 +11,14 @@
 //    `change_text_clone`); `change_text_new` takes the list of *diff.Change
 //    that changes.take returns. No deinit (strings are owned by the box).
 //  - MAX_DIFF_LINES lives here (upstream: entry.zig, which would be a circular
-//    import); nib.tui.entry re-exports it.
+//    import); naeb.tui.entry re-exports it.
 
 import std.string
 import std.strbuilder
 import std.list
-import nib.tools.changes
-import nib.tools.diff
-import nib.tui.long_text
+import naeb.tools.changes
+import naeb.tools.diff
+import naeb.tui.long_text
 
 exports(MAX_DIFF_LINES, TurnChanges, ChangeText, turn_changes,
         change_text_empty, change_text_new, change_text_clone)

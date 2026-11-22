@@ -20,8 +20,8 @@ import std.string
 import std.sync
 import std.time
 import std.worker
-import nib.lock
-import nib.provider.timing
+import naeb.lock
+import naeb.provider.timing
 
 exports(Stream, Reader, open, reader, set_timing, set_data_hook, wait_head, next_line, content, read_rest, status_of,
         timeout_message, TIMEOUT_BYTES, TIMEOUT_CONTENT, TIMEOUT_REQUEST)

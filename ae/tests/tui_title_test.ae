@@ -4,7 +4,7 @@
 import std.spec
 import std.string
 import std.fs
-import nib.tui.title
+import naeb.tui.title
 
 put_(root: string, rel: string, data: string) {
     err = fs.write("${root}/${rel}", data)
@@ -35,7 +35,7 @@ main() {
             spec.assert_true(title.parse_head("ref: refs/heads/\n").kind == title.HEAD_UNKNOWN, "empty branch")
         }
         spec.it("branch from a plain repository, a worktree gitdir file and no git") callback {
-            base, err = fs.make_temp_dir("", "nibtitle")
+            base, err = fs.make_temp_dir("", "naebtitle")
             spec.assert_str_eq(err, "", "tmp dir")
             mk_(base, "plain/.git")
             put_(base, "plain/.git/HEAD", "ref: refs/heads/main\n")
@@ -65,10 +65,10 @@ main() {
             fs.remove_tree(base)
         }
         spec.it("title composition") callback {
-            spec.assert_str_eq(title.compose("nibcode", "main", "deepseek-flash", "high"), "nibcode · main · deepseek-flash · high", "full")
-            spec.assert_str_eq(title.compose("nibcode", "", "deepseek-flash", "off"), "nibcode · deepseek-flash · off", "no branch")
-            spec.assert_str_eq(title.compose("nibcode", "main", "m", "server default"), "nibcode · main · m", "server default")
-            spec.assert_str_eq(title.compose("nibcode", "main", "m", "on (server default effort)"), "nibcode · main · m", "on default")
+            spec.assert_str_eq(title.compose("naeb", "main", "deepseek-flash", "high"), "naeb · main · deepseek-flash · high", "full")
+            spec.assert_str_eq(title.compose("naeb", "", "deepseek-flash", "off"), "naeb · deepseek-flash · off", "no branch")
+            spec.assert_str_eq(title.compose("naeb", "main", "m", "server default"), "naeb · main · m", "server default")
+            spec.assert_str_eq(title.compose("naeb", "main", "m", "on (server default effort)"), "naeb · main · m", "on default")
         }
     }
     return spec.run_summary(fw)

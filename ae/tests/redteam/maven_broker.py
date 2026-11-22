@@ -82,11 +82,11 @@ class Case:
     def __init__(self, work, name, repo, other, policy_extra="", keyring="~/.naeb/maven/trusted.asc", wrapper=False, props=None,
                  policy=True):
         self.home = os.path.realpath(os.path.join(work, name, "home"))
-        self.nib_home = os.path.join(self.home, ".nib")
+        self.naeb_home = os.path.join(self.home, ".naeb")
         self.project = os.path.join(self.home, "proj")
         self.m2 = os.path.join(self.home, ".m2", "repository")
         os.makedirs(os.path.join(self.project, ".git"))
-        os.makedirs(self.nib_home)
+        os.makedirs(self.naeb_home)
         os.makedirs(os.path.join(self.home, ".naeb", "maven"))
         shutil.copy(FIXTURE / "keys" / "trusted.asc", os.path.join(self.home, ".naeb", "maven", "trusted.asc"))
         with open(FIXTURE / "project" / "pom.xml") as f:
@@ -112,13 +112,13 @@ class Case:
         self.env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "HOME": self.home,
-            "NIB_HOME": self.nib_home,
+            "NAEB_HOME": self.naeb_home,
             "NAEB_SRC": str(ROOT),
             "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
             "LANG": "C.UTF-8",
             "TERM": "xterm-256color",
-            "NIB_PROVIDER": "chat_completions",
-            "NIB_API_KEY": "mock",
+            "NAEB_PROVIDER": "chat_completions",
+            "NAEB_API_KEY": "mock",
             "NAEB_FX_MARKER": self.marker,
         }
         self.built = None
@@ -167,7 +167,7 @@ class Case:
         return sorted(out)
 
     def records(self, member):
-        d = os.path.join(self.nib_home, "sessions")
+        d = os.path.join(self.naeb_home, "sessions")
         out = []
         if not os.path.isdir(d):
             return out
@@ -314,7 +314,7 @@ def tui_override(work, repo, other):
     mock = Mock(replies)
     th = threading.Thread(target=mock.serve_forever, daemon=True)
     th.start()
-    c.env["NIB_BASE_URL"] = "http://127.0.0.1:%d" % mock.server_port
+    c.env["NAEB_BASE_URL"] = "http://127.0.0.1:%d" % mock.server_port
     t = Terminal(c.project, c.env)
 
     def shown():
@@ -353,7 +353,7 @@ def tui_decline(work, repo, other):
     mock = Mock(replies)
     th = threading.Thread(target=mock.serve_forever, daemon=True)
     th.start()
-    c.env["NIB_BASE_URL"] = "http://127.0.0.1:%d" % mock.server_port
+    c.env["NAEB_BASE_URL"] = "http://127.0.0.1:%d" % mock.server_port
     t = Terminal(c.project, c.env)
 
     def shown():
@@ -383,7 +383,7 @@ def ask_json(work, repo, other):
     th = threading.Thread(target=mock.serve_forever, daemon=True)
     th.start()
     try:
-        env = dict(c.env, NIB_BASE_URL="http://127.0.0.1:%d" % mock.server_port)
+        env = dict(c.env, NAEB_BASE_URL="http://127.0.0.1:%d" % mock.server_port)
         r = subprocess.run([str(NAEB), "ask", "--json", "build it"], cwd=c.project, env=env, capture_output=True, text=True, timeout=300,
                            stdin=subprocess.DEVNULL)
         check("ask-reports", r.returncode == 0 and "maven_age" in r.stdout and "too young" in r.stdout, (r.stdout + r.stderr)[-800:])
@@ -474,7 +474,7 @@ def tui_broker_offer(work, repo, other):
     mock = Mock(replies)
     th = threading.Thread(target=mock.serve_forever, daemon=True)
     th.start()
-    c.env["NIB_BASE_URL"] = "http://127.0.0.1:%d" % mock.server_port
+    c.env["NAEB_BASE_URL"] = "http://127.0.0.1:%d" % mock.server_port
     t = Terminal(c.project, c.env)
 
     def shown():
@@ -485,7 +485,7 @@ def tui_broker_offer(work, repo, other):
         s = shown()
         check("tui-broker-offered", "+    policy.maven_broker(p)" in s and "a Maven project: naeb's broker" in s and "--- /dev/null" in s, s)
         check("tui-never-allow-m2", "allow_write" not in s and "~/.m2\")" not in s, s)
-        msgs = tui.history(Path(c.nib_home))
+        msgs = tui.history(Path(c.naeb_home))
         seen = json.dumps([m.get("content", "") for m in msgs if m.get("role") == "tool"])
         check("tui-model-told-broker", "policy.maven_broker(p)" in seen and "allow_write" not in seen, seen[-800:])
         t.send("y")

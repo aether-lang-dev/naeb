@@ -93,15 +93,15 @@ def main():
     atexit.register(shutil.rmtree, work, True)
     home = os.path.realpath(os.path.join(work, "home"))
     proj = os.path.join(home, "work", "proj")
-    nib_home = os.path.join(home, ".nib")
+    naeb_home = os.path.join(home, ".naeb")
     os.makedirs(os.path.join(proj, ".git"))
-    os.makedirs(nib_home)
+    os.makedirs(naeb_home)
     with open(os.path.join(proj, ".git", "HEAD"), "w") as f:
         f.write("ref: refs/heads/main\n")
     env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "HOME": home,
-        "NIB_HOME": nib_home,
+        "NAEB_HOME": naeb_home,
         "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
         "LANG": "C.UTF-8",
     }
@@ -138,10 +138,10 @@ def main():
     server = os.path.join(proj, "attr_mcp.py")
     with open(server, "w") as f:
         f.write(MCP_SERVER)
-    with open(os.path.join(nib_home, "config.toml"), "w") as f:
+    with open(os.path.join(naeb_home, "config.toml"), "w") as f:
         f.write('[mcp]\nattr = true\n\n[mcp.attr]\ncommand = "python3"\nargs = ["-I", %s]\n' % json.dumps(server))
     mock = Mock("chat_completions", code=MCP_CODE)
-    menv = dict(env, NIB_PROVIDER="chat_completions", NIB_API_KEY=mock.key, NIB_BASE_URL=mock.url)
+    menv = dict(env, NAEB_PROVIDER="chat_completions", NAEB_API_KEY=mock.key, NAEB_BASE_URL=mock.url)
     m = subprocess.run([NAEB, "ask", "--json", "probe"], cwd=proj, env=menv, capture_output=True, text=True, timeout=120)
     tool = [c["content"] for _, _, req in mock.requests for c in req.get("messages", []) if c.get("role") == "tool"]
     mock.close()

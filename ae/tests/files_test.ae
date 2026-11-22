@@ -1,5 +1,5 @@
 // Ports the tests of upstream src/tools/files.zig (a2dd439). Each test makes
-// a Tools with its own temp home and nib data dir (path locks live there),
+// a Tools with its own temp home and naeb data dir (path locks live there),
 // a scope, and calls through tools.call_tool.
 // Paths are absolute temp paths (Zig used cwd-relative .zig-cache paths).
 import std.spec
@@ -8,21 +8,21 @@ import std.list
 import std.string
 import std.strbuilder
 import std.sync
-import nib.jsonx
-import nib.sandbox
-import nib.tools
-import nib.tools.diff
-import nib.tools.registry
+import naeb.jsonx
+import naeb.sandbox
+import naeb.tools
+import naeb.tools.diff
+import naeb.tools.registry
 
 tmp_() -> string {
-    d, _e = fs.make_temp_dir("", "nib-files")
+    d, _e = fs.make_temp_dir("", "naeb-files")
     real, _k, _m = fs.realpath(d)
     return real
 }
 
 new_tools_(d: string) -> ptr {
     t = tools.new(d)
-    (t as *tools.Tools).data_home = "${d}/nibhome"
+    (t as *tools.Tools).data_home = "${d}/naebhome"
     return t
 }
 
@@ -105,7 +105,7 @@ main() {
             t = new_tools_(d)
             tools.set_workspace(t, 1)
             s = tools.new_scope(t, 1)
-            outside = ["/usr/share/nib-sandbox-test", "${d}/escape/nib-sandbox-test", "${d}/../../../../../../../../usr/share/nib-sandbox-test"]
+            outside = ["/usr/share/naeb-sandbox-test", "${d}/escape/naeb-sandbox-test", "${d}/../../../../../../../../usr/share/naeb-sandbox-test"]
             names = ["edit", "write"]
             i = 0
             while i < 3 {
@@ -122,7 +122,7 @@ main() {
             ok = call_(s, "edit", pargs_("${d}/inside.txt", "\"old_text\":\"old\",\"new_text\":\"new\""))
             spec.assert_str_eq(ok.text, "{\"replaced\":1}", "inside edit")
             tools.set_workspace(t, 0)
-            off = call_(s, "write", "{\"path\":\"/nonexistent-nib-dir/x\",\"content\":\"x\"}")
+            off = call_(s, "write", "{\"path\":\"/nonexistent-naeb-dir/x\",\"content\":\"x\"}")
             spec.assert_eq(contains_(off.text, "sandbox"), 0, "sandbox off: ${off.text}")
             fs.remove_tree(d)
         }
@@ -153,14 +153,14 @@ main() {
             spec.assert_str_eq(read_("${d}/custom/auth.json"), "fictional-custom", "untouched")
             fs.remove_tree(d)
         }
-        spec.it("file tools refuse nib's own credential store") callback {
+        spec.it("file tools refuse naeb's own credential store") callback {
             d = tmp_()
-            fs.mkdir_p("${d}/nibhome")
-            fs.write("${d}/nibhome/auth.json", "{\"keys\":{\"x\":\"fictional-stored\"}}")
-            fs.symlink("nibhome/auth.json", "${d}/alias")
+            fs.mkdir_p("${d}/naebhome")
+            fs.write("${d}/naebhome/auth.json", "{\"keys\":{\"x\":\"fictional-stored\"}}")
+            fs.symlink("naebhome/auth.json", "${d}/alias")
             t = new_tools_(d)
             s = tools.new_scope(t, 1)
-            rel = ["nibhome/auth.json", "alias"]
+            rel = ["naebhome/auth.json", "alias"]
             names = ["read", "edit", "write"]
             i = 0
             while i < 2 {
@@ -178,7 +178,7 @@ main() {
             k = 0
             while k < list.list_size(cp) {
                 p, _e = list.get_string(cp, k)
-                if string.ends_with(p, "nibhome/auth.json") == 1 { found = 1 }
+                if string.ends_with(p, "naebhome/auth.json") == 1 { found = 1 }
                 k = k + 1
             }
             spec.assert_eq(found, 1, "credential_paths lists the store")

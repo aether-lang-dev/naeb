@@ -1,11 +1,11 @@
 # std.os: SIGINT/SIGTERM as a flag, and terminal echo on stdin
 
-**From:** the nib Aether port (`aether-port` branch of paul-hammant/nib-code), its Session slice.
+**From:** the naeb Aether port (`aether-port` branch of aether-lang-dev/naeb), its Session slice.
 **To:** aether, `std.os` / `std.signal` / `std.io` (0.909.0).
-**Stand-in meanwhile:** `ae/nib/sysgap/` (`watch_signals`, `signal_received`,
+**Stand-in meanwhile:** `ae/naeb/sysgap/` (`watch_signals`, `signal_received`,
 `stdin_echo`; marked C, delete as each lands).
 
-1. **Catching SIGINT and SIGTERM.** `nib ask` must survive Ctrl-C and
+1. **Catching SIGINT and SIGTERM.** `naeb ask` must survive Ctrl-C and
    `kill -TERM`: it stops the model request and the running tools, commits the
    partial answer with `[interrupted by user]` or `[interrupted: process
    terminated]`, prints the `{"error":…}` line with usage and timing, and
@@ -20,7 +20,7 @@
    `os.signal_received() -> int` (0 none) to poll; or a std.sync cell the
    handler stores into. Restoring the default (`os.signal_reset(sig)`) for
    completeness.
-2. **Turning terminal echo off for a secret.** `nib login` reads an API key
+2. **Turning terminal echo off for a secret.** `naeb login` reads an API key
    from the terminal without echoing it (upstream src/auth/cli.zig
    readSecret). std.io has no termios.
    Proposed: `io.set_echo(fd, on) -> (changed, err)`: 0 and no error when fd

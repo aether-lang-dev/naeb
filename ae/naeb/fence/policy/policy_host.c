@@ -1,7 +1,7 @@
 /* naeb's side of a project policy library (docs/naeb/adr/0001): dlopen it,
    check the interface it was built for, and call
    aether_naeb_policy_v1(&NAEB_FENCE_API, ctx). The policy calls back
-   through the table; each call is copied into ctx as an op, which nib.fence.
+   through the table; each call is copied into ctx as an op, which naeb.fence.
    policy then applies to the Fence in Aether. The policy gets only this
    table and C strings: none of naeb's own layouts cross the boundary.
 

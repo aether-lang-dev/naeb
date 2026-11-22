@@ -46,17 +46,17 @@ static int open_flags_(int kind, int nofollow) {
     return fl;
 }
 
-int nibfs_open(const char *path, int kind, int nofollow) {
+int naebfs_open(const char *path, int kind, int nofollow) {
     int fd = open(path, open_flags_(kind, nofollow));
     return fd < 0 ? -errno : fd;
 }
 
-int nibfs_openat(int dirfd, const char *name, int kind, int nofollow) {
+int naebfs_openat(int dirfd, const char *name, int kind, int nofollow) {
     int fd = openat(dirfd, name, open_flags_(kind, nofollow));
     return fd < 0 ? -errno : fd;
 }
 
-int nibfs_close(int fd) { return close(fd) < 0 ? -errno : 0; }
+int naebfs_close(int fd) { return close(fd) < 0 ? -errno : 0; }
 
 /* 1 regular file, 2 directory, 3 symlink, 4 anything else; -errno. */
 static int kind_of_(mode_t m) {
@@ -66,28 +66,28 @@ static int kind_of_(mode_t m) {
     return 4;
 }
 
-int nibfs_fd_kind(int fd) {
+int naebfs_fd_kind(int fd) {
     struct stat st;
     if (fstat(fd, &st) < 0) return -errno;
     return kind_of_(st.st_mode);
 }
 
 /* The leaf `name` in `dirfd`, not followed: kind as above, 0 when absent. */
-int nibfs_kind_at(int dirfd, const char *name) {
+int naebfs_kind_at(int dirfd, const char *name) {
     struct stat st;
     if (fstatat(dirfd, name, &st, AT_SYMLINK_NOFOLLOW) < 0) return errno == ENOENT ? 0 : -errno;
     return kind_of_(st.st_mode);
 }
 
 /* Permission bits of `name` in `dirfd` (not followed), -errno. */
-int nibfs_mode_at(int dirfd, const char *name) {
+int naebfs_mode_at(int dirfd, const char *name) {
     struct stat st;
     if (fstatat(dirfd, name, &st, AT_SYMLINK_NOFOLLOW) < 0) return -errno;
     return (int)(st.st_mode & 07777);
 }
 
 /* 1 when `path` (followed) is the very file `fd` is open on. */
-int nibfs_same(int fd, const char *path) {
+int naebfs_same(int fd, const char *path) {
     struct stat a, b;
     if (fstat(fd, &a) < 0 || stat(path, &b) < 0) return 0;
     return a.st_dev == b.st_dev && a.st_ino == b.st_ino;
@@ -95,7 +95,7 @@ int nibfs_same(int fd, const char *path) {
 
 /* The absolute path `fd` names, verified to lead back to the same file;
  * "" when the OS cannot say or the answer is not that file. */
-const char *nibfs_fd_path(int fd) {
+const char *naebfs_fd_path(int fd) {
     char buf[PATH_MAX + 1];
     buf[0] = 0;
 #if defined(__APPLE__)
@@ -106,12 +106,12 @@ const char *nibfs_fd_path(int fd) {
     ssize_t n = readlink(link, buf, PATH_MAX);
     buf[n > 0 ? n : 0] = 0;
 #endif
-    if (buf[0] != '/' || !nibfs_same(fd, buf)) buf[0] = 0;
+    if (buf[0] != '/' || !naebfs_same(fd, buf)) buf[0] = 0;
     return strdup(buf);
 }
 
 /* 1 when the volume `fd` lies on compares names case-insensitively. */
-int nibfs_fd_fold(int fd) {
+int naebfs_fd_fold(int fd) {
 #if defined(__APPLE__)
     return fpathconf(fd, _PC_CASE_SENSITIVE) == 0 ? 1 : 0;
 #elif defined(__linux__)
@@ -130,30 +130,30 @@ int nibfs_fd_fold(int fd) {
 #endif
 }
 
-int nibfs_mkdirat(int dirfd, const char *name, int mode) {
+int naebfs_mkdirat(int dirfd, const char *name, int mode) {
     if (mkdirat(dirfd, name, (mode_t)mode) < 0) return -errno;
     return 0;
 }
 
 /* A new file `name` in `dirfd` for writing, refused if anything (a
  * symlink included) is there. */
-int nibfs_create_at(int dirfd, const char *name, int mode) {
+int naebfs_create_at(int dirfd, const char *name, int mode) {
     int fd = openat(dirfd, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, (mode_t)mode);
     return fd < 0 ? -errno : fd;
 }
 
-int nibfs_rename_at(int dirfd, const char *from, const char *to) {
+int naebfs_rename_at(int dirfd, const char *from, const char *to) {
     return renameat(dirfd, from, dirfd, to) < 0 ? -errno : 0;
 }
 
-int nibfs_unlink_at(int dirfd, const char *name) {
+int naebfs_unlink_at(int dirfd, const char *name) {
     return unlinkat(dirfd, name, 0) < 0 ? -errno : 0;
 }
 
 /* The entries of the directory `fd` (not consumed: a dup is listed) as
  * "<kind><name>/" each, kind f(ile) d(ir) l(ink) o(ther) u(nknown); "."
  * and ".." left out. NULL-free: a name never holds '/'. */
-const char *nibfs_list(int fd) {
+const char *naebfs_list(int fd) {
     int d = dup(fd);
     if (d < 0) return strdup("");
     DIR *dir = fdopendir(d);
@@ -190,7 +190,7 @@ const char *nibfs_list(int fd) {
 }
 
 /* Zig's names for the errors the tools report. */
-const char *nibfs_errname(int neg) {
+const char *naebfs_errname(int neg) {
     switch (-neg) {
     case ENOENT: return "FileNotFound";
     case EACCES: case EPERM: return "AccessDenied";
@@ -213,7 +213,7 @@ const char *nibfs_errname(int neg) {
 /* Inherited descriptors above 2 become close-on-exec (docs/naeb/adr/0001,
  * "Inherited descriptors"): a fenced child must never receive one. Returns
  * how many it marked. */
-int nibfs_cloexec_inherited(void) {
+int naebfs_cloexec_inherited(void) {
     int marked = 0;
 #if defined(__linux__)
     DIR *d = opendir("/proc/self/fd");

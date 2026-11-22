@@ -5,8 +5,8 @@
 // content timeout), null on fixtures. `timing` is the Step's
 // provider.timing model, null when nobody records timings.
 
-import nib.provider.http
-import nib.provider.timing
+import naeb.provider.http
+import naeb.provider.timing
 
 exports(Sink, new, attach, delta, tool_arguments, received, content, arguments, final_arguments, bind)
 

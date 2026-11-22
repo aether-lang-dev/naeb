@@ -1,7 +1,7 @@
 // tools.file_state: the Session's observed file versions and the
 // cross-process path locks (upstream src/tools/file_state.zig). A State is
 // an instance (inode, size and nanosecond mtime by canonical path), guarded
-// by its own lock; lock() takes the advisory lock in $NIB_HOME/locks named
+// by its own lock; lock() takes the advisory lock in $NAEB_HOME/locks named
 // by the canonical path's SHA-256.
 
 import std.string
@@ -10,9 +10,9 @@ import std.map
 import std.fs
 import std.cryptography
 import std.sync
-import nib.lock
+import naeb.lock
 import std.io
-import nib.fserr
+import naeb.fserr
 
 exports(State, Version, new, remember, remember_stat, changed, export_versions, import_versions,
         version_of, count, lock_path, lock, unlock)
@@ -24,7 +24,7 @@ struct Version {
 }
 
 struct State {
-    guard: ptr        // nib.lock
+    guard: ptr        // naeb.lock
     seen: ptr         // map: path -> *Version
     keys: ptr         // list of paths, insertion order
 }
@@ -115,17 +115,17 @@ import_versions(sp: ptr, versions: ptr) {
     lock.release(s.guard)
 }
 
-lock_path(nib_home: string, path: string) -> string {
+lock_path(naeb_home: string, path: string) -> string {
     h, _e = cryptography.sha256_hex(string.bytes(path))
-    return "${nib_home}/locks/${h}"
+    return "${naeb_home}/locks/${h}"
 }
 
 // The advisory lock on path's lock file: (fd, "") or (-1, error name).
 // "Canceled" once cancel (a std.sync cell, may be null) is set.
-lock(nib_home: string, path: string, cancel: ptr) -> (int, string) {
+lock(naeb_home: string, path: string, cancel: ptr) -> (int, string) {
     if canceled_(cancel) == 1 { return -1, "Canceled" }
-    _m = fs.mkdir_p("${nib_home}/locks")
-    fd, ok, _om = fs.lock_open(lock_path(nib_home, path))
+    _m = fs.mkdir_p("${naeb_home}/locks")
+    fd, ok, _om = fs.lock_open(lock_path(naeb_home, path))
     if ok != fs.KIND_OK { return -1, fserr.errname(ok) }
     while true {
         if canceled_(cancel) == 1 {

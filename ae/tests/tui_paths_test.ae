@@ -7,7 +7,7 @@ import std.string
 import std.list
 import std.fs
 import std.sync
-import nib.tui.paths
+import naeb.tui.paths
 
 expect_mention_(text: string, cursor: int, start: int, query: string) {
     s, q = paths.mention(text, cursor)
@@ -139,7 +139,7 @@ main() {
         spec.it("index lists files and directories, skips ignored paths and .git") callback {
             // upstream calls walk.files directly (the Index's job); here the
             // Index itself lists it, from inside the temp dir.
-            root, e0 = fs.make_temp_dir("", "nibpaths")
+            root, e0 = fs.make_temp_dir("", "naebpaths")
             spec.assert_str_eq(e0, "", "make_temp_dir")
             fs.mkdir_p("${root}/src/inner")
             fs.mkdir_p("${root}/build")
@@ -190,7 +190,7 @@ main() {
             paths.free(ix)
         }
         spec.it("(extra) refresh lists in the background, wakes, and is skipped while fresh") callback {
-            root, e0 = fs.make_temp_dir("", "nibpaths")
+            root, e0 = fs.make_temp_dir("", "naebpaths")
             spec.assert_str_eq(e0, "", "make_temp_dir")
             fs.write("${root}/a.txt", "")
             clock = sync.atomic_new(1000)

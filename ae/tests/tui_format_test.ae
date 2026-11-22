@@ -1,6 +1,6 @@
 // Ports both tests of upstream src/tui/format.zig under their names.
 import std.spec
-import nib.tui.format
+import naeb.tui.format
 
 main() {
     fw = spec.init()

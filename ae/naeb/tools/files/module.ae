@@ -8,19 +8,19 @@ import std.string
 import std.strbuilder
 import std.list
 import std.sync
-import nib.jsonx
-import nib.fserr
-import nib.tools.atomic_file
-import nib.tools.file_state
-import nib.tools.rules
-import nib.tools.undo
+import naeb.jsonx
+import naeb.fserr
+import naeb.tools.atomic_file
+import naeb.tools.file_state
+import naeb.tools.rules
+import naeb.tools.undo
 
 exports(Ctx, new_ctx, read, edit, write, FILE_LIMIT, count_occurrences, replace_all)
 
 const FILE_LIMIT = 16 * 1024 * 1024
 
 struct Ctx {
-    nib_home: string
+    naeb_home: string
     cancel: ptr        // std.sync cell, or null
     state: ptr         // *file_state.State
     roots: ptr         // canonical writable roots, or null when the sandbox is off
@@ -34,9 +34,9 @@ struct Ctx {
     undo: ptr          // *undo.Active of the running Turn, or null (undo off)
 }
 
-new_ctx(nib_home: string, cancel: @keep ptr, state: @keep ptr, roots: @keep ptr, creds: @keep ptr) -> ptr {
+new_ctx(naeb_home: string, cancel: @keep ptr, state: @keep ptr, roots: @keep ptr, creds: @keep ptr) -> ptr {
     c = heap.new(Ctx)
-    c.nib_home = nib_home
+    c.naeb_home = naeb_home
     c.cancel = cancel
     c.state = state
     c.roots = roots
@@ -124,7 +124,7 @@ read(cp: ptr, args: string) -> (int, string) {
     if offset < 0 || limit < 0 { return 0, "expected { path: string, offset?: number, limit?: number }" }
     path, perr = resolve_(c, raw)
     if perr != "" { return 0, perr }
-    fd, lerr = file_state.lock(c.nib_home, path, c.cancel)
+    fd, lerr = file_state.lock(c.naeb_home, path, c.cancel)
     if lerr != "" { return 0, lerr }
     st, sk, _sm = fs.stat(path, 1)
     if sk != fs.KIND_OK {
@@ -227,7 +227,7 @@ edit(cp: ptr, args: string) -> (int, string) {
     if perr != "" { return 0, perr }
     why = blocked_(c, path, 0)
     if why != "" { return 0, "${raw}: ${why}" }
-    fd, lerr = file_state.lock(c.nib_home, path, c.cancel)
+    fd, lerr = file_state.lock(c.naeb_home, path, c.cancel)
     if lerr != "" { return 0, lerr }
     if canceled_(c) == 1 {
         file_state.unlock(fd)
@@ -266,7 +266,7 @@ edit(cp: ptr, args: string) -> (int, string) {
         return 0, lwhy
     }
     // the file as it is now goes into the Turn's undo record before any change
-    snap = undo.prepare(c.undo, c.nib_home, path, 1, data, out)
+    snap = undo.prepare(c.undo, c.naeb_home, path, 1, data, out)
     written, werr = atomic_file.replace_at(dfd, dir, leaf, out, 438, 0, 0)
     atomic_file.close_fd(dfd)
     if werr != "" {
@@ -274,7 +274,7 @@ edit(cp: ptr, args: string) -> (int, string) {
         file_state.unlock(fd)
         return 0, "${raw}: ${werr}"
     }
-    undo.commit(c.undo, c.nib_home, snap, out)
+    undo.commit(c.undo, c.naeb_home, snap, out)
     undo.release(snap)
     file_state.remember_stat(c.state, path, written)
     if c.has_on_change == 1 { call(c.on_change, path, 1, data, out, 1) }
@@ -292,7 +292,7 @@ write(cp: ptr, args: string) -> (int, string) {
     if perr != "" { return 0, perr }
     why = blocked_(c, path, 0)
     if why != "" { return 0, "${raw}: ${why}" }
-    fd, lerr = file_state.lock(c.nib_home, path, c.cancel)
+    fd, lerr = file_state.lock(c.naeb_home, path, c.cancel)
     if lerr != "" { return 0, lerr }
     if canceled_(c) == 1 {
         file_state.unlock(fd)
@@ -325,8 +325,8 @@ write(cp: ptr, args: string) -> (int, string) {
     // the file as it is now goes into the Turn's undo record before any change;
     // an unreadable original means the Turn cannot be fully undone
     snap = null
-    if tracked == 0 { undo.mark_incomplete(c.undo, c.nib_home, undo.REASON_UNAVAILABLE) } else {
-        snap = undo.prepare(c.undo, c.nib_home, path, has_before, before, content)
+    if tracked == 0 { undo.mark_incomplete(c.undo, c.naeb_home, undo.REASON_UNAVAILABLE) } else {
+        snap = undo.prepare(c.undo, c.naeb_home, path, has_before, before, content)
     }
     dfd, dir, fold, derr = write_dir_(c, raw, path, 1)
     if derr != "" {
@@ -349,7 +349,7 @@ write(cp: ptr, args: string) -> (int, string) {
         file_state.unlock(fd)
         return 0, "${raw}: ${werr}"
     }
-    undo.commit(c.undo, c.nib_home, snap, content)
+    undo.commit(c.undo, c.naeb_home, snap, content)
     undo.release(snap)
     file_state.remember_stat(c.state, path, written)
     if c.has_on_change == 1 { call(c.on_change, path, has_before, before, content, tracked) }

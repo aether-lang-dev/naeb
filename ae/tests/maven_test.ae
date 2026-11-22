@@ -10,14 +10,14 @@ import std.spec
 import std.fs
 import std.list
 import std.string
-import nib.fence
-import nib.maven.gav
-import nib.maven.pom
-import nib.maven.pgp
-import nib.maven.broker
-import nib.maven.wrapper
-import nib.tools.jail
-import nib.tools.rules
+import naeb.fence
+import naeb.maven.gav
+import naeb.maven.pom
+import naeb.maven.pgp
+import naeb.maven.broker
+import naeb.maven.wrapper
+import naeb.tools.jail
+import naeb.tools.rules
 
 const FX = "ae/tests/maven_fixture"
 const REPO = "ae/tests/maven_fixture/repo/invalid/naeb/fx"

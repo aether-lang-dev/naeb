@@ -10,11 +10,11 @@ import std.list
 import std.fs
 import std.strbuilder
 import std.json
-import nib.jsonx
-import nib.tools.search
+import naeb.jsonx
+import naeb.tools.search
 
 tmp_dir_() -> string {
-    d, err = fs.make_temp_dir("", "nibsearch")
+    d, err = fs.make_temp_dir("", "naebsearch")
     spec.assert_str_eq(err, "", "make_temp_dir")
     return d
 }
@@ -165,9 +165,9 @@ main() {
             spec.assert_str_eq(t2, "expected { pattern: string, path?: string, limit?: number }", "glob usage")
             ok3, t3 = search.grep("{\"pattern\":\"x\",\"limit\":-1}", null, null, null)
             spec.assert_eq(ok3, 0, "negative limit")
-            ok4, t4 = search.grep("{\"pattern\":\"x\",\"path\":\"/nonexistent-nib-dir\"}", null, null, null)
+            ok4, t4 = search.grep("{\"pattern\":\"x\",\"path\":\"/nonexistent-naeb-dir\"}", null, null, null)
             spec.assert_eq(ok4, 0, "missing path")
-            spec.assert_str_eq(t4, "/nonexistent-nib-dir: FileNotFound", "path error text")
+            spec.assert_str_eq(t4, "/nonexistent-naeb-dir: FileNotFound", "path error text")
         }
         spec.it("glob limits, truncation and ./ prefixes") callback {
             root = tmp_dir_()

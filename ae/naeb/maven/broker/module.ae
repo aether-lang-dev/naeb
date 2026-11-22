@@ -36,14 +36,14 @@ import std.string
 import std.time
 import std.cryptography
 import std.zip
-import nib.jsonx
-import nib.lock
-import nib.tools.atomic_file
-import nib.maven.gav
-import nib.maven.pom
-import nib.maven.pgp
-import nib.maven.repo
-import nib.maven.wrapper
+import naeb.jsonx
+import naeb.lock
+import naeb.tools.atomic_file
+import naeb.maven.gav
+import naeb.maven.pom
+import naeb.maven.pgp
+import naeb.maven.repo
+import naeb.maven.wrapper
 
 exports(Broker, new, set_now, fetch, records_json, reachable, repo_root, checksum_check, sha256_of, dists_dir, MAX_POMS, DEFAULT_PLUGINS)
 

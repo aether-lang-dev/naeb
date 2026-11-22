@@ -8,11 +8,11 @@ import std.spec
 import std.string
 import std.fs
 import std.list
-import nib.jsonx
-import nib.sandbox.record
+import naeb.jsonx
+import naeb.sandbox.record
 
 tmp_(tag: string) -> string {
-    d, _e = fs.make_temp_dir("", "nib-record-${tag}")
+    d, _e = fs.make_temp_dir("", "naeb-record-${tag}")
     return d
 }
 

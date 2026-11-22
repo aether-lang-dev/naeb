@@ -1,11 +1,11 @@
 // naeb's approval loop (docs/naeb/adr/0001): which naeb.ae lines are
 // offered for a set of refusals, where they go in naeb.ae, and the diff the
-// user approves. Pure text; nib.fence.policy does the files and the build.
+// user approves. Pure text; naeb.fence.policy does the files and the build.
 
 import std.spec
 import std.list
 import std.string
-import nib.fence.proposal
+import naeb.fence.proposal
 
 const HOME = "/h"
 
@@ -33,7 +33,7 @@ forbidden_() -> ptr {
     list.list_add(f, "/h/.ssh")
     list.list_add(f, "/h/.m2/settings.xml")
     list.list_add(f, "/h/.m2/settings-security.xml")
-    list.list_add(f, "/h/.nib")
+    list.list_add(f, "/h/.naeb")
     list.list_add(f, "/h/work/proj")
     return f
 }

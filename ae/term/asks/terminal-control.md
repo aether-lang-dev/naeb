@@ -1,12 +1,12 @@
 # Terminal control in std: raw mode, window size, SIGWINCH, waiting on input
 
-**For:** aether (`std.io` / `std.os` / `std.signal`). **From:** nib-code's
-`ae/term` (the terminal layer under the Aether port of nib's TUI),
+**For:** aether (`std.io` / `std.os` / `std.signal`). **From:** naeb's
+`ae/term` (the terminal layer under the Aether port of naeb's TUI),
 2026-11-12, Aether 0.909.0.
 
 ## Motivation
 
-A full-screen terminal program (nib's TUI, any editor, pager or dashboard)
+A full-screen terminal program (naeb's TUI, any editor, pager or dashboard)
 needs, on POSIX: raw mode with the original settings put back, the window
 size and word when it changes, a wait for input that times out so a UI can
 tick, and a guarantee that the terminal is restored however the program

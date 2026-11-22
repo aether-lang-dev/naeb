@@ -1,9 +1,9 @@
 # std.fs / std.net: decide on the opened file, *at calls, an address resolver
 
-**From:** the nib Aether port (`aether-port` branch of paul-hammant/nib-code), naeb's project fence.
+**From:** the naeb Aether port (`aether-port` branch of aether-lang-dev/naeb), naeb's project fence.
 **To:** aether, `std.fs`, `std.dir` and `std.net`/`std.tcp` (0.917.0).
-**Stand-in meanwhile:** `ae/nib/tools/atomic_file/pathfd.c` and
-`ae/nib/tools/egress/resolve.c` (marked C; delete as each lands).
+**Stand-in meanwhile:** `ae/naeb/tools/atomic_file/pathfd.c` and
+`ae/naeb/tools/egress/resolve.c` (marked C; delete as each lands).
 
 naeb's in-process tools (read, view, grep, glob, edit, write) used to check
 a canonical path string and then open the file by name. That missed every

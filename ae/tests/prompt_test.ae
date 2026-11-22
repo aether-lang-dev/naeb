@@ -10,15 +10,15 @@ import std.string
 import std.list
 import std.fs
 import std.json
-import nib.jsonx
-import nib.msg
-import nib.sandbox
-import nib.tools
-import nib.provider.types
-import nib.session.prompt
-import nib.session.profile
-import nib.session.instructions
-import nib.session.compact
+import naeb.jsonx
+import naeb.msg
+import naeb.sandbox
+import naeb.tools
+import naeb.provider.types
+import naeb.session.prompt
+import naeb.session.profile
+import naeb.session.instructions
+import naeb.session.compact
 
 has_(s: string, part: string) -> int {
     if string.index_of(s, part) >= 0 { return 1 }
@@ -26,7 +26,7 @@ has_(s: string, part: string) -> int {
 }
 
 tmp_() -> string {
-    d, _e = fs.make_temp_dir("", "nib-prompt")
+    d, _e = fs.make_temp_dir("", "naeb-prompt")
     real, _k, _m = fs.realpath(d)
     return real
 }
@@ -110,7 +110,7 @@ main() {
             spec.assert_true(has_(prompt_text, "{superseded_by}"), "format escape rendered")
             spec.assert_false(has_(prompt_text, "{s}"), "no marker left")
             spec.assert_false(has_(prompt_text, "{d}"), "no marker left")
-            spec.assert_true(has_(prompt_text, "You are nib, a coding agent working in /work.\n"), "cwd")
+            spec.assert_true(has_(prompt_text, "You are naeb, a coding agent working in /work.\n"), "cwd")
             // Upstream-complete documentation: every tool is checked against
             // tools.all_docs().
             full = prompt.render_system("/work", tools.all_docs(), 16384 as long, "", "gpt-6.1-sol")

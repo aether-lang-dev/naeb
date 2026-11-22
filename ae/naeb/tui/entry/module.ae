@@ -27,23 +27,23 @@
 //    [max_segments] buffer); the indexes are upstream's, which the tests and
 //    the Run drawing rely on.
 //  - `free_entry` releases an entry (upstream deinit); the MAX_DIFF_LINES
-//    constant is defined in nib.tui.turn_changes (a circular import
+//    constant is defined in naeb.tui.turn_changes (a circular import
 //    otherwise) and re-exported here.
 
 import std.string
 import std.strbuilder
 import std.list
 import term.screen
-import nib.session.tool_summary
-import nib.tui.agent_tree
-import nib.tui.turn_changes
-import nib.tui.long_text
-import nib.tui.markdown
-import nib.tui.bill
-import nib.tui.label
-import nib.tui.intraline
-import nib.tui.format
-import nib.tui.smooth
+import naeb.session.tool_summary
+import naeb.tui.agent_tree
+import naeb.tui.turn_changes
+import naeb.tui.long_text
+import naeb.tui.markdown
+import naeb.tui.bill
+import naeb.tui.label
+import naeb.tui.intraline
+import naeb.tui.format
+import naeb.tui.smooth
 
 exports(MAX_DIFF_LINES, MAX_SEGMENTS,
         KIND_USER, KIND_ASSISTANT, KIND_RUN, KIND_BACKGROUND, KIND_INFO, KIND_ERR, KIND_BILL,
@@ -66,7 +66,7 @@ const KIND_ERR = 5
 const KIND_BILL = 6
 const KIND_FAILURE = 7
 const KIND_CHANGES = 8
-// naeb: a proposed naeb.ae change and its y/N (nib.tui.fence_offer)
+// naeb: a proposed naeb.ae change and its y/N (naeb.tui.fence_offer)
 const KIND_FENCE = 9
 
 const RUN_RUNNING = 0

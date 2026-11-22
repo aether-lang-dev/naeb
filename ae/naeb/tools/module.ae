@@ -2,7 +2,7 @@
 // src/tools.zig), the Session-wide Tools state, the per-Run scope, and
 // dispatch. Each tool family is a service module confined by its imports
 // (tools/check_layers.sh pins them): files reach the file system through
-// nib.tools.files only, processes are started in nib.tools.process only.
+// naeb.tools.files only, processes are started in naeb.tools.process only.
 //
 // Upstream binds the running Run to tool worker threads through a
 // threadlocal; here every call carries its *RunScope (the Host's ctx), so
@@ -18,38 +18,38 @@ import std.string
 import std.strbuilder
 import std.list
 import std.sync
-import nib.sandbox
-import nib.lock
-import nib.jsonx
-import nib.tools.atomic_file
-import nib.tools.file_state
-import nib.tools.files
-import nib.tools.search
-import nib.tools.bash
-import nib.tools.registry
-import nib.tools.changes
-import nib.tools.jail
-import nib.tools.egress
-import nib.tools.denials
-import nib.fence
-import nib.maven.broker
-import nib.sysenv
-import nib.tools.background
-import nib.tools.progress
-import nib.tools.undo
-import nib.tools.llm_call
-import nib.tools.agent
-import nib.tools.agent_sessions
-import nib.tools.agent_input
-import nib.tools.mcp_tool
-import nib.tools.web
-import nib.tools.web_search
-import nib.tools.view
-import nib.image
-import nib.provider.types
+import naeb.sandbox
+import naeb.lock
+import naeb.jsonx
+import naeb.tools.atomic_file
+import naeb.tools.file_state
+import naeb.tools.files
+import naeb.tools.search
+import naeb.tools.bash
+import naeb.tools.registry
+import naeb.tools.changes
+import naeb.tools.jail
+import naeb.tools.egress
+import naeb.tools.denials
+import naeb.fence
+import naeb.maven.broker
+import naeb.sysenv
+import naeb.tools.background
+import naeb.tools.progress
+import naeb.tools.undo
+import naeb.tools.llm_call
+import naeb.tools.agent
+import naeb.tools.agent_sessions
+import naeb.tools.agent_input
+import naeb.tools.mcp_tool
+import naeb.tools.web
+import naeb.tools.web_search
+import naeb.tools.view
+import naeb.image
+import naeb.provider.types
 
 exports(Tools, RunScope, new, new_scope, host, call_tool, active_tool, names_json, docs, all_docs, tool_names,
-        is_ported, take_images, credential_paths, writable_roots, nib_home, take_changes, set_workspace, set_fence, swap_fence, fence_json, maven_override, fence_spec, fence_proxy, fence_monitor, fence_base, fence_child, close_channel, child_refusals, refusals_json, take_denied,
+        is_ported, take_images, credential_paths, writable_roots, naeb_home, take_changes, set_workspace, set_fence, swap_fence, fence_json, maven_override, fence_spec, fence_proxy, fence_monitor, fence_base, fence_child, close_channel, child_refusals, refusals_json, take_denied,
         cancel_cell, set_log, sandbox_roots, change_paths, export_versions, import_versions, set_config, take_usage, take_jail_notice, enable_undo, begin_turn_undo, finish_turn_undo, run_undo, turn_undo_dir, attach_turn_undo_dir, close_undo)
 
 const DOC_MCP = "  // Call an enabled MCP server tool. Server/transport failures are data; argument errors reject. Full results stay in JS; images share the Run image limit.\n  async mcp(name, args = {}) {}, // → { ok, content, structured?, error? }\n"
@@ -139,7 +139,7 @@ is_ported(name: string) -> int {
 
 struct Tools {
     home: string
-    data_home: string      // $NIB_HOME ("" -> home/.nib)
+    data_home: string      // $NAEB_HOME ("" -> home/.naeb)
     codex_home: string     // $CODEX_HOME or ""
     workspace: int         // 1: the OS write sandbox is on
     extra_writable: ptr    // list of [sandbox].writable entries
@@ -163,7 +163,7 @@ struct Tools {
     log_ctx: ptr
     log_fn: fn             // |ctx: ptr, members: string|: a session-log record's members
     jail_noticed: int
-    cfg: ptr               // *types.Config of the Session, or null (nib js)
+    cfg: ptr               // *types.Config of the Session, or null (naeb js)
     llm: ptr               // *llm_call.State
     session_id: string     // "" outside a Session
     agent_sessions: ptr    // *agent_sessions.Registry
@@ -268,7 +268,7 @@ swap_fence(tp: ptr, f: @keep ptr) {
 fence_spec(tp: ptr) -> ptr {
     t = tp as *Tools
     if t.fence == null { return null }
-    return fence.resolve(t.fence, os.getcwd(), nib_home(tp), t.env)
+    return fence.resolve(t.fence, os.getcwd(), naeb_home(tp), t.env)
 }
 
 // The fence's egress proxy, made on first use. It has no listener of its
@@ -280,7 +280,7 @@ fence_proxy(tp: ptr) -> ptr {
     if t.proxy == null {
         prefix = ""
         if os.platform() == "linux" {
-            prefix = atomic_file.join(atomic_file.join(nib_home(tp), "run"), "egress-${os.getpid()}")
+            prefix = atomic_file.join(atomic_file.join(naeb_home(tp), "run"), "egress-${os.getpid()}")
             if t.fence_gen > 0 { prefix = "${prefix}-${t.fence_gen}" }
         }
         t.proxy = egress.new(t.fence, prefix)
@@ -297,7 +297,7 @@ fence_json(tp: ptr) -> string {
     if t.fence == null { return "" }
     env = t.env
     if env == null { env = sysenv.environ() }
-    d = fence.describe(t.fence, os.getcwd(), nib_home(tp), env)
+    d = fence.describe(t.fence, os.getcwd(), naeb_home(tp), env)
     if fence.maven_on(t.fence) == 0 { return d }
     return jsonx.with_member(d, "maven_fetches", broker.records_json(broker_(t)))
 }
@@ -361,7 +361,7 @@ maven_override(tp: ptr, record: string) -> string {
 fence_monitor(tp: ptr) -> ptr {
     t = tp as *Tools
     lock.acquire(t.proxy_guard)
-    if t.monitor == null { t.monitor = denials.new_monitor(atomic_file.join(nib_home(tp), "run")) }
+    if t.monitor == null { t.monitor = denials.new_monitor(atomic_file.join(naeb_home(tp), "run")) }
     m = t.monitor
     lock.release(t.proxy_guard)
     return m
@@ -413,7 +413,7 @@ child_refusals(ch: ptr, w: ptr) -> ptr { return denials.close_child(ch, w) }
 refusals_json(tp: ptr, entries: ptr, layer: string, command_id: string) -> string {
     t = tp as *Tools
     if t.fence == null { return "" }
-    return fence.refusals_json(t.fence, os.getcwd(), nib_home(tp), entries, layer, command_id)
+    return fence.refusals_json(t.fence, os.getcwd(), naeb_home(tp), entries, layer, command_id)
 }
 
 // Adds the records of a JSON array (text) to the Run's.
@@ -567,14 +567,14 @@ begin_turn_undo(tp: ptr) {
 finish_turn_undo(tp: ptr) -> string {
     t = tp as *Tools
     if t.undo_history == null { return "" }
-    return undo.finish(t.undo_history, nib_home(tp))
+    return undo.finish(t.undo_history, naeb_home(tp))
 }
 
 // Reverts the latest edited Turn: the text to record as the /undo result.
 run_undo(tp: ptr) -> string {
     t = tp as *Tools
     if t.undo_history == null { return "Nothing to undo in this process. Restored sessions cannot undo earlier Turns." }
-    return undo.undo(t.undo_history, nib_home(tp), t.file_state, t.registry)
+    return undo.undo(t.undo_history, naeb_home(tp), t.file_state, t.registry)
 }
 
 // The running Turn's snapshot directory, "" outside a Turn or with undo off.
@@ -714,12 +714,12 @@ all_docs() -> string {
     return wrap_docs_(body)
 }
 
-nib_home(tp: ptr) -> string {
+naeb_home(tp: ptr) -> string {
     t = tp as *Tools
     if t.data_home != "" { return t.data_home }
-    v = os.getenv("NIB_HOME")
+    v = os.getenv("NAEB_HOME")
     if v != null && string.length(v) > 0 { return v }
-    return atomic_file.join(t.home, ".nib")
+    return atomic_file.join(t.home, ".naeb")
 }
 
 canonical_or_(p: string) -> string {
@@ -729,13 +729,13 @@ canonical_or_(p: string) -> string {
 }
 
 // Canonical credential files: ~/.codex/auth.json, $CODEX_HOME/auth.json,
-// $NIB_HOME/auth.json.
+// $NAEB_HOME/auth.json.
 credential_paths(tp: ptr) -> ptr {
     t = tp as *Tools
     out = list.list_new()
     list.list_add(out, canonical_or_(atomic_file.join(atomic_file.join(t.home, ".codex"), "auth.json")))
     if t.codex_home != "" { list.list_add(out, canonical_or_(atomic_file.join(t.codex_home, "auth.json"))) }
-    list.list_add(out, canonical_or_(atomic_file.join(nib_home(tp), "auth.json")))
+    list.list_add(out, canonical_or_(atomic_file.join(naeb_home(tp), "auth.json")))
     return out
 }
 
@@ -797,7 +797,7 @@ note_change_(s: *RunScope, path: string, has_before: int, before: string, after_
 
 file_ctx_(s: *RunScope) -> ptr {
     t = s.tools as *Tools
-    c = files.new_ctx(nib_home(s.tools), s.cancel, t.file_state, writable_roots(s.tools), credential_paths(s.tools)) as *files.Ctx
+    c = files.new_ctx(naeb_home(s.tools), s.cancel, t.file_state, writable_roots(s.tools), credential_paths(s.tools)) as *files.Ctx
     sp = s as ptr
     c.on_change = |path: string, has_before: int, before: string, after_text: string, tracked: int| {
         note_change_(sp as *RunScope, path, has_before, before, after_text, tracked)
@@ -828,7 +828,7 @@ bash_(s: *RunScope, args: string, out: ptr) {
     }
     c = bash.new_ctx(t.home, s.cancel, t.registry, null) as *bash.Ctx
     c.codex_home = t.codex_home
-    c.data_home = nib_home(s.tools)
+    c.data_home = naeb_home(s.tools)
     c.run_id = s.id
     c.self_exe = t.self_exe
     c.env = t.env
@@ -903,7 +903,7 @@ vision_(t: *Tools) -> int {
 // Where tools.view and tools.mcp attach this Run's images.
 image_target_(s: *RunScope) -> ptr {
     t = s.tools as *Tools
-    return image.new_target(vision_(t), nib_home(s.tools), t.session_id, s.images)
+    return image.new_target(vision_(t), naeb_home(s.tools), t.session_id, s.images)
 }
 
 // The images this Run viewed as a JSON array of Images ("" none), emptied.

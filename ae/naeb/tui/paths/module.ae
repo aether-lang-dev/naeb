@@ -13,7 +13,7 @@
 //    for the job) instead of a `deny_source`; new() takes the root directory
 //    to list (upstream: always "."). The listing runs on a
 //    std.worker thread; wake is a closure field (set_wake) called after a
-//    listing is published. Shared fields are guarded by nib.lock as upstream
+//    listing is published. Shared fields are guarded by naeb.lock as upstream
 //    guards them with a mutex.
 //  - free(ix) is upstream's deinit: it cancels a running listing and waits.
 //  - with_entries(ix, ctx, f) calls f(ctx, entries) with the lock held; the
@@ -24,8 +24,8 @@ import std.list
 import std.fs
 import std.sync
 import std.worker
-import nib.lock
-import nib.tools.walk
+import naeb.lock
+import naeb.tools.walk
 
 exports(MAX_ENTRIES, MAX_HITS, Entry, Hit, Index, mention, insertion, top,
         new, free, set_wake, refresh, publish_, set_entries, with_entries, generation)

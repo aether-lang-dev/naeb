@@ -1,6 +1,6 @@
 // fence: a project's fence against supply-chain attacks
 // (docs/naeb/adr/0001). naeb builds one from the project's policy (naeb.ae,
-// loaded by nib.fence.policy) and hands it to nib.app; nothing here is
+// loaded by naeb.fence.policy) and hands it to naeb.app; nothing here is
 // module state. One Fence drives
 // both layers: the in-process tools check paths and hosts against it, and
 // every child naeb starts runs inside the jail.Spec it resolves to.
@@ -22,12 +22,12 @@
 import std.fs
 import std.list
 import std.string
-import nib.jsonx
-import nib.fence.proposal
-import nib.maven.wrapper
-import nib.tools.atomic_file
-import nib.tools.jail
-import nib.tools.rules
+import naeb.jsonx
+import naeb.fence.proposal
+import naeb.maven.wrapper
+import naeb.tools.atomic_file
+import naeb.tools.jail
+import naeb.tools.rules
 
 exports(Fence, new, open_home, allow_read, deny_read, allow_write, deny_write, allow_host, pass_env,
         set_env, allow_loopback, set_origin, setting, maven_on, maven_repos, maven_min_age, maven_keyring,
@@ -197,7 +197,7 @@ set_env(fp: ptr, name: string, value: string) { list.list_add((fp as *Fence).env
 allow_loopback(fp: ptr) { (fp as *Fence).loopback = 1 }
 
 // Where the fence came from: naeb.ae and the library naeb loaded, with the
-// SHA-256s the build record vouched for (nib.fence.policy.start_fence).
+// SHA-256s the build record vouched for (naeb.fence.policy.start_fence).
 set_origin(fp: ptr, file: string, file_sha256: string, library: string, library_sha256: string) {
     f = fp as *Fence
     f.policy_file = string.copy(file)
@@ -224,9 +224,9 @@ json_strings_(l: ptr) -> string {
 // writes, read_only, hosts, loopback, env_passed, env_set}. Paths are
 // canonical; reads/read_denied are the read rules both layers apply (the
 // last matching rule wins, deeper paths after shallower ones).
-describe(fp: ptr, cwd: string, nib_home: string, env: ptr) -> string {
+describe(fp: ptr, cwd: string, naeb_home: string, env: ptr) -> string {
     f = fp as *Fence
-    sp = resolve(fp, cwd, nib_home, env) as *jail.Spec
+    sp = resolve(fp, cwd, naeb_home, env) as *jail.Spec
     reads = list.list_new()
     denied = list.list_new()
     ordered = rules.sorted(sp.reads)
@@ -329,7 +329,7 @@ homes_(f: *Fence) -> ptr {
 
 // The read rules (tools.rules) for a project at `cwd`, given the writable
 // roots and naeb's own data directory.
-read_rules(fp: ptr, cwd: string, nib_home: string, writes: ptr) -> ptr {
+read_rules(fp: ptr, cwd: string, naeb_home: string, writes: ptr) -> ptr {
     f = fp as *Fence
     out = list.list_new()
     allowed = list.list_new()
@@ -388,8 +388,8 @@ read_rules(fp: ptr, cwd: string, nib_home: string, writes: ptr) -> ptr {
         }
         h = h + 1
     }
-    if nib_home != "" {
-        nh = canon_(nib_home)
+    if naeb_home != "" {
+        nh = canon_(naeb_home)
         if has_(allowed, nh) == 0 { add_rule_(out, "-", nh) }
     }
     i = 0
@@ -428,7 +428,7 @@ write_denied(fp: ptr, cwd: string) -> ptr {
 // The jail.Spec for a fenced child of a project at `cwd`: writes, read-only
 // paths and read rules. The caller fills in the network (the proxy).
 // env: the child environment as "NAME=value" (null: this process's).
-resolve(fp: ptr, cwd: string, nib_home: string, env: ptr) -> ptr {
+resolve(fp: ptr, cwd: string, naeb_home: string, env: ptr) -> ptr {
     f = fp as *Fence
     extra = list.list_new()
     m2 = canon_(maven_m2(fp))
@@ -446,7 +446,7 @@ resolve(fp: ptr, cwd: string, nib_home: string, env: ptr) -> ptr {
     s.write_deny = write_denied(fp, cwd)
     if f.maven == 1 && jail.allows(writes, m2) == 1 { list.list_add(s.write_deny, m2) }
     if f.maven == 1 && jail.allows(writes, mw) == 1 { list.list_add(s.write_deny, mw) }
-    s.reads = read_rules(fp, cwd, nib_home, writes)
+    s.reads = read_rules(fp, cwd, naeb_home, writes)
     s.loopback = f.loopback
     return sp
 }
@@ -581,7 +581,7 @@ under_any_(l: ptr, path: string) -> int {
 }
 
 // The naeb.ae line that would allow `op` on `resource`, or "".
-suggestion(fp: ptr, cwd: string, nib_home: string, op: string, resource: string) -> string {
+suggestion(fp: ptr, cwd: string, naeb_home: string, op: string, resource: string) -> string {
     f = fp as *Fence
     if op == "egress" {
         colon = -1
@@ -603,7 +603,7 @@ suggestion(fp: ptr, cwd: string, nib_home: string, op: string, resource: string)
     path = canon_(resource)
     own = atomic_file.join(f.home, ".naeb")
     if under_(canon_(own), path) == 1 { return "" }
-    if nib_home != "" && under_(canon_(nib_home), path) == 1 { return "" }
+    if naeb_home != "" && under_(canon_(naeb_home), path) == 1 { return "" }
     if op == "read" {
         if under_any_(f.read_deny, path) == 1 { return "" }
         return "policy.allow_read(p, ${jsonx.quote(tilde_(f, path))})"
@@ -623,9 +623,9 @@ suggestion(fp: ptr, cwd: string, nib_home: string, op: string, resource: string)
 home_canonical(fp: ptr) -> string { return canon_((fp as *Fence).home) }
 
 // Canonical paths no line approved in naeb's TUI may name, contain or lie
-// inside when it stands for several refusals (nib.fence.proposal): the
-// secrets list, what the policy denies, the project, $NIB_HOME.
-forbidden(fp: ptr, cwd: string, nib_home: string) -> ptr {
+// inside when it stands for several refusals (naeb.fence.proposal): the
+// secrets list, what the policy denies, the project, $NAEB_HOME.
+forbidden(fp: ptr, cwd: string, naeb_home: string) -> ptr {
     f = fp as *Fence
     out = list.list_new()
     h = canon_(f.home)
@@ -647,32 +647,32 @@ forbidden(fp: ptr, cwd: string, nib_home: string) -> ptr {
         i = i + 1
     }
     list.list_add(out, canon_(jail.project_root(cwd)))
-    if nib_home != "" { list.list_add(out, canon_(nib_home)) }
+    if naeb_home != "" { list.list_add(out, canon_(naeb_home)) }
     return out
 }
 
-// What vetting a suggestion needs (nib.fence.proposal.Scope): $HOME, the
+// What vetting a suggestion needs (naeb.fence.proposal.Scope): $HOME, the
 // forbidden paths, whether the project at `cwd` is a Maven project, the
 // broker, and the wrapper's distribution as a coordinate.
-scope(fp: ptr, cwd: string, nib_home: string) -> ptr {
+scope(fp: ptr, cwd: string, naeb_home: string) -> ptr {
     f = fp as *Fence
     gav = ""
     d = wrapper_dist(cwd)
     if d != null && (d as *wrapper.Dist).error == "" { gav = (d as *wrapper.Dist).gav }
-    return proposal.new_scope(canon_(f.home), forbidden(fp, cwd, nib_home), maven_project(cwd), f.maven, gav)
+    return proposal.new_scope(canon_(f.home), forbidden(fp, cwd, naeb_home), maven_project(cwd), f.maven, gav)
 }
 
 // One refusal record (above) as JSON. entry: "op resource", or for egress
 // "egress host:port <reason>" when the pair is allowed but where it
 // resolves is not: the record then carries "reason", and the suggestion
 // names the address ("resolves to <address>, ..."). A suggestion naeb would
-// not offer (nib.fence.proposal.vet) becomes a "note" saying why; in a
+// not offer (naeb.fence.proposal.vet) becomes a "note" saying why; in a
 // Maven project a write under ~/.m2 suggests the broker, with its reason.
-refusal(fp: ptr, cwd: string, nib_home: string, entry: string, layer: string, command_id: string) -> string {
-    return refusal_(fp, cwd, nib_home, entry, layer, command_id, scope(fp, cwd, nib_home))
+refusal(fp: ptr, cwd: string, naeb_home: string, entry: string, layer: string, command_id: string) -> string {
+    return refusal_(fp, cwd, naeb_home, entry, layer, command_id, scope(fp, cwd, naeb_home))
 }
 
-refusal_(fp: ptr, cwd: string, nib_home: string, entry: string, layer: string, command_id: string, sc: ptr) -> string {
+refusal_(fp: ptr, cwd: string, naeb_home: string, entry: string, layer: string, command_id: string, sc: ptr) -> string {
     sp = string.index_of(entry, " ")
     op = entry
     resource = ""
@@ -704,7 +704,7 @@ refusal_(fp: ptr, cwd: string, nib_home: string, entry: string, layer: string, c
             }
         }
     } else {
-        raw = suggestion(fp, cwd, nib_home, op, resource)
+        raw = suggestion(fp, cwd, naeb_home, op, resource)
         res = resource
         if (op == "read" || op == "write") && string.starts_with(resource, "/") == 1 { res = canon_(resource) }
         line, note = proposal.vet(sc, op, res, raw)
@@ -723,16 +723,16 @@ refusal_(fp: ptr, cwd: string, nib_home: string, entry: string, layer: string, c
 }
 
 // The records of `entries` ("op resource" each) as a JSON array, "" when empty.
-refusals_json(fp: ptr, cwd: string, nib_home: string, entries: ptr, layer: string, command_id: string) -> string {
+refusals_json(fp: ptr, cwd: string, naeb_home: string, entries: ptr, layer: string, command_id: string) -> string {
     n = list.list_size(entries)
     if n == 0 { return "" }
-    sc = scope(fp, cwd, nib_home)
+    sc = scope(fp, cwd, naeb_home)
     out = "["
     i = 0
     while i < n {
         e, _e = list.get_string(entries, i)
         if i > 0 { out = "${out}," }
-        out = "${out}${refusal_(fp, cwd, nib_home, e, layer, command_id, sc)}"
+        out = "${out}${refusal_(fp, cwd, naeb_home, e, layer, command_id, sc)}"
         i = i + 1
     }
     return "${out}]"

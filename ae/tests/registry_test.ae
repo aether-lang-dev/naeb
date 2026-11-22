@@ -2,7 +2,7 @@
 import std.spec
 import std.list
 import std.sync
-import nib.tools.registry
+import naeb.tools.registry
 
 cmd_(id: string, run: int, command: string, cwd: string) -> *registry.Command {
     return registry.new_command(id, run, command, cwd, 0) as *registry.Command

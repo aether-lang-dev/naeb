@@ -8,7 +8,7 @@
 
 import std.string
 import std.list
-import nib.jsonx
+import naeb.jsonx
 
 exports(session_max_tokens, Config, Limits, McpServer, mcp_server_new, mcp_server_copy, Usage, Reply, ToolCall, new_config, new_limits, copy, name, protocol, vision,
         custom_run, set_effort, check_session, key_hint, missing_key, known_id, definition_protocol,
@@ -62,7 +62,7 @@ struct Config {
     custom_max_output: long       // -1 none
     api_key_env: string           // "" none
     key_source: string            // none, env, store
-    nib_home: string
+    naeb_home: string
     reasoning_summary: string     // off, auto
     base_url: string
     api_key: string
@@ -132,7 +132,7 @@ new_config(provider: string, base_url: string, api_key: string, model: string) -
     c.custom_max_output = -1 as long
     c.api_key_env = ""
     c.key_source = "none"
-    c.nib_home = ""
+    c.naeb_home = ""
     c.reasoning_summary = "off"
     c.base_url = base_url
     c.api_key = api_key
@@ -212,7 +212,7 @@ copy(cp: ptr) -> ptr {
     n.custom_max_output = c.custom_max_output
     n.api_key_env = string.copy(c.api_key_env)
     n.key_source = string.copy(c.key_source)
-    n.nib_home = string.copy(c.nib_home)
+    n.naeb_home = string.copy(c.naeb_home)
     n.reasoning_summary = string.copy(c.reasoning_summary)
     n.context_window = c.context_window
     n.thinking = c.thinking
@@ -294,7 +294,7 @@ definition_key_envs(id: string) -> ptr {
     l = list.list_new()
     match id {
         "chat_completions" -> {
-            list.list_add(l, "NIB_API_KEY")
+            list.list_add(l, "NAEB_API_KEY")
             list.list_add(l, "DEEPSEEK_API_KEY")
         }
         "openai" -> { list.list_add(l, "OPENAI_API_KEY") }
@@ -471,7 +471,7 @@ check_session(cp: ptr, id: string, model: string) -> string {
 // What a 401 asks the user to check, without revealing any key.
 key_hint(cp: ptr) -> string {
     c = cp as *Config
-    if c.key_source == "store" { return "the key stored by nib (run nib login)" }
+    if c.key_source == "store" { return "the key stored by naeb (run naeb login)" }
     if c.api_key_env != "" { return c.api_key_env }
     return "API key"
 }

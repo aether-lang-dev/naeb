@@ -4,8 +4,8 @@
 import std.spec
 import std.list
 import std.string
-import nib.jsonx
-import nib.tools.progress
+import naeb.jsonx
+import naeb.tools.progress
 
 struct Capture {
     json: ptr       // list of the emitted snapshot JSON texts

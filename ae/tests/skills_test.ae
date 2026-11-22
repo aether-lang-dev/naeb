@@ -12,11 +12,11 @@ import std.fs
 import std.list
 import std.string
 import std.json
-import nib.jsonx
-import nib.session.skills
+import naeb.jsonx
+import naeb.session.skills
 
 tmp_() -> string {
-    d, _e = fs.make_temp_dir("", "nib-skills")
+    d, _e = fs.make_temp_dir("", "naeb-skills")
     real, _k, _m = fs.realpath(d)
     return real
 }
@@ -236,7 +236,7 @@ main() {
 
         spec.it("load reads the four roots in order") callback {
             d = tmp_()
-            dirs = [".agents/skills", "nibhome/skills", "proj/.agents/skills", "proj/.nib/skills"]
+            dirs = [".agents/skills", "naebhome/skills", "proj/.agents/skills", "proj/.naeb/skills"]
             i = 0
             while i < 4 {
                 fs.mkdir_p("${d}/${dirs[i]}/s")
@@ -245,16 +245,16 @@ main() {
             }
             fs.mkdir_p("${d}/.agents/skills/only")
             put_("${d}/.agents/skills/only/SKILL.md", "---\ndescription: user only\n---")
-            found = skills.load("${d}/nibhome", d, "${d}/proj")
+            found = skills.load("${d}/naebhome", d, "${d}/proj")
             spec.assert_eq(list.list_size(found.skills), 2, "two names")
             spec.assert_str_eq(skill_(found.skills, 0).name, "only", "sorted")
-            spec.assert_str_eq(skill_(found.skills, 1).description, "from 3", "project .nib wins")
-            spec.assert_str_eq(skills.source("${d}/.agents/skills/only/SKILL.md", "${d}/nibhome", d, "${d}/proj"), "~/.agents/skills", "user label")
-            spec.assert_str_eq(skills.source("${d}/nibhome/skills/s/SKILL.md", "${d}/nibhome", d, "${d}/proj"), "$NIB_HOME/skills", "home label")
-            spec.assert_str_eq(skills.source("${d}/proj/.agents/skills/s/SKILL.md", "${d}/nibhome", d, "${d}/proj"), ".agents/skills", "project agents label")
-            spec.assert_str_eq(skills.source("${d}/proj/.nib/skills/s/SKILL.md", "${d}/nibhome", d, "${d}/proj"), ".nib/skills", "project nib label")
-            spec.assert_str_eq(skills.source("/elsewhere/SKILL.md", "${d}/nibhome", d, "${d}/proj"), "/elsewhere/SKILL.md", "no label")
-            spec.assert_str_eq(skills.source("${d}/.agents/skills", "${d}/nibhome", d, "${d}/proj"), "${d}/.agents/skills", "the root itself has none")
+            spec.assert_str_eq(skill_(found.skills, 1).description, "from 3", "project .naeb wins")
+            spec.assert_str_eq(skills.source("${d}/.agents/skills/only/SKILL.md", "${d}/naebhome", d, "${d}/proj"), "~/.agents/skills", "user label")
+            spec.assert_str_eq(skills.source("${d}/naebhome/skills/s/SKILL.md", "${d}/naebhome", d, "${d}/proj"), "$NAEB_HOME/skills", "home label")
+            spec.assert_str_eq(skills.source("${d}/proj/.agents/skills/s/SKILL.md", "${d}/naebhome", d, "${d}/proj"), ".agents/skills", "project agents label")
+            spec.assert_str_eq(skills.source("${d}/proj/.naeb/skills/s/SKILL.md", "${d}/naebhome", d, "${d}/proj"), ".naeb/skills", "project naeb label")
+            spec.assert_str_eq(skills.source("/elsewhere/SKILL.md", "${d}/naebhome", d, "${d}/proj"), "/elsewhere/SKILL.md", "no label")
+            spec.assert_str_eq(skills.source("${d}/.agents/skills", "${d}/naebhome", d, "${d}/proj"), "${d}/.agents/skills", "the root itself has none")
             fs.remove_tree(d)
         }
 

@@ -14,7 +14,7 @@ import std.worker
 import std.cryptography
 import std.ipc
 import std.io
-import nib.sysenv
+import naeb.sysenv
 
 exports(Result, run, run_ticking, run_lines, open_stdio, kill_child, close_fd, environ, STOP_NONE, STOP_CANCELED, STOP_TIMED_OUT)
 
@@ -70,7 +70,7 @@ run_ticking(argv: ptr, env: ptr, cancel_a: ptr, cancel_b: ptr, timeout_ms: long,
     r.start_ms_epoch = os.now_unix_ms()
     r.end_ms_epoch = 0
     hex, _h = cryptography.random_hex(12)
-    out_path = "${os.temp_dir()}/nib-out-${hex}"
+    out_path = "${os.temp_dir()}/naeb-out-${hex}"
     prog, _e = list.get_string(argv, 0)
     rest = list.list_new()
     i = 1
@@ -139,7 +139,7 @@ run_ticking(argv: ptr, env: ptr, cancel_a: ptr, cancel_b: ptr, timeout_ms: long,
     return r as ptr
 }
 
-// ---- a child nib (tools.agent): stdin input, stdout lines as they come ----
+// ---- a child naeb (tools.agent): stdin input, stdout lines as they come ----
 
 struct Feeder {
     fd: int

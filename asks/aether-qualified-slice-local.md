@@ -1,9 +1,9 @@
 # Parser: a typed local of a qualified struct's slice type does not parse
 
-**From:** the nib Aether port (`aether-port` branch of paul-hammant/nib-code), its TUI slice.
+**From:** the naeb Aether port (`aether-port` branch of aether-lang-dev/naeb), its TUI slice.
 **To:** aether, aetherc 0.909.0.
 **Workaround meanwhile:** `xs = make([]m.P, 0)` (or a module function that
-returns an empty slice, `commands.no_choices()` in `ae/nib/tui/commands`).
+returns an empty slice, `commands.no_choices()` in `ae/naeb/tui/commands`).
 
 ```
 m/module.ae:  exports(P, mk)  struct P { n: int }  mk(n: int) -> P { return P { n: n } }

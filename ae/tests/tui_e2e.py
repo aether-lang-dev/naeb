@@ -7,7 +7,7 @@ unchanged). Run from the repository root after aeb .build.ae:
 
 - tool_activity: the Running line names the tool a Run is in (upstream
   Sink.onToolActivity, session/run.zig executeTimed).
-- login_masks_key: `nib login <service>` on a terminal reads the key with echo
+- login_masks_key: `naeb login <service>` on a terminal reads the key with echo
   off (std.io.set_echo) and puts echo back.
 - turn_end_hooks_joined: the turn_end hooks run on their own thread and
   quitting waits for them (upstream TurnJob, Session.finishHooks).
@@ -29,7 +29,7 @@ os.chdir(ROOT / "tests")
 import test_interjections as tui  # noqa: E402
 from test_interjections import Reply, fixture, screen, wait_for  # noqa: E402
 
-tui.BIN = Path(os.environ.get("NIB", ROOT / "target/build/bin/nib"))
+tui.BIN = Path(os.environ.get("NAEB_UNFENCED", ROOT / "target/build/bin/naeb-unfenced"))
 
 
 def status_line(terminal):
@@ -39,7 +39,7 @@ def status_line(terminal):
 def tool_activity():
     # tools.llm is a tool with no background task, so only the tool activity
     # can name it: its request is held by the mock until released.
-    with tempfile.TemporaryDirectory(prefix="nib-tool-activity-") as directory:
+    with tempfile.TemporaryDirectory(prefix="naeb-tool-activity-") as directory:
         tmp = Path(directory) / "case"
         llm = Reply("llm-answer", gated=True)
         replies = [Reply("ran", code="await tools.llm({prompt: 'p', input: 'i'})"), llm, Reply("done")]
@@ -53,7 +53,7 @@ def tool_activity():
 
 
 def turn_end_hooks_joined():
-    with tempfile.TemporaryDirectory(prefix="nib-turn-end-") as directory:
+    with tempfile.TemporaryDirectory(prefix="naeb-turn-end-") as directory:
         tmp = Path(directory) / "case"
         hooked = Path(directory) / "hooked"
         config = "[hooks]\nturn_end = " + json.dumps(["sleep 1; touch " + str(hooked)]) + "\n"
@@ -68,11 +68,11 @@ def turn_end_hooks_joined():
 
 def login_masks_key():
     key = "masked-key-4f2a9c"
-    with tempfile.TemporaryDirectory(prefix="nib-login-mask-") as directory:
+    with tempfile.TemporaryDirectory(prefix="naeb-login-mask-") as directory:
         home = Path(directory) / "home"
         home.mkdir()
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("NIB_", "DEEPSEEK_", "OPENAI_", "CODEX_"))}
-        env.update(NIB_HOME=str(home), HOME=directory, TERM="xterm-256color")
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("NAEB_", "DEEPSEEK_", "OPENAI_", "CODEX_"))}
+        env.update(NAEB_HOME=str(home), HOME=directory, TERM="xterm-256color")
         master, slave = pty.openpty()
         child = subprocess.Popen([str(tui.BIN), "login", "anthropic"], cwd=directory, env=env,
                                  stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
@@ -102,7 +102,7 @@ def login_masks_key():
         assert echo_after != 0, "echo is back on afterwards"
         assert key.encode() not in seen, "the key never reaches the screen: " + repr(seen)
         assert json.loads(next(Path(directory).rglob("auth.json")).read_text()) == {"keys": {"anthropic": key}}
-    print("ok   nib login reads the key with echo off and restores it")
+    print("ok   naeb login reads the key with echo off and restores it")
 
 
 if __name__ == "__main__":

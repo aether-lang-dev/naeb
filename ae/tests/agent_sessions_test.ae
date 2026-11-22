@@ -2,7 +2,7 @@
 // the Zig allocator/io arguments and defer deinit, which the port has no
 // counterpart for (a Registry is a heap value with a lock).
 import std.spec
-import nib.tools.agent_sessions
+import naeb.tools.agent_sessions
 
 main() {
     fw = spec.init()

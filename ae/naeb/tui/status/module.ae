@@ -17,10 +17,10 @@
 import std.string
 import std.strbuilder
 import term.screen
-import nib.provider.types
-import nib.tui.format
-import nib.tui.label
-import nib.tui.turn_summary
+import naeb.provider.types
+import naeb.tui.format
+import naeb.tui.label
+import naeb.tui.turn_summary
 
 exports(PHASE_THINKING, PHASE_REASONING, PHASE_WRITING, PHASE_SCRIPTING, PHASE_RUNNING,
         PHASE_WAITING, PHASE_RETRYING, PHASE_COMPACTING, PHASE_COUNT,

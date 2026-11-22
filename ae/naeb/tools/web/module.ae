@@ -10,8 +10,8 @@ import std.string
 import std.sync
 import std.worker
 import std.json
-import nib.jsonx
-import nib.tools.html
+import naeb.jsonx
+import naeb.tools.html
 
 exports(Page, USAGE_TEXT, MAX_BODY, MAX_TEXT, fetch, get, render, cap, utf8_valid)
 
@@ -126,7 +126,7 @@ request_(jp: ptr) {
     }
     client.set_follow_redirects(req, MAX_REDIRECTS)
     if j.proxy != "" { client.use_http_proxy(req, j.proxy) }
-    client.set_header(req, "user-agent", "Mozilla/5.0 (compatible; nib)")
+    client.set_header(req, "user-agent", "Mozilla/5.0 (compatible; naeb)")
     client.set_header(req, "accept", ACCEPT)
     resp, err = client.send_stream(req)
     if err != "" {

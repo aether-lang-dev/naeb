@@ -5,16 +5,16 @@
 //
 // NOT ported here, because they take the App (the lead wires them):
 //   saveReflection(app)   append the answer of a finished /reflect Turn to
-//                         NIB_HOME/reflections.md (uses append() below with the
+//                         NAEB_HOME/reflections.md (uses append() below with the
 //                         session id, cwd, model, effective effort, focus and
 //                         the last assistant message), set the notice
 //                         "reflection saved to {path}" or "could not save
 //                         reflection to {path}: {error}", then fileIssues
-//   issueRepo(app)        repository(NIB_ISSUE_REPO from the environment)
+//   issueRepo(app)        repository(NAEB_ISSUE_REPO from the environment)
 //   fileIssues(app, ...)  build an Issues job (below) from drafts(answer),
 //                         the repo, the reflections path, the first 8 chars of
 //                         the session id, $HOME, the cwd and the footer
-//                         "_Filed automatically by nib /reflect · nib {version}
+//                         "_Filed automatically by naeb /reflect · naeb {version}
 //                         · {model} · effort {effort} · session {id8}_"; start
 //                         it, report "filing {n} issue draft{s} to {repo}"
 //   stopReflecting(app)   clear app.reflecting
@@ -25,12 +25,12 @@
 //    sanitize() returns (*Draft, ok).
 //  - append/append_text return "" or an error text instead of an error set;
 //    the file is created with mode 0600 and appended under an exclusive
-//    flock (std.fs), several nib processes sharing it as upstream.
+//    flock (std.fs), several naeb processes sharing it as upstream.
 //  - gh runs through a replaceable runner: a closure
 //    `|argv: ptr, input: string, out: ptr| -> int` that fills the *Output
 //    box `out` (ok, out, err); argv is a list of strings, program first.
 //    gh_run is the real one: it runs argv through `/bin/sh` with stdin read
-//    from a temp file and stderr to another (nib.tools.process merges
+//    from a temp file and stderr to another (naeb.tools.process merges
 //    stdout and stderr and has no stdin), in the user's own environment.
 //    A program that cannot start reads as a gh failure whose err is the
 //    shell's text, not an error name.
@@ -55,10 +55,10 @@ import std.os hiding (exec, run_capture, run_pipe, run_pipe_drain_and_wait, run_
 import std.sync
 import std.worker
 import std.cryptography
-import nib.jsonx
+import naeb.jsonx
 import std.io
-import nib.fserr
-import nib.tools.process
+import naeb.fserr
+import naeb.tools.process
 
 exports(TEMPLATE, MAX_DRAFTS, Draft, Entry, Output, Issues, prompt, append, append_text, drafts,
         file_issue, sanitize, redact, repository, gh_run, issues_new, issues_start, issues_finish)
@@ -66,7 +66,7 @@ exports(TEMPLATE, MAX_DRAFTS, Draft, Entry, Output, Issues, prompt, append, appe
 const MAX_DRAFTS = 3
 
 // Edit the wording in src/tui/reflect.md upstream; {{session_id}}, {{log_path}}, {{issue_repo}} and {{focus}} are filled in by prompt().
-const TEMPLATE = "This is a reflection, not a continuation of work: do not modify files or run builds, tests, or other commands with side effects.\n\nPurpose: determine whether nib's harness (tools, sandbox, system prompt and tool descriptions, output truncation, timeouts and cancellation, subagents, TUI) caused real problems worth fixing in this session. A smooth session may have no problems; \"None\" is a normal conclusion. Issue drafts are published automatically to a public repository without human review, so report only problems supported by evidence.\n\nEvidence:\n- Check the log before drawing conclusions. This session's log is {{log_path}} (JSONL; each line's messages form a complete Step; messages with role tool are Run results). Use tools.grep to search for failure signals such as `\"exit_code\":127`, `SyntaxError`, `timed out`, `Error:`, `refused by nib`, and `interrupted`; read relevant lines as needed. If context was compacted, the log is the only reliable source.\n- Read only the explicitly specified main log path for this session; tools.grep's path must also point only to that file. Do not enumerate, glob, or search the sessions directory, read sibling logs, subagent logs, or any `.calls.jsonl` tool-recording sidecar, or bypass this scope through bash, fetch, or other tools. Sidecars may contain full file contents, command output, and credentials absent from the main log; they are outside the reflection's evidence scope.\n- This session's ID is {{session_id}}; the specified main log is read-only.\n\nAnswer in English using this structure:\n\n### Summary\nOne sentence: the task, its outcome, roughly how many Steps it took, and roughly how many were spent dealing with the harness.\n\n### Friction\nWrite \"None\" if there was none. Format each item as: `[category] symptom — evidence — cost — attribution`\n- Categories: tool interface / missing tool / sandbox and JS / system prompt and descriptions / output and truncation / timeouts and cancellation / subagents / TUI / other.\n- Evidence: quote the log (trimmed to one line), or identify the Run; label items without direct evidence \"Inference\".\n- Cost: approximate extra Steps or tokens.\n- Attribution: harness / task description / own mistake. Attribute misuse caused by misleading descriptions to the harness. Include a purely personal mistake only if it materially affected the outcome, as a reference item.\n\n### Suggestions (0–3, ranked by cost × recurrence frequency)\nAddress only friction attributed to the harness above; write \"None\" if there is none. For each item specify:\n- Where to change: the specific tool, parameter, description, or file;\n- Which friction item it resolves;\n- How to verify: a metric that can become a test or be measured from session logs.\nIf unsure whether nib already has a capability, check only the specified main log. Mark insufficient evidence as unknown; do not expand the read scope to investigate, or assert that a capability exists or is missing.\n\n### Task description\nWhich missing, ambiguous, or contradictory parts of the user's task description caused guessing or rework? Write \"None\" if there were none.\n\n### Keep\nUp to 2 specific designs that helped in this session and should be preserved; write \"None\" if there were none.\n\n### Issue drafts\nDraft issues only for suggestions meeting all these conditions: attributed to the harness, supported by log quotations (not \"Inference\"), and material cost (e.g. more than 2 extra Steps or an incorrect result). Include at most 3 in a final ```json code block: `[{\"title\": \"...\", \"body\": \"...\"}]`; output `[]` if none qualify. Before drafting, run the read-only command `gh issue list --repo {{issue_repo}} --state open --limit 100` to inspect existing issues (this command complies with the read-only requirement above). Do not draft an issue with the same root cause as an existing issue; note \"existing #number\" under Suggestions instead. If gh is unavailable, draft normally; titles are checked for duplicates again before publication. These drafts are published automatically to nib's **public** GitHub repository, so:\n- Each issue must stand alone: readers cannot see this session or know the user's project;\n- Include no user-project code, file contents, project or company names, paths outside the nib repository, URLs, credentials, or personal information. Rephrase evidence without exposing project content, e.g. \"Writing a Python script of about 400 lines with tools.write produced a SyntaxError\";\n- Keep titles short and specific, identifying the component and problem. Use Markdown bodies with: symptom, evidence (redacted), cost, proposed change, and verification, in that order. Write all issue titles and bodies in English.\n{{focus}}\n"
+const TEMPLATE = "This is a reflection, not a continuation of work: do not modify files or run builds, tests, or other commands with side effects.\n\nPurpose: determine whether naeb's harness (tools, sandbox, system prompt and tool descriptions, output truncation, timeouts and cancellation, subagents, TUI) caused real problems worth fixing in this session. A smooth session may have no problems; \"None\" is a normal conclusion. Issue drafts are published automatically to a public repository without human review, so report only problems supported by evidence.\n\nEvidence:\n- Check the log before drawing conclusions. This session's log is {{log_path}} (JSONL; each line's messages form a complete Step; messages with role tool are Run results). Use tools.grep to search for failure signals such as `\"exit_code\":127`, `SyntaxError`, `timed out`, `Error:`, `refused by naeb`, and `interrupted`; read relevant lines as needed. If context was compacted, the log is the only reliable source.\n- Read only the explicitly specified main log path for this session; tools.grep's path must also point only to that file. Do not enumerate, glob, or search the sessions directory, read sibling logs, subagent logs, or any `.calls.jsonl` tool-recording sidecar, or bypass this scope through bash, fetch, or other tools. Sidecars may contain full file contents, command output, and credentials absent from the main log; they are outside the reflection's evidence scope.\n- This session's ID is {{session_id}}; the specified main log is read-only.\n\nAnswer in English using this structure:\n\n### Summary\nOne sentence: the task, its outcome, roughly how many Steps it took, and roughly how many were spent dealing with the harness.\n\n### Friction\nWrite \"None\" if there was none. Format each item as: `[category] symptom — evidence — cost — attribution`\n- Categories: tool interface / missing tool / sandbox and JS / system prompt and descriptions / output and truncation / timeouts and cancellation / subagents / TUI / other.\n- Evidence: quote the log (trimmed to one line), or identify the Run; label items without direct evidence \"Inference\".\n- Cost: approximate extra Steps or tokens.\n- Attribution: harness / task description / own mistake. Attribute misuse caused by misleading descriptions to the harness. Include a purely personal mistake only if it materially affected the outcome, as a reference item.\n\n### Suggestions (0–3, ranked by cost × recurrence frequency)\nAddress only friction attributed to the harness above; write \"None\" if there is none. For each item specify:\n- Where to change: the specific tool, parameter, description, or file;\n- Which friction item it resolves;\n- How to verify: a metric that can become a test or be measured from session logs.\nIf unsure whether naeb already has a capability, check only the specified main log. Mark insufficient evidence as unknown; do not expand the read scope to investigate, or assert that a capability exists or is missing.\n\n### Task description\nWhich missing, ambiguous, or contradictory parts of the user's task description caused guessing or rework? Write \"None\" if there were none.\n\n### Keep\nUp to 2 specific designs that helped in this session and should be preserved; write \"None\" if there were none.\n\n### Issue drafts\nDraft issues only for suggestions meeting all these conditions: attributed to the harness, supported by log quotations (not \"Inference\"), and material cost (e.g. more than 2 extra Steps or an incorrect result). Include at most 3 in a final ```json code block: `[{\"title\": \"...\", \"body\": \"...\"}]`; output `[]` if none qualify. Before drafting, run the read-only command `gh issue list --repo {{issue_repo}} --state open --limit 100` to inspect existing issues (this command complies with the read-only requirement above). Do not draft an issue with the same root cause as an existing issue; note \"existing #number\" under Suggestions instead. If gh is unavailable, draft normally; titles are checked for duplicates again before publication. These drafts are published automatically to naeb's **public** GitHub repository, so:\n- Each issue must stand alone: readers cannot see this session or know the user's project;\n- Include no user-project code, file contents, project or company names, paths outside the naeb repository, URLs, credentials, or personal information. Rephrase evidence without exposing project content, e.g. \"Writing a Python script of about 400 lines with tools.write produced a SyntaxError\";\n- Keep titles short and specific, identifying the component and problem. Use Markdown bodies with: symptom, evidence (redacted), cost, proposed change, and verification, in that order. Write all issue titles and bodies in English.\n{{focus}}\n"
 
 // The reflection request sent to the model as the user message.
 prompt(session_id: string, log_path: string, issue_repo: string, focus: string) -> string {
@@ -137,7 +137,7 @@ dirname_(path: string) -> string {
     return string.substring(path, 0, i)
 }
 
-// Under an exclusive lock because several nib processes share one file.
+// Under an exclusive lock because several naeb processes share one file.
 // "" or an error text.
 append_text(path: string, text: string) -> string {
     dir = dirname_(path)
@@ -268,8 +268,8 @@ eql_ignore_case_(a: string, b: string) -> int {
 gh_run(argv: ptr, input: string, out: ptr) -> int {
     o = out as *Output
     hex, _h = cryptography.random_hex(12)
-    in_path = "${os.temp_dir()}/nib-gh-in-${hex}"
-    err_path = "${os.temp_dir()}/nib-gh-err-${hex}"
+    in_path = "${os.temp_dir()}/naeb-gh-in-${hex}"
+    err_path = "${os.temp_dir()}/naeb-gh-err-${hex}"
     fs.write(in_path, input)
     args = list.list_new()
     list.list_add(args, "/bin/sh")

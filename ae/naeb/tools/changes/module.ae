@@ -6,7 +6,7 @@
 import std.string
 import std.strbuilder
 import std.list
-import nib.tools.diff
+import naeb.tools.diff
 
 exports(REASON_MODEL, REASON_TOOL, REASON_TIMEOUT, REASON_CANCELED, REASON_LIMIT,
         Tracker, Entry, Recovery, Counts, File,

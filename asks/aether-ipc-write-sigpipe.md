@@ -1,11 +1,11 @@
 # Ask: std.ipc.write_some / write raise SIGPIPE on a full pipe whose reader died
 
-**From:** the Aether port of nib (`paul-hammant/nib-code`, branch `aether-port`), tools.agent.
+**From:** the Aether port of naeb (`aether-lang-dev/naeb`, branch `aether-port`), tools.agent.
 **Aether:** 0.909.0, macOS arm64.
 
 ## Motivation
 
-A subagent is a child `nib` started with `os.run_stdio`; the parent writes the
+A subagent is a child `naeb` started with `os.run_stdio`; the parent writes the
 child's input (prompt, config, possibly a long forked history) to `to_child_fd`
 on a worker thread, while the main thread enforces a deadline and kills the
 child. `std/ipc/module.ae` documents that a write to "a socket or a pipe whose
@@ -66,8 +66,8 @@ Found: nothing printed, exit status 141 (SIGPIPE). `ipc.write` behaves the same.
 
 ## Stand-in
 
-`ae/nib/sysgap/sysgap.c` `nibsys_ignore_sigpipe()` (`signal(SIGPIPE, SIG_IGN)`),
-called by `nib.tools.process.run_lines` before it spawns. Remove it once
+`ae/naeb/sysgap/sysgap.c` `naebsys_ignore_sigpipe()` (`signal(SIGPIPE, SIG_IGN)`),
+called by `naeb.tools.process.run_lines` before it spawns. Remove it once
 std.ipc's pipe writes cannot raise SIGPIPE (e.g. block SIGPIPE on the writing
 thread and consume a pending one with sigtimedwait, or MSG_NOSIGNAL-style
 handling for pipes).

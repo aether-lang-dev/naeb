@@ -5,7 +5,7 @@
 //    compaction", "legacy Step overflow is not attributed to a pure JS Run":
 //    upstream builds the summaries by replaying a session log through
 //    session/log.zig, whose tool-summary restoration is not ported
-//    (ae/nib/session/log header). Ported as far as the transcript: the
+//    (ae/naeb/session/log header). Ported as far as the transcript: the
 //    messages carry the `tool_summary` / `step_calls_omitted` members the
 //    replay would attach, and the labels are checked; the log round trip
 //    ("compaction", the second loop of the Step-overflow test) is not.
@@ -17,25 +17,25 @@
 //  - "history Run effort is copied ...": upstream mutates the source buffer
 //    after the call to prove a copy; Aether strings are immutable, so it
 //    checks the value and that the label does not show it.
-//  - Messages are JSON texts (nib.msg form), not provider.Message structs;
+//  - Messages are JSON texts (naeb.msg form), not provider.Message structs;
 //    "user" history content is added as typed (skills.typed not ported).
 import std.spec
 import std.string
 import std.list
-import nib.jsonx
-import nib.tui.transcript
-import nib.tui.entry
-import nib.tui.viewport
-import nib.tui.agent_tree
-import nib.tui.turn_changes
-import nib.tui.turn_summary
-import nib.tui.bill
-import nib.tui.label
-import nib.tools.changes
-import nib.tools.diff
-import nib.tools.progress
-import nib.session.tool_summary
-import nib.sandbox.timing
+import naeb.jsonx
+import naeb.tui.transcript
+import naeb.tui.entry
+import naeb.tui.viewport
+import naeb.tui.agent_tree
+import naeb.tui.turn_changes
+import naeb.tui.turn_summary
+import naeb.tui.bill
+import naeb.tui.label
+import naeb.tools.changes
+import naeb.tools.diff
+import naeb.tools.progress
+import naeb.session.tool_summary
+import naeb.sandbox.timing
 import term.screen
 
 // ---------------------------------------------------------------- helpers

@@ -28,7 +28,7 @@
 import std.string
 import std.strbuilder
 import term.screen
-import nib.tui.syntax
+import naeb.tui.syntax
 
 exports(
     Theme, theme, default_theme, KIND_PROSE, KIND_HEADING, KIND_CODE, KIND_TABLE,

@@ -2,7 +2,7 @@
 import glob
 p = '.tests.ae'
 s = open(p).read()
-head = '        // The TUI (ae/nib/tui), upstream src/tui*.\n'
+head = '        // The TUI (ae/naeb/tui), upstream src/tui*.\n'
 blk = ''
 for f in sorted(glob.glob('ae/tests/tui_*_test.ae')):
     if '"%s"' % f in s:

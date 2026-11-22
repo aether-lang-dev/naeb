@@ -3,8 +3,8 @@
 import std.spec
 import std.list
 import std.longarr
-import nib.provider.timing as mt
-import nib.provider.types
+import naeb.provider.timing as mt
+import naeb.provider.types
 
 call_(id: string, name: string) -> ptr {
     return types.tool_call_new(id, name, "{}")

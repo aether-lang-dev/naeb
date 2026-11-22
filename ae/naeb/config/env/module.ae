@@ -6,7 +6,7 @@
 
 import std.list
 import std.string
-import nib.sysenv
+import naeb.sysenv
 
 exports(Env, new, set, get, has, remove, clone, pairs, from_process)
 
@@ -83,7 +83,7 @@ clone(ep: ptr) -> ptr {
 }
 
 // The environment as a std.list of "NAME=value" strings, what a child's
-// environment is passed as (nib.tools.process, std.os).
+// environment is passed as (naeb.tools.process, std.os).
 pairs(ep: ptr) -> ptr {
     e = ep as *Env
     out = list.list_new()

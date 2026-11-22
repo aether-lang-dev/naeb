@@ -1,10 +1,10 @@
 # contrib.quickjs: async global eval, a host-controlled interrupt, promise state
 
-**From:** the nib Aether port (`aether-port` branch of paul-hammant/nib-code), its Sandbox slice.
+**From:** the naeb Aether port (`aether-port` branch of aether-lang-dev/naeb), its Sandbox slice.
 **To:** aether, `contrib/quickjs` (0.909.0).
-**Stand-in meanwhile:** `ae/nib/qjsgap/` (marked; mirrors `AeQjs`, delete when this lands).
+**Stand-in meanwhile:** `ae/naeb/qjsgap/` (marked; mirrors `AeQjs`, delete when this lands).
 
-nib runs each model-written script ("Run") in a fresh QuickJS runtime. Three
+naeb runs each model-written script ("Run") in a fresh QuickJS runtime. Three
 things it needs are in quickjs-ng but not exposed by `contrib.quickjs`:
 
 ## 1. Global eval with `JS_EVAL_FLAG_ASYNC`
@@ -34,7 +34,7 @@ promise handle (flag bit 4 in `qjs_eval`, say).
 
 ## 2. An interrupt the host controls
 
-`set_time_limit(q, ms)` restarts its deadline at every entry. nib's budget is
+`set_time_limit(q, ms)` restarts its deadline at every entry. naeb's budget is
 cumulative: 5 minutes of *JS time* across the initial eval, every job run,
 every result conversion, pausing while tools run on other threads; and a
 cancel flag (Esc, SIGINT) must stop a busy loop at once. Two small additions
@@ -50,11 +50,11 @@ deadline can interrupt a later `to_string` immediately, and a `toString`
 that loops forever is unbounded when the limit is 0.
 
 - A second cell, `quickjs.set_stop_cell(q, cell)` (or a list of cells):
-  nib's offline replay (`nib replay`) must stop a script the moment it
+  naeb's offline replay (`naeb replay`) must stop a script the moment it
   diverges from its recording, the way upstream's interrupt handler returns
   `isInterrupted(st) or virtualStopped(st)`, without the Run reading as
   canceled (its text is whatever the script threw). The stand-in has it as
-  `nibqjs_set_stop` (reason 3). Repro of the need, 0.912.0: a replayed
+  `naebqjs_set_stop` (reason 3). Repro of the need, 0.912.0: a replayed
   script that catches the divergence and spins (`try { await tools.read({x:2}) }
   catch {} for(;;){}` against a recording of `read({x:1})`) can only be
   stopped by the 5-minute budget or by the cancel cell, which rewrites its
@@ -64,12 +64,12 @@ that loops forever is unbounded when the limit is 0.
 
 `quickjs.promise_state(q, h) -> int` (-1 not a promise, 0 pending,
 1 fulfilled, 2 rejected) and `quickjs.promise_result(q, h) -> int` (a handle).
-nib checks whether the Run's top-level promise rejected (pending timers are
+naeb checks whether the Run's top-level promise rejected (pending timers are
 then dropped while tool calls still drain) and reads the settled value.
 
 ## Also noticed
 
-- quickjs-ng is pinned at 0.17.0; upstream nib pins 0.18. No behaviour nib's
+- quickjs-ng is pinned at 0.17.0; upstream nib pins 0.18. No behaviour naeb's
   tests see differs, but a bump would keep the two engines the same.
 - `qjs_to_string` returns "" both for an empty string and for a failed
   conversion; a `(string, err)` form would let a host tell them apart.

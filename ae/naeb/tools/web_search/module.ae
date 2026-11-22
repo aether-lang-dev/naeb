@@ -27,10 +27,10 @@ import std.string
 import std.sync
 import std.time
 import std.worker
-import nib.jsonx
-import nib.lock
-import nib.provider.sse
-import nib.provider.types
+import naeb.jsonx
+import naeb.lock
+import naeb.provider.sse
+import naeb.provider.types
 
 exports(Item, Outcome, Exch, TIMEOUT_MS, MAX_BODY, MAX_COUNT, DEEPSEEK_QUERY_CHARS, USAGE_TEXT,
         search, search_with, supported, route, build_url, build_body, clip, codepoints,

@@ -2,7 +2,7 @@
 // snapshot tests read upstream's own src/tui/layout_snapshots.txt and
 // simple_snapshots.txt and must match them cell for cell (their whole text,
 // headers included). "draw benchmark: 5000 entries" and "stream stress frame
-// timings" run as upstream does without NIB_TUI_BENCH (one frame per sample),
+// timings" run as upstream does without NAEB_TUI_BENCH (one frame per sample),
 // checking what upstream checks; the timings are not printed.
 import std.spec
 import std.string
@@ -11,19 +11,19 @@ import std.fs
 import std.list
 import term.screen
 import term.input
-import nib.provider.types
-import nib.tools.changes
-import nib.tui.entry
-import nib.tui.markdown
-import nib.tui.transcript
-import nib.tui.turn_changes
-import nib.tui.editor
-import nib.tui.viewport
-import nib.tui.status
-import nib.tui.commands
-import nib.tui.selection
-import nib.tui.sel_history
-import nib.tui.tui_view
+import naeb.provider.types
+import naeb.tools.changes
+import naeb.tui.entry
+import naeb.tui.markdown
+import naeb.tui.transcript
+import naeb.tui.turn_changes
+import naeb.tui.editor
+import naeb.tui.viewport
+import naeb.tui.status
+import naeb.tui.commands
+import naeb.tui.selection
+import naeb.tui.sel_history
+import naeb.tui.tui_view
 
 mock_cfg_() -> ptr { return types.new_config("custom", "", "", "mock") }
 
@@ -540,15 +540,15 @@ main() {
 
         spec.it("title line shows on an empty transcript, also in Simple mode, never when signed out or with entries") callback {
             t = transcript.new()
-            empty = draw_text_(t, mock_cfg_(), "nibcode · main · mock", false, 60)
-            spec.assert_true(string.starts_with(empty, " nibcode · main · mock\n") != 0, "title")
-            simple = draw_text_(t, cfg_with_(1, 0 as long), "nibcode · main · mock", false, 60)
-            spec.assert_true(string.starts_with(simple, " nibcode · main · mock\n") != 0, "simple title")
+            empty = draw_text_(t, mock_cfg_(), "naeb · main · mock", false, 60)
+            spec.assert_true(string.starts_with(empty, " naeb · main · mock\n") != 0, "title")
+            simple = draw_text_(t, cfg_with_(1, 0 as long), "naeb · main · mock", false, 60)
+            spec.assert_true(string.starts_with(simple, " naeb · main · mock\n") != 0, "simple title")
             out = draw_text_(t, mock_cfg_(), "", true, 60)
             spec.assert_true(string.starts_with(out, " No provider · /provider to sign in\n") != 0, "signed out")
             transcript.add(t, entry.KIND_ASSISTANT, "Hello")
-            used = draw_text_(t, mock_cfg_(), "nibcode · main · mock", false, 60)
-            spec.assert_false(string.contains(used, "nibcode") != 0, "no title with entries")
+            used = draw_text_(t, mock_cfg_(), "naeb · main · mock", false, 60)
+            spec.assert_false(string.contains(used, "naeb") != 0, "no title with entries")
         }
 
         spec.it("changes line sits directly under the footer, opens to file rows and is hidden in Simple mode") callback {

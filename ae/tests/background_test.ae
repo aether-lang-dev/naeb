@@ -7,14 +7,14 @@ import std.string
 import std.list
 import std.os
 import std.fs
-import nib.sandbox
-import nib.tools
-import nib.tools.background
+import naeb.sandbox
+import naeb.tools
+import naeb.tools.background
 
 tools_() -> ptr {
-    d, _e = fs.make_temp_dir("", "nib-bg")
+    d, _e = fs.make_temp_dir("", "naeb-bg")
     t = tools.new(d)
-    (t as *tools.Tools).data_home = "${d}/nibhome"
+    (t as *tools.Tools).data_home = "${d}/naebhome"
     return t
 }
 

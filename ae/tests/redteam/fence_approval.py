@@ -87,10 +87,10 @@ class Case:
 
     def __init__(self, work, name, port, src=None):
         self.home = os.path.realpath(os.path.join(work, name, "home"))
-        self.nib_home = os.path.join(self.home, ".nib")
+        self.naeb_home = os.path.join(self.home, ".naeb")
         self.project = os.path.join(self.home, "proj")
         os.makedirs(os.path.join(self.project, ".git"))
-        os.makedirs(self.nib_home)
+        os.makedirs(self.naeb_home)
         for sub in ("x", "y"):
             os.makedirs(os.path.join(self.home, ".fixture-cache", "a", sub))
             for i in range(10):
@@ -103,13 +103,13 @@ class Case:
         self.env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "HOME": self.home,
-            "NIB_HOME": self.nib_home,
+            "NAEB_HOME": self.naeb_home,
             "NAEB_SRC": str(ROOT),
             "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
             "LANG": "C.UTF-8",
             "TERM": "xterm-256color",
-            "NIB_PROVIDER": "chat_completions",
-            "NIB_API_KEY": "mock",
+            "NAEB_PROVIDER": "chat_completions",
+            "NAEB_API_KEY": "mock",
         }
         r = subprocess.run([str(NAEB), "build", "-y"], cwd=self.project, env=self.env, capture_output=True, text=True, timeout=600)
         if r.returncode != 0:
@@ -132,13 +132,13 @@ class Case:
         return "let n = 0; %s; const r = await tools.bash({command: 'curl -s --max-time 10 http://127.0.0.1:%d/'}); 'read=' + n + ' body=' + r.output" % (reads, self.port)
 
     def sessions(self):
-        d = os.path.join(self.nib_home, "sessions")
+        d = os.path.join(self.naeb_home, "sessions")
         return sorted(p for p in os.listdir(d) if re.fullmatch(r"[0-9a-f]{32}\.jsonl", p)) if os.path.isdir(d) else []
 
     def records(self, member):
         out = []
         for name in self.sessions():
-            for line in open(os.path.join(self.nib_home, "sessions", name), "rb").read().split(b"\n"):
+            for line in open(os.path.join(self.naeb_home, "sessions", name), "rb").read().split(b"\n"):
                 if line.strip():
                     rec = json.loads(line)
                     if member in rec:
@@ -146,7 +146,7 @@ class Case:
         return out
 
     def tool_outputs(self):
-        msgs = tui.history(Path(self.nib_home))
+        msgs = tui.history(Path(self.naeb_home))
         return [m.get("content", "") for m in msgs if m.get("role") == "tool"]
 
     def tui(self, replies):
@@ -159,7 +159,7 @@ class Session:
         self.mock = Mock(replies)
         self.thread = threading.Thread(target=self.mock.serve_forever, daemon=True)
         self.thread.start()
-        case.env["NIB_BASE_URL"] = "http://127.0.0.1:%d" % self.mock.server_port
+        case.env["NAEB_BASE_URL"] = "http://127.0.0.1:%d" % self.mock.server_port
         self.t = Terminal(case.project, case.env)
 
     def shown(self):
@@ -205,7 +205,7 @@ def approve(work, port):
         left = [n for n in os.listdir(c.dir) if ".new-" in n] + [n for n in os.listdir(os.path.join(c.dir, "build")) if n.endswith(".ae") and n.startswith("policy-")]
         check("no-leftover-libraries", not left, repr(left))
         s.t.send("again\r")
-        wait(lambda: tui.finished(Path(c.nib_home), "second done"), "second Turn")
+        wait(lambda: tui.finished(Path(c.naeb_home), "second done"), "second Turn")
         outs = c.tool_outputs()
         check("same-command-succeeds", len(outs) == 2 and "read=0 body=" in outs[0] and "approved-body" not in outs[0]
               and "read=20 body=approved-body" in outs[1], repr(outs)[-600:])
@@ -233,7 +233,7 @@ def decline(work, port):
         s.t.send("n")
         s.until("Allow? [y/N] n")
         s.t.send("again\r")
-        wait(lambda: tui.finished(Path(c.nib_home), "second done"), "second Turn")
+        wait(lambda: tui.finished(Path(c.naeb_home), "second done"), "second Turn")
         time.sleep(1)
         check("n-changes-nothing", c.state() == before and not c.records("fence_approval"), "naeb.ae or the build changed")
         open_q = [l for l in s.shown().splitlines() if l.strip() == "Allow? [y/N]"]
@@ -282,7 +282,7 @@ def broken(work, port):
         check("broken-restored", c.state() == before, "naeb.ae or the built policy changed")
         check("broken-no-leftovers", not [n for n in os.listdir(c.dir) if ".new-" in n], repr(os.listdir(c.dir)))
         s.t.send("again\r")
-        wait(lambda: tui.finished(Path(c.nib_home), "second done"), "second Turn")
+        wait(lambda: tui.finished(Path(c.naeb_home), "second done"), "second Turn")
         outs = c.tool_outputs()
         check("broken-old-policy-in-force", len(outs) == 2 and "read=0 body=naeb: egress to 127.0.0.1:%d is not in the project fence" % port in outs[1], repr(outs)[-400:])
         log = c.records("fence_approval")
@@ -299,7 +299,7 @@ def ask(work, port):
     th = threading.Thread(target=mock.serve_forever, daemon=True)
     th.start()
     try:
-        env = dict(c.env, NIB_BASE_URL="http://127.0.0.1:%d" % mock.server_port)
+        env = dict(c.env, NAEB_BASE_URL="http://127.0.0.1:%d" % mock.server_port)
         r = subprocess.run([str(NAEB), "ask", "--json", "go"], cwd=c.project, env=env, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
         check("ask-reports", r.returncode == 0 and "policy.allow_host(p, \\\"127.0.0.1\\\", %d)" % port in r.stdout, (r.stdout + r.stderr)[-600:])
         check("ask-never-asks", "Allow?" not in r.stdout + r.stderr and c.state() == before and not c.records("fence_approval"), (r.stdout + r.stderr)[-300:])

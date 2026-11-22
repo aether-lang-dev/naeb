@@ -4,8 +4,8 @@
 import std.spec
 import std.string
 import term.screen
-import nib.provider.types
-import nib.tui.status
+import naeb.provider.types
+import naeb.tui.status
 
 cfg_(model: string, cw: long) -> ptr {
     c = types.new_config("", "", "", model) as *types.Config

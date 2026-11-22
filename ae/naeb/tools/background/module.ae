@@ -13,8 +13,8 @@ import std.list
 import std.string
 import std.sync
 import std.worker
-import nib.lock
-import nib.jsonx
+import naeb.lock
+import naeb.jsonx
 
 exports(Background, Job, Item, BASH_LIMIT, new, set_log, set_turn_step, begin_turn, start, stop_task,
         finish_turn, stop_all, take_inbox, take_items, inbox_size, active_bash, set_result, poll, start_agent, agent_message, stop_task_from, active_runs, adopt_run, take_done_runs, enqueue_run, RUN_LIMIT,

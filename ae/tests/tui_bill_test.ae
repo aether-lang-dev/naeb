@@ -1,9 +1,9 @@
 // Ports the three tests of upstream src/tui/bill.zig under their names, plus a
-// from_json check of nib.tui.turn_summary (new here).
+// from_json check of naeb.tui.turn_summary (new here).
 import std.spec
 import std.string
-import nib.tui.bill
-import nib.tui.turn_summary
+import naeb.tui.bill
+import naeb.tui.turn_summary
 
 example_() -> turn_summary.TurnSummary {
     return turn_summary.new("completed", 3,

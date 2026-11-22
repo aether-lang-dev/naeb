@@ -1,14 +1,14 @@
 # Confining a child to a project fence
 
-**From:** naeb's project fence (docs/naeb/adr/0001), `nib.fence` and
+**From:** naeb's project fence (docs/naeb/adr/0001), `naeb.fence` and
 `tools/jail`.
 **To:** aether, `std.sandbox` / `std.os` (0.916.0).
-**Stand-in meanwhile:** `ae/nib/tools/jail/landlock.c` (marked; extends the
+**Stand-in meanwhile:** `ae/naeb/tools/jail/landlock.c` (marked; extends the
 one in [aether-landlock-write-roots.md](aether-landlock-write-roots.md)).
 
 A fenced child gets reads, writes and the network cut down to what the
 project's launcher declares. On Linux naeb does it in a helper it re-execs
-itself as (`nib __jail ...`), in C, because Aether has none of these:
+itself as (`naeb __jail ...`), in C, because Aether has none of these:
 
 1. **Landlock beyond writes.** `READ_FILE`/`READ_DIR` rules (ABI 1),
    `RESOLVE_UNIX` (ABI 9) to refuse connects to Unix sockets made outside

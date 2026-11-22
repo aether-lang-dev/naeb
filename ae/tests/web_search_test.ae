@@ -14,9 +14,9 @@ import std.fs
 import std.os
 import std.sync
 import std.time
-import nib.jsonx
-import nib.provider.types
-import nib.tools.web_search
+import naeb.jsonx
+import naeb.provider.types
+import naeb.tools.web_search
 
 expect_json_(expected: string, o: ptr, label: string) {
     spec.assert_str_eq(web_search.outcome_json(o, 0), expected, label)
@@ -31,7 +31,7 @@ cfg_(provider_id: string, base: string, key: string) -> ptr {
 }
 
 tmp_() -> string {
-    d, _e = fs.make_temp_dir("", "nib-ws")
+    d, _e = fs.make_temp_dir("", "naeb-ws")
     real, _k, _m = fs.realpath(d)
     return real
 }

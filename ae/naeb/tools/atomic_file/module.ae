@@ -21,7 +21,7 @@ import std.string
 import std.list
 import std.cryptography
 import std.io
-import nib.fserr
+import naeb.fserr
 
 @source("pathfd.c")
 
@@ -29,22 +29,22 @@ exports(canonical_path, replace, replace_stat, dirname, basename, join, cwd_path
         open_verified, open_dir, open_leaf, open_child, read_fd, close_fd, fd_kind, replace_at, list_fd, kind_at, cloexec_inherited,
         WANT_FILE, WANT_DIR, WANT_ANY)
 
-extern nibfs_open(path: string, kind: int, nofollow: int) -> int
-extern nibfs_openat(dirfd: int, name: string, kind: int, nofollow: int) -> int
-extern nibfs_close(fd: int) -> int
-extern nibfs_fd_kind(fd: int) -> int
-extern nibfs_kind_at(dirfd: int, name: string) -> int
-extern nibfs_mode_at(dirfd: int, name: string) -> int
-extern nibfs_same(fd: int, path: string) -> int
-extern nibfs_fd_path(fd: int) -> string @heap
-extern nibfs_fd_fold(fd: int) -> int
-extern nibfs_mkdirat(dirfd: int, name: string, mode: int) -> int
-extern nibfs_create_at(dirfd: int, name: string, mode: int) -> int
-extern nibfs_rename_at(dirfd: int, from: string, to: string) -> int
-extern nibfs_unlink_at(dirfd: int, name: string) -> int
-extern nibfs_list(fd: int) -> string @heap
-extern nibfs_errname(neg: int) -> string
-extern nibfs_cloexec_inherited() -> int
+extern naebfs_open(path: string, kind: int, nofollow: int) -> int
+extern naebfs_openat(dirfd: int, name: string, kind: int, nofollow: int) -> int
+extern naebfs_close(fd: int) -> int
+extern naebfs_fd_kind(fd: int) -> int
+extern naebfs_kind_at(dirfd: int, name: string) -> int
+extern naebfs_mode_at(dirfd: int, name: string) -> int
+extern naebfs_same(fd: int, path: string) -> int
+extern naebfs_fd_path(fd: int) -> string @heap
+extern naebfs_fd_fold(fd: int) -> int
+extern naebfs_mkdirat(dirfd: int, name: string, mode: int) -> int
+extern naebfs_create_at(dirfd: int, name: string, mode: int) -> int
+extern naebfs_rename_at(dirfd: int, from: string, to: string) -> int
+extern naebfs_unlink_at(dirfd: int, name: string) -> int
+extern naebfs_list(fd: int) -> string @heap
+extern naebfs_errname(neg: int) -> string
+extern naebfs_cloexec_inherited() -> int
 
 const WANT_FILE = 0
 const WANT_DIR = 1
@@ -171,14 +171,14 @@ canonical_path(path: string) -> (string, string) {
 
 random_name_() -> string {
     hex, _e = cryptography.random_hex(16)
-    return ".nib-${hex}"
+    return ".naeb-${hex}"
 }
 
 none_() -> fs.Stat {
     return fs.Stat { kind: 0, mode: 0, nlink: 0, ino: 0, dev: 0, size: 0, mtime_ns: 0 }
 }
 
-// Writes data to a fresh .nib-* file beside the canonical target and renames
+// Writes data to a fresh .naeb-* file beside the canonical target and renames
 // it over the target. An existing target keeps its permission bits unless
 // force_mode; a new one gets `mode` (subject to umask). "" or the error name.
 replace(path: string, data: string, mode: int, force_mode: int, sync: int) -> string {
@@ -242,38 +242,38 @@ replace_stat(path: string, data: string, mode: int, force_mode: int, sync: int) 
 // ---- descriptor-relative access ----
 
 close_fd(fd: int) {
-    if fd >= 0 { nibfs_close(fd) }
+    if fd >= 0 { naebfs_close(fd) }
 }
 
-errname_(neg: int) -> string { return string.copy(nibfs_errname(neg)) }
+errname_(neg: int) -> string { return string.copy(naebfs_errname(neg)) }
 
 // The path `fd` names, or the fallback when the OS cannot say and the
 // fallback is that very file; "" otherwise.
 fd_path_(fd: int, fallback: string) -> string {
-    p = nibfs_fd_path(fd)
+    p = naebfs_fd_path(fd)
     if string.length(p) > 0 { return p }
-    if fallback != "" && nibfs_same(fd, fallback) == 1 { return fallback }
+    if fallback != "" && naebfs_same(fd, fallback) == 1 { return fallback }
     return ""
 }
 
 // Checks an opened descriptor's kind against `want` and names it: (fd,
 // path, fold, "") or (-1, "", 0, error) with fd closed.
 verify_(fd: int, want: int, fallback: string) -> (int, string, int, string) {
-    k = nibfs_fd_kind(fd)
+    k = naebfs_fd_kind(fd)
     bad = ""
     if k < 0 { bad = errname_(k) } else if want == WANT_FILE && k == KIND_DIR { bad = "IsDir" } else if want == WANT_DIR && k != KIND_DIR {
         bad = "NotDir"
     } else if k != KIND_FILE && k != KIND_DIR { bad = "NotFile" }
     if bad != "" {
-        nibfs_close(fd)
+        naebfs_close(fd)
         return -1, "", 0, bad
     }
     p = fd_path_(fd, fallback)
     if p == "" {
-        nibfs_close(fd)
+        naebfs_close(fd)
         return -1, "", 0, "AccessDenied"
     }
-    return fd, p, nibfs_fd_fold(fd), ""
+    return fd, p, naebfs_fd_fold(fd), ""
 }
 
 // Opens `path` (a regular file, a directory or either: WANT_*) without
@@ -283,7 +283,7 @@ verify_(fd: int, want: int, fallback: string) -> (int, string, int, string) {
 open_verified(path: string, want: int) -> (int, string, int, string) {
     kind = 0
     if want == WANT_DIR { kind = 1 }
-    fd = nibfs_open(path, kind, 0)
+    fd = naebfs_open(path, kind, 0)
     if fd < 0 { return -1, "", 0, errname_(fd) }
     return verify_(fd, want, path)
 }
@@ -293,7 +293,7 @@ open_verified(path: string, want: int) -> (int, string, int, string) {
 open_leaf(dirfd: int, dir: string, name: string, want: int) -> (int, string, int, string) {
     kind = 0
     if want == WANT_DIR { kind = 1 }
-    fd = nibfs_openat(dirfd, name, kind, 1)
+    fd = naebfs_openat(dirfd, name, kind, 1)
     if fd < 0 { return -1, "", 0, errname_(fd) }
     return verify_(fd, want, join(dir, name))
 }
@@ -304,14 +304,14 @@ open_leaf(dirfd: int, dir: string, name: string, want: int) -> (int, string, int
 open_child(dirfd: int, dir: string, name: string, want: int) -> (int, string, int, string) {
     kind = 0
     if want == WANT_DIR { kind = 1 }
-    fd = nibfs_openat(dirfd, name, kind, 1)
+    fd = naebfs_openat(dirfd, name, kind, 1)
     if fd < 0 { return -1, "", 0, errname_(fd) }
-    k = nibfs_fd_kind(fd)
+    k = naebfs_fd_kind(fd)
     if (want == WANT_DIR && k != KIND_DIR) || (want == WANT_FILE && k != KIND_FILE) || k < 0 {
-        nibfs_close(fd)
+        naebfs_close(fd)
         return -1, "", 0, "NotFile"
     }
-    return fd, join(dir, name), nibfs_fd_fold(fd), ""
+    return fd, join(dir, name), naebfs_fd_fold(fd), ""
 }
 
 // The directory `path` (canonical, absolute) opened, its missing
@@ -338,23 +338,23 @@ open_dir(path: string, create: int, allowed: fn) -> (int, string, int, string) {
     if err != "" { return -1, "", 0, "${base}: ${err}" }
     string why = call(allowed, dir, fold)
     if why != "" {
-        nibfs_close(fd)
+        naebfs_close(fd)
         return -1, "", 0, why
     }
     i = list.list_size(missing) - 1
     while i >= 0 {
         name, _e = list.get_string(missing, i)
-        mk = nibfs_mkdirat(fd, name, 511)
+        mk = naebfs_mkdirat(fd, name, 511)
         if mk < 0 && errname_(mk) != "PathAlreadyExists" {
-            nibfs_close(fd)
+            naebfs_close(fd)
             return -1, "", 0, "${join(dir, name)}: ${errname_(mk)}"
         }
         cfd, cdir, cfold, cerr = open_leaf(fd, dir, name, WANT_DIR)
-        nibfs_close(fd)
+        naebfs_close(fd)
         if cerr != "" { return -1, "", 0, "${join(dir, name)}: ${cerr}" }
         string cwhy = call(allowed, cdir, cfold)
         if cwhy != "" {
-            nibfs_close(cfd)
+            naebfs_close(cfd)
             return -1, "", 0, cwhy
         }
         fd = cfd
@@ -366,11 +366,11 @@ open_dir(path: string, create: int, allowed: fn) -> (int, string, int, string) {
 }
 
 // The kind of the open `fd`: 1 file, 2 directory, 4 other; negative on an error.
-fd_kind(fd: int) -> int { return nibfs_fd_kind(fd) }
+fd_kind(fd: int) -> int { return naebfs_fd_kind(fd) }
 
 // The kind of `name` in the opened directory, not followed: 0 absent,
 // 1 file, 2 directory, 3 symlink, 4 other; negative on an error.
-kind_at(dirfd: int, name: string) -> int { return nibfs_kind_at(dirfd, name) }
+kind_at(dirfd: int, name: string) -> int { return naebfs_kind_at(dirfd, name) }
 
 // Everything `fd` reads up to EOF: (data, "") or ("", "StreamTooLong")
 // past `limit` bytes, or ("", error).
@@ -399,7 +399,7 @@ read_fd(fd: int, limit: long) -> (string, string) {
 // The entries of the opened directory `fd`: a list of "<kind><name>", kind
 // f(ile), d(irectory), l(ink), o(ther) or u(nknown).
 list_fd(fd: int) -> ptr {
-    text = nibfs_list(fd)
+    text = naebfs_list(fd)
     out = list.list_new()
     n = string.length(text)
     i = 0
@@ -412,18 +412,18 @@ list_fd(fd: int) -> ptr {
     return out
 }
 
-// Writes `data` to a fresh .nib-* file in the opened directory `dirfd`
+// Writes `data` to a fresh .naeb-* file in the opened directory `dirfd`
 // (its path `dir`) and renames it over the leaf `name` there; a symlink or
 // anything but a regular file at the leaf is refused ("NotFile"). Modes as
 // replace_stat. (the written file's Stat, "") or (zeroed, error name).
 replace_at(dirfd: int, dir: string, name: string, data: string, mode: int, force_mode: int, sync: int) -> (fs.Stat, string) {
-    k = nibfs_kind_at(dirfd, name)
+    k = naebfs_kind_at(dirfd, name)
     if k < 0 { return none_(), errname_(k) }
     if k != 0 && k != KIND_FILE { return none_(), "NotFile" }
     existing = 0
     existing_mode = 0
     if k == KIND_FILE {
-        m = nibfs_mode_at(dirfd, name)
+        m = naebfs_mode_at(dirfd, name)
         if m < 0 { return none_(), errname_(m) }
         existing = 1
         existing_mode = m
@@ -435,7 +435,7 @@ replace_at(dirfd: int, dir: string, name: string, data: string, mode: int, force
     tries = 0
     while tries < 16 {
         tmp = random_name_()
-        fd = nibfs_create_at(dirfd, tmp, create_mode)
+        fd = naebfs_create_at(dirfd, tmp, create_mode)
         if fd >= 0 { break }
         if errname_(fd) != "PathAlreadyExists" { return none_(), errname_(fd) }
         tries = tries + 1
@@ -449,12 +449,12 @@ replace_at(dirfd: int, dir: string, name: string, data: string, mode: int, force
     if wk != fs.KIND_OK { failed = fserr.errname(wk) }
     io.fd_close(fd)
     if failed != "" {
-        nibfs_unlink_at(dirfd, tmp)
+        naebfs_unlink_at(dirfd, tmp)
         return none_(), failed
     }
-    rk = nibfs_rename_at(dirfd, tmp, name)
+    rk = naebfs_rename_at(dirfd, tmp, name)
     if rk < 0 {
-        nibfs_unlink_at(dirfd, tmp)
+        naebfs_unlink_at(dirfd, tmp)
         return none_(), errname_(rk)
     }
     written, _ok, _om = fs.stat(join(dir, name), 0)
@@ -463,4 +463,4 @@ replace_at(dirfd: int, dir: string, name: string, data: string, mode: int, force
 
 // Marks every inherited descriptor above 2 close-on-exec, so no child ever
 // receives one; how many it marked.
-cloexec_inherited() -> int { return nibfs_cloexec_inherited() }
+cloexec_inherited() -> int { return naebfs_cloexec_inherited() }

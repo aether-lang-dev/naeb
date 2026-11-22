@@ -2,13 +2,13 @@
 // (upstream src/tui/bill.zig).
 // Differences from upstream: no Text buffer struct, so format/details/fit are
 // plain functions returning new strings (no 1024-byte truncation); the
-// TurnSummary is nib.tui.turn_summary's; runs/width are int.
+// TurnSummary is naeb.tui.turn_summary's; runs/width are int.
 
 import std.string
 import std.strbuilder
 import term.screen
-import nib.tui.format
-import nib.tui.turn_summary
+import naeb.tui.format
+import naeb.tui.turn_summary
 
 exports(format_footer, details, fit)
 

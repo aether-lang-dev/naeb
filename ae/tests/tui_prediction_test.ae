@@ -1,5 +1,5 @@
 // Ports the tests of upstream src/tui/prediction.zig under their names.
-// Differences: the history is a list of message JSON texts (nib.msg), the
+// Differences: the history is a list of message JSON texts (naeb.msg), the
 // "skill blocks" test uses prediction.MENTION_INTRO (skills are not ported).
 // Extra tests (not upstream): start() runs the injected predict on a thread,
 // filters its reply and posts (generation, text); a predict that ignores
@@ -10,9 +10,9 @@ import std.list
 import std.string
 import std.strbuilder
 import std.sync
-import nib.msg
-import nib.tui.editor
-import nib.tui.prediction
+import naeb.msg
+import naeb.tui.editor
+import naeb.tui.prediction
 
 repeat_(s: string, n: int) -> string {
     sb = strbuilder.new(64)

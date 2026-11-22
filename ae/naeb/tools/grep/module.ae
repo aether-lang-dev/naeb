@@ -21,9 +21,9 @@ import std.fs
 import std.sync
 import std.strbuilder
 import contrib.quickjs
-import nib.tools.walk
-import nib.tools.atomic_file
-import nib.tools.rules
+import naeb.tools.walk
+import naeb.tools.atomic_file
+import naeb.tools.rules
 
 exports(options, set_glob, free_options, search, release, clip, escape,
         matcher_new, matcher_free, matcher_scan, matcher_set_time_limit,

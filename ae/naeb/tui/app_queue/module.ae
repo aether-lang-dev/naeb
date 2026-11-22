@@ -6,7 +6,7 @@
 // them) plus an optional pointer payload (a provider flow result). Closed
 // queues refuse posts, as upstream's closed loop queue does at shutdown.
 
-import nib.lock
+import naeb.lock
 
 exports(Item, Queue, new, post, post_ptr, take, len, close, is_closed)
 

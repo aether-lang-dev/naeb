@@ -5,7 +5,7 @@ import std.json
 import std.list
 import std.string
 import std.encoding
-import nib.jsonx
+import naeb.jsonx
 
 exports(encode, valid, append)
 

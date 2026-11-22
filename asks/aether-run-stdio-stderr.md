@@ -1,9 +1,9 @@
 # Ask: os.run_stdio with the child's stderr discarded (or to a file)
 
-**From:** the Aether port of nib, tools.agent. **Aether:** 0.909.0.
+**From:** the Aether port of naeb, tools.agent. **Aether:** 0.909.0.
 
-`os.run_stdio(prog, argv, env)` gives the child this process's stderr. nib
-starts a subagent (a child `nib ask --json --agent-input -`) that way and, as
+`os.run_stdio(prog, argv, env)` gives the child this process's stderr. naeb
+starts a subagent (a child `naeb ask --json --agent-input -`) that way and, as
 upstream does (`.stderr = .ignore`), must not let the child hold this
 process's stderr: when the parent is killed, whoever reads the parent's
 stderr (a test harness's `communicate()`, a pipeline) waits until every child
@@ -18,7 +18,7 @@ Wanted: a variant or option taking the child's stderr disposition (inherit,
 null, or a file path), e.g. `os.run_stdio_to(prog, argv, env, stderr_path)`
 with "" meaning /dev/null.
 
-Stand-in: `nib.tools.process.run_lines` runs the child through
+Stand-in: `naeb.tools.process.run_lines` runs the child through
 `/bin/sh -c 'exec "$@" 2>/dev/null' sh <argv…>` (exec keeps the pid, so
 TERM/KILL still reach the child).
 

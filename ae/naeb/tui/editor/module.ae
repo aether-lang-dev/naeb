@@ -12,9 +12,9 @@
 //    "none"; draft is a null ptr when there is none.
 //  - blocks and history are `ptr[]` of heap boxes (*Block, *Snapshot).
 //    Offsets, cursor and top_row are ints.
-//  - An image is nib.image's Image: its JSON object text. A block's `image` is
+//  - An image is naeb.image's Image: its JSON object text. A block's `image` is
 //    "" for a paste block; sent_images is the JSON array of the last take's
-//    images ("" none), what nib.session's turn_with_images takes.
+//    images ("" none), what naeb.session's turn_with_images takes.
 //  - skill_mention carries the parsing of src/session/skills.zig mentionAt
 //    (skills are not ported; it only parses text).
 //  - draw/rows/column/at_column are as upstream; column/at_column/prev/next/
@@ -24,9 +24,9 @@ import std.string
 import std.strbuilder
 import term.screen
 import term.input
-import nib.tui.long_text
-import nib.tui.paths
-import nib.tui.format
+import naeb.tui.long_text
+import naeb.tui.paths
+import naeb.tui.format
 
 exports(Block, Snapshot, Editor, DEFAULT_PLACEHOLDER,
         new, free, text, image_count, expanded, take, replace, remember, insert,

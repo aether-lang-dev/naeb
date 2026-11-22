@@ -9,17 +9,17 @@ import std.list
 import std.string
 import std.sync
 import std.fs
-import nib.jsonx
-import nib.sandbox
-import nib.sandbox.timing
-import nib.provider.types
-import nib.tools
-import nib.tools.agent
-import nib.tools.progress
-import nib.tools.agent_sessions
+import naeb.jsonx
+import naeb.sandbox
+import naeb.sandbox.timing
+import naeb.provider.types
+import naeb.tools
+import naeb.tools.agent
+import naeb.tools.progress
+import naeb.tools.agent_sessions
 
 tools_() -> ptr {
-    d, _e = fs.make_temp_dir("", "nib-agent")
+    d, _e = fs.make_temp_dir("", "naeb-agent")
     t = tools.new(d)
     (t as *tools.Tools).cfg = types.new_config("chat_completions", "", "", "m")
     return t

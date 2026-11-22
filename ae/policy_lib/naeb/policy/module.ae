@@ -1,7 +1,7 @@
 // naeb.policy: what a project's naeb.ae writes its fence with
 // (docs/naeb/adr/0001). naeb build compiles naeb.ae into a small shared
 // library; naeb loads it at start and calls it with a table of functions
-// (struct naeb_fence_api in nib-code ae/nib/fence/policy/policy_host.c) and
+// (struct naeb_fence_api in naeb ae/naeb/fence/policy/policy_host.c) and
 // the Fence it is filling. Nothing of naeb is compiled in here: every call
 // goes through the table, naeb copies the strings it is given, and the
 // library is capability-empty (no fs, os, net or extern), so a policy can

@@ -18,11 +18,11 @@ import std.strbuilder
 import std.list
 import std.sync
 import std.worker
-import nib.jsonx
-import nib.sandbox
-import nib.tools
-import nib.tools.llm_call
-import nib.provider.types
+import naeb.jsonx
+import naeb.sandbox
+import naeb.tools
+import naeb.tools.llm_call
+import naeb.provider.types
 
 struct Mock {
     calls: int

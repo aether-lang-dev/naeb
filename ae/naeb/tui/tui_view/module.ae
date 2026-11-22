@@ -1,7 +1,7 @@
 // tui_view: one frame of the TUI (upstream src/tui/view.zig): the transcript
 // body scrolled by the viewport, the status line, the `/` and `@` menu, the
 // framed input box with its footer, the Simple-mode context label. Named
-// tui_view because nib.tools.view will hold upstream's tools/view.zig and
+// tui_view because naeb.tools.view will hold upstream's tools/view.zig and
 // module basenames must be unique (asks/aether-module-basename-collision.md).
 //
 // Differences: upstream returns `?Frame`; here `(Frame, bool)`. The status
@@ -9,14 +9,14 @@
 
 import std.string
 import term.screen
-import nib.provider.types
-import nib.tui.format
-import nib.tui.entry
-import nib.tui.editor
-import nib.tui.viewport
-import nib.tui.sel_history
-import nib.tui.status
-import nib.tui.commands
+import naeb.provider.types
+import naeb.tui.format
+import naeb.tui.entry
+import naeb.tui.editor
+import naeb.tui.viewport
+import naeb.tui.sel_history
+import naeb.tui.status
+import naeb.tui.commands
 
 exports(MAX_MENU_ROWS, MenuLayout, draw, draw_frame, status_height, menu_layout, group_header)
 

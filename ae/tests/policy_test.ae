@@ -2,7 +2,7 @@
 import std.spec
 import std.string
 import std.strbuilder
-import nib.tools.policy
+import naeb.tools.policy
 
 repeat(text: string, count: int) -> string {
     sb = strbuilder.new(string.length(text) * count + 1)
@@ -29,12 +29,12 @@ expect_too_long(cmd: string) {
     spec.assert_str_eq(why, policy.too_long(), "expected too long: ${cmd}")
 }
 
-cred_denied(cmd: string, codex: string, nib: string) {
-    spec.assert_eq(string.length(policy.check_credentials(cmd, codex, nib)) > 0, true, "expected credential deny: ${cmd}")
+cred_denied(cmd: string, codex: string, naeb: string) {
+    spec.assert_eq(string.length(policy.check_credentials(cmd, codex, naeb)) > 0, true, "expected credential deny: ${cmd}")
 }
 
-cred_allowed(cmd: string, codex: string, nib: string) {
-    spec.assert_str_eq(policy.check_credentials(cmd, codex, nib), "", "expected credential allow: ${cmd}")
+cred_allowed(cmd: string, codex: string, naeb: string) {
+    spec.assert_str_eq(policy.check_credentials(cmd, codex, naeb), "", "expected credential allow: ${cmd}")
 }
 
 main() {
@@ -84,7 +84,7 @@ main() {
         spec.it("ordinary development commands are allowed") callback {
             expect_allowed("rm -rf build")
             expect_allowed("rm -rf ./node_modules zig-out .zig-cache")
-            expect_allowed("rm -rf /tmp/nib-test")
+            expect_allowed("rm -rf /tmp/naeb-test")
             expect_allowed("rm -rf ~/projects/foo/build")
             expect_allowed("rm -f /etc-backup.txt")
             expect_allowed("rm file.txt")
@@ -111,16 +111,16 @@ main() {
             }
             cred_allowed("cat project/auth.json", "/tmp/codex-home", "")
         }
-        spec.it("nib credential store references are denied for default and custom homes") callback {
-            cmds = ["cat ~/.nib/auth.json", "jq . $NIB_HOME/auth.json", "cat \"\${NIB_HOME}/auth.json\"",
-                    "python3 -c 'open(\"/srv/nibdata/auth.json\")'"]
+        spec.it("naeb credential store references are denied for default and custom homes") callback {
+            cmds = ["cat ~/.naeb/auth.json", "jq . $NAEB_HOME/auth.json", "cat \"\${NAEB_HOME}/auth.json\"",
+                    "python3 -c 'open(\"/srv/naebdata/auth.json\")'"]
             i = 0
             while i < 4 {
-                cred_denied(cmds[i], "", "/srv/nibdata")
+                cred_denied(cmds[i], "", "/srv/naebdata")
                 i = i + 1
             }
-            cred_allowed("cat ~/.nib/config.toml", "", "/srv/nibdata")
-            cred_allowed("cat project/auth.json", "", "/srv/nibdata")
+            cred_allowed("cat ~/.naeb/config.toml", "", "/srv/naebdata")
+            cred_allowed("cat project/auth.json", "", "/srv/naebdata")
         }
         spec.it("credential directory globs and recursive searches are denied") callback {
             cred_denied("cat ~/.codex/*", "", "")

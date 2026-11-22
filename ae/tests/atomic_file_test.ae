@@ -3,10 +3,10 @@ import std.spec
 import std.fs
 import std.string
 import std.dir
-import nib.tools.atomic_file
+import naeb.tools.atomic_file
 
 tmp_() -> string {
-    d, _e = fs.make_temp_dir("", "nib-atomic")
+    d, _e = fs.make_temp_dir("", "naeb-atomic")
     real, _k, _m = fs.realpath(d)
     return real
 }
@@ -32,7 +32,7 @@ no_temps_(d: string) -> int {
     n = fs.dir_list_count(l)
     i = 0
     while i < n {
-        if string.starts_with(fs.dir_list_get(l, i), ".nib-") == 1 { return 0 }
+        if string.starts_with(fs.dir_list_get(l, i), ".naeb-") == 1 { return 0 }
         i = i + 1
     }
     return 1

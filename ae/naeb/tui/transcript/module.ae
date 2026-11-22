@@ -10,18 +10,18 @@
 //  - Event payloads are TUI-side values: a Session `Progress` is an
 //    *agent_tree.Agent (made with agent_tree.new_agent / from_progress /
 //    from_json); Background.Kind is agent_tree.BK_*; Recovery.Reason is the
-//    changes.REASON_* ints of nib.tools.changes; provider.Kind for deltas is
+//    changes.REASON_* ints of naeb.tools.changes; provider.Kind for deltas is
 //    DELTA_TEXT / DELTA_REASONING; the Run effort is a string ("" none);
 //    ChangeText is turn_changes.ChangeText (a heap box); ToolSummary is the
-//    *tool_summary.Summary of nib.session.tool_summary (null: none).
+//    *tool_summary.Summary of naeb.session.tool_summary (null: none).
 //  - Time is a `long` of milliseconds from the caller's clock (smooth_delta,
 //    advance_visible), never read here.
-//  - The viewport is nib.tui.viewport's *Viewport: clear_retry and
+//  - The viewport is naeb.tui.viewport's *Viewport: clear_retry and
 //    retry_attempt take it and adjust its top anchor (has_top/top_entry/top_row).
 //  - Optionals: last_answer returns (text, found); latest_details returns -1
 //    for null; add_changes ignores a TurnChanges whose head is "".
 //  - add_history takes the history as a ptr list of message JSON texts (the
-//    nib.msg form the Session log and history use), not provider.Message
+//    naeb.msg form the Session log and history use), not provider.Message
 //    structs. Not ported there: skills.typed (user messages are added as
 //    they are; the skills module is not ported), and the log replay that
 //    attaches tool summaries (session.log "not yet ported"): a Run's summary
@@ -34,19 +34,19 @@ import std.string
 import std.strbuilder
 import std.list
 import std.json
-import nib.jsonx
-import nib.msg
-import nib.session.tool_summary
-import nib.sandbox.timing
-import nib.tools.changes
-import nib.tools.diff
-import nib.tui.agent_tree
-import nib.tui.entry
-import nib.tui.viewport
-import nib.tui.label
-import nib.tui.long_text
-import nib.tui.smooth
-import nib.tui.turn_changes
+import naeb.jsonx
+import naeb.msg
+import naeb.session.tool_summary
+import naeb.sandbox.timing
+import naeb.tools.changes
+import naeb.tools.diff
+import naeb.tui.agent_tree
+import naeb.tui.entry
+import naeb.tui.viewport
+import naeb.tui.label
+import naeb.tui.long_text
+import naeb.tui.smooth
+import naeb.tui.turn_changes
 
 exports(DELTA_TEXT, DELTA_REASONING, PendingResult, Transcript,
         new, clear, count, at, add, add_changes, background_result, lost_background,

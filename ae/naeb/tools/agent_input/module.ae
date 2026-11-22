@@ -1,5 +1,5 @@
-// tools.agent_input: what a parent nib writes to a child's stdin for
-// `nib ask --json --agent-input -` (upstream src/tools/agent/input.zig): the
+// tools.agent_input: what a parent naeb writes to a child's stdin for
+// `naeb ask --json --agent-input -` (upstream src/tools/agent/input.zig): the
 // prompt, the parent's provider Config, an optional fork of the parent's
 // history, and the parent Turn's undo directory. Both ends are this binary,
 // so the Config's spelling is the port's own: one member per types.Config
@@ -10,8 +10,8 @@ import std.json
 import std.list
 import std.string
 import std.strbuilder
-import nib.jsonx
-import nib.provider.types
+import naeb.jsonx
+import naeb.provider.types
 
 exports(Fork, Input, new_fork, new_input, config_json, config_from, fork_json, fork_from,
         input_json, parse, Observation, new_observation, mcp_servers_json, mcp_servers_from)
@@ -27,7 +27,7 @@ struct Observation {
 struct Fork {
     session: string
     message_count: int
-    history: ptr             // list of message JSON texts (nib.msg)
+    history: ptr             // list of message JSON texts (naeb.msg)
     cache_key: string
     id: string
     provider: string
@@ -180,7 +180,7 @@ config_json(cp: ptr) -> string {
     strbuilder.append(b, ",\"hooks_after_edit\":${strings_json_(c.hooks_after_edit)},\"hooks_turn_end\":${strings_json_(c.hooks_turn_end)},\"enabled_skills\":${strings_json_(c.enabled_skills)}")
     strbuilder.append(b, ",\"limits\":${limits_json_(c.limits)}${opt_str_("custom_provider", c.custom_provider)},\"custom_protocol\":${jsonx.quote(c.custom_protocol)}${opt_bool_("custom_vision", c.custom_vision)}")
     if c.custom_max_output >= 0 { strbuilder.append(b, ",\"custom_max_output\":${c.custom_max_output}") }
-    strbuilder.append(b, "${opt_str_("api_key_env", c.api_key_env)},\"key_source\":${jsonx.quote(c.key_source)}${opt_str_("nib_home", c.nib_home)},\"reasoning_summary\":${jsonx.quote(c.reasoning_summary)}")
+    strbuilder.append(b, "${opt_str_("api_key_env", c.api_key_env)},\"key_source\":${jsonx.quote(c.key_source)}${opt_str_("naeb_home", c.naeb_home)},\"reasoning_summary\":${jsonx.quote(c.reasoning_summary)}")
     strbuilder.append(b, ",\"mcp_servers\":[")
     i = 0
     while i < list.list_size(c.mcp_servers) {
@@ -218,7 +218,7 @@ config_from(v: ptr) -> ptr {
     c.custom_max_output = jsonx.long_or(v, "custom_max_output", -1 as long)
     c.api_key_env = string.copy(jsonx.str_or(v, "api_key_env", ""))
     c.key_source = string.copy(jsonx.str_or(v, "key_source", "none"))
-    c.nib_home = string.copy(jsonx.str_or(v, "nib_home", ""))
+    c.naeb_home = string.copy(jsonx.str_or(v, "naeb_home", ""))
     c.reasoning_summary = string.copy(jsonx.str_or(v, "reasoning_summary", "off"))
     ms = jsonx.field(v, "mcp_servers")
     i = 0

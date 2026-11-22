@@ -2,11 +2,11 @@
 // src/tools/bash/jail.zig, ADR 0004). Writable roots: the project (first
 // ancestor of cwd with .git), a linked worktree's git dirs, temp dirs, a few
 // devices, the cache allowlist, user extras; reads and network stay open.
-// macOS: sandbox-exec with a per-command profile. Linux: `nib __jail
+// macOS: sandbox-exec with a per-command profile. Linux: `naeb __jail
 // [-w <root>]... -- <command>...`, which restricts itself with Landlock and
 // execs the command. No module state: a probe result is cached by the caller.
 //
-// A project fence (docs/naeb/adr/0001, nib.fence) arrives as a *Spec: write
+// A project fence (docs/naeb/adr/0001, naeb.fence) arrives as a *Spec: write
 // roots, read-only paths inside them, read rules (tools.rules) and egress
 // through naeb's proxy. Linux: the helper's -W/-r/-R/--net options (a user,
 // mount and network namespace, Landlock reads, a relay to the proxy's Unix
@@ -17,8 +17,8 @@ import std.dir
 import std.os
 import std.string
 import std.list
-import nib.tools.atomic_file
-import nib.tools.rules
+import naeb.tools.atomic_file
+import naeb.tools.rules
 
 @source("landlock.c")
 
@@ -30,13 +30,13 @@ const SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 // Inside a fenced Linux child's network namespace: the relay to the proxy.
 const RELAY_PORT = 3128
 
-extern nibjail_probe() -> int
-extern nibjail_abi() -> int
-extern nibjail_probe_userns() -> int
-extern nibjail_restrict(roots: string) -> int
-extern nibjail_fence(writes: string, wdeny: string, reads: string, reads_on: int, sock: string, report: string) -> int
-extern nibjail_scrub_environ() -> int
-extern nibjail_account_home() -> string
+extern naebjail_probe() -> int
+extern naebjail_abi() -> int
+extern naebjail_probe_userns() -> int
+extern naebjail_restrict(roots: string) -> int
+extern naebjail_fence(writes: string, wdeny: string, reads: string, reads_on: int, sock: string, report: string) -> int
+extern naebjail_scrub_environ() -> int
+extern naebjail_account_home() -> string
 
 struct Spec {
     writes: ptr        // canonical writable roots
@@ -406,7 +406,7 @@ unavailable() -> string {
         if err != "" || code != 0 { return "sandbox-exec cannot apply a profile here" }
         return ""
     }
-    if os.platform() == "linux" { return unavailable_text(nibjail_probe()) }
+    if os.platform() == "linux" { return unavailable_text(naebjail_probe()) }
     return "unsupported OS"
 }
 
@@ -423,7 +423,7 @@ unavailable_text(code: int) -> string {
 // Zeroes this process's initial environment area after copying it to the
 // heap: a fenced child could otherwise read naeb's environment (secrets
 // included) through KERN_PROCARGS2 on macOS. Called once, at start-up.
-scrub_environ() -> int { return nibjail_scrub_environ() }
+scrub_environ() -> int { return naebjail_scrub_environ() }
 
 // Marks every descriptor above 2 this process inherited close-on-exec: one
 // open on a fenced file would otherwise reach every child, past Landlock
@@ -432,7 +432,7 @@ cloexec_inherited() -> int { return atomic_file.cloexec_inherited() }
 
 // The account's home from the user database ("" unknown): a fence closes it
 // as well as $HOME, since a child without $HOME falls back to it.
-account_home() -> string { return string.copy(nibjail_account_home()) }
+account_home() -> string { return string.copy(naebjail_account_home()) }
 
 // The proxy URL a child confined by `sp` is told about: the namespace relay
 // when it reaches the proxy through a Unix socket (Linux), else the port.
@@ -448,10 +448,10 @@ fence_unavailable(sp: ptr) -> string {
     s = sp as *Spec
     if is_mac_() == 1 { return unavailable() }
     if os.platform() != "linux" { return "no project fence on this OS" }
-    abi = nibjail_abi()
+    abi = naebjail_abi()
     if abi == 0 { return "kernel has no Landlock" }
     if abi < 0 { return "Landlock is disabled" }
-    if (s.net == 1 || list.list_size(s.write_deny) > 0) && nibjail_probe_userns() == 0 {
+    if (s.net == 1 || list.list_size(s.write_deny) > 0) && naebjail_probe_userns() == 0 {
         return "unprivileged user namespaces are unavailable"
     }
     return ""
@@ -477,7 +477,7 @@ add_flagged_(argv: ptr, flag: string, items: ptr) {
 }
 
 // argv (program first) running `inner` (program first) so that writes
-// outside `writable` fail. self_exe is this nib binary (the Linux helper).
+// outside `writable` fail. self_exe is this naeb binary (the Linux helper).
 wrap(writable: ptr, inner: ptr, self_exe: string) -> ptr {
     argv = list.list_new()
     if is_mac_() == 1 {
@@ -537,7 +537,7 @@ fence_error_(code: int) -> string {
     }
 }
 
-// `nib __jail [-w root]... [-W path]... [-R [-r path]...] [--net sock [-D report]] --
+// `naeb __jail [-w root]... [-W path]... [-R [-r path]...] [--net sock [-D report]] --
 // <command>...` (args after __jail): restrict this process, then become the
 // command. Returns only on failure, with the reason.
 helper(args: ptr) -> string {
@@ -585,9 +585,9 @@ helper(args: ptr) -> string {
     }
     if split < 0 || split + 1 >= n { return "InvalidArguments" }
     if fenced == 0 {
-        if nibjail_restrict(writes) != 0 { return "LandlockUnavailable" }
+        if naebjail_restrict(writes) != 0 { return "LandlockUnavailable" }
     } else {
-        rc = nibjail_fence(writes, wdeny, reads, reads_on, sock, report)
+        rc = naebjail_fence(writes, wdeny, reads, reads_on, sock, report)
         if rc != 0 { return fence_error_(rc) }
     }
     command = list.list_new()

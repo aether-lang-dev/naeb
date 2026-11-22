@@ -12,9 +12,9 @@
 // tool-call identity upstream keeps in a threadlocal travels on the
 // *ToolResult the tool fills in.
 //
-// A host may carry a Recorder (nib.sandbox.record): every settlement
+// A host may carry a Recorder (naeb.sandbox.record): every settlement
 // delivered to JS is recorded there, at the one delivery path. A host may
-// instead carry a Virtual (offline replay, nib.sandbox.replay): no tool is
+// instead carry a Virtual (offline replay, naeb.sandbox.replay): no tool is
 // dispatched; each created call is reported to it, it picks which pending
 // call settles next and with what, and Date and Math.random are fixed.
 //
@@ -38,10 +38,10 @@ import std.os hiding (exec, run_capture, run_pipe, run_pipe_drain_and_wait, run_
     os_run_pipe_raw, os_run_pipe_drain_and_wait_raw, os_run_socket_raw,
     os_run_stdio_raw, os_run_full_raw, os_run_supervised_raw, os_spawn_raw,
     os_spawn_to_raw)
-import nib.sandbox.console
-import nib.sandbox.timing
-import nib.jsonx
-import nib.sandbox.record
+import naeb.sandbox.console
+import naeb.sandbox.timing
+import naeb.jsonx
+import naeb.sandbox.record
 import std.intarr
 
 exports(TOOL_CONCURRENCY, MAX_STOPPED_BYTES, Limits, ToolResult, Host, Outcome, Virtual,
@@ -950,7 +950,7 @@ install_virtual_(st: *State) {
     quickjs.release(q, random_fn)
     rv, rerr = quickjs.eval(q, VIRTUAL_PRELUDE, "<virtual>")
     if rerr != "" {
-        println("nib: sandbox virtual prelude failed: ${rerr}")
+        println("naeb: sandbox virtual prelude failed: ${rerr}")
     } else {
         quickjs.release(q, rv)
     }
@@ -982,7 +982,7 @@ eval(code: string, lp: ptr, host: @keep ptr, cancel: @keep ptr) -> ptr {
     install_(st)
     pv, perr = quickjs.eval(q, PRELUDE, "<prelude>")
     if perr != "" {
-        println("nib: sandbox prelude failed: ${perr}")
+        println("naeb: sandbox prelude failed: ${perr}")
     } else {
         quickjs.release(q, pv)
     }

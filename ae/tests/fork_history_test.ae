@@ -6,9 +6,9 @@
 import std.spec
 import std.list
 import std.string
-import nib.msg
-import nib.provider.types
-import nib.session.fork_history
+import naeb.msg
+import naeb.provider.types
+import naeb.session.fork_history
 
 main() {
     fw = spec.init()

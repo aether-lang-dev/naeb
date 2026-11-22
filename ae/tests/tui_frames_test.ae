@@ -1,7 +1,7 @@
 // Ports the three tests of upstream src/tui/frames.zig under their names.
 // Times are long milliseconds; upstream's `at(0)` is 0.
 import std.spec
-import nib.tui.frames
+import naeb.tui.frames
 
 main() {
     fw = spec.init()

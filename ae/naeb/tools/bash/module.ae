@@ -1,5 +1,5 @@
 // tools.bash: tools.bash in the foreground (upstream src/tools/bash.zig).
-// The command runs as `bash -c "exec 2>&1\n<command>"` in nib's cwd, in its
+// The command runs as `bash -c "exec 2>&1\n<command>"` in naeb's cwd, in its
 // own process group, with credentials scrubbed from its environment, behind
 // the deny-list, and inside the OS write sandbox when workspace mode is on,
 // or inside a project fence's jail (docs/naeb/adr/0001) when one is given.
@@ -13,16 +13,16 @@ import std.os hiding (exec, run_capture, run_pipe, run_pipe_drain_and_wait, run_
 import std.string
 import std.list
 import std.sync
-import nib.jsonx
-import nib.tools.policy
-import nib.tools.secrets
-import nib.tools.process
-import nib.tools.registry
-import nib.tools.progress
-import nib.tools.jail
-import nib.tools.egress
-import nib.tools.denials
-import nib.fence
+import naeb.jsonx
+import naeb.tools.policy
+import naeb.tools.secrets
+import naeb.tools.process
+import naeb.tools.registry
+import naeb.tools.progress
+import naeb.tools.jail
+import naeb.tools.egress
+import naeb.tools.denials
+import naeb.fence
 
 exports(Ctx, Args, Tracker, new_tracker, tick_at, finish_tracker, new_ctx, discard_channel, parse_args, validation_error, timeout_ms_of, check, execute, MAX_OUTPUT,
         DEFAULT_TIMEOUT_MS, child_env)
@@ -34,7 +34,7 @@ const FOREGROUND_PROGRESS_THRESHOLD_MS = 3000
 struct Ctx {
     home: string
     codex_home: string    // "" when unset
-    data_home: string     // nib's own credential directory
+    data_home: string     // naeb's own credential directory
     cancel: ptr           // the Run's (or task's) cancel cell
     registry: ptr         // *registry.Registry
     ids: ptr              // std.sync cell: the Session's bash id counter
@@ -131,11 +131,11 @@ validation_error(ap: ptr) -> string {
 check(cp: ptr, command: string) -> string {
     c = cp as *Ctx
     why = policy.check_credentials(command, c.codex_home, c.data_home)
-    if why != "" { return "refused by nib: ${why}" }
+    if why != "" { return "refused by naeb: ${why}" }
     why2 = policy.check(command, c.home)
     if why2 == "" { return "" }
-    if why2 == policy.too_long() { return "refused by nib: ${why2}" }
-    return "refused by nib: ${why2}. If it is really needed, ask the user to run it."
+    if why2 == policy.too_long() { return "refused by naeb: ${why2}" }
+    return "refused by naeb: ${why2}. If it is really needed, ask the user to run it."
 }
 
 // The child's environment: c.env (or this process's) without credentials.

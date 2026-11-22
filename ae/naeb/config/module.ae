@@ -1,19 +1,19 @@
-// config: $NIB_HOME/config.toml and the environment (upstream src/config.zig).
+// config: $NAEB_HOME/config.toml and the environment (upstream src/config.zig).
 //
-// The environment is a value (nib.config.env), passed to every function that
+// The environment is a value (naeb.config.env), passed to every function that
 // reads it: home(env), resolve(env, ...), load(env, home), save_model(env, ...).
 // Failures follow the Go-style convention: an error name ("" for success) and,
 // where upstream fills one, a detail line "path:line: message" (or
-// "NIB_X: expected ...") in the last slot.
+// "NAEB_X: expected ...") in the last slot.
 //
 // Not ported, by policy (API keys only): the Codex provider. `codex` is not a
 // known id, so `provider = "codex"` is a configuration error; a `[codex]`
 // section is validated as upstream (so files written for upstream load) and
 // ignored, and with it the keys transport / reasoning_summary / run_tool, the
-// NIB_CODEX_TRANSPORT / NIB_CODEX_RUN_TOOL / NIB_AUTH_ISSUER / CODEX_HOME
+// NAEB_CODEX_TRANSPORT / NAEB_CODEX_RUN_TOOL / NAEB_AUTH_ISSUER / CODEX_HOME
 // variables and the Codex login in credentialed() are gone. The service a
 // config without a provider selects is the first of startup_order() (anthropic),
-// where upstream's was codex. NIB_REASONING_SUMMARY (off|auto) stays, file key
+// where upstream's was codex. NAEB_REASONING_SUMMARY (off|auto) stays, file key
 // gone with its section.
 //
 // Integers are 64-bit: a context_window above 2^63-1 is refused as not a
@@ -22,11 +22,11 @@
 import std.string
 import std.list
 import std.fs
-import nib.jsonx
-import nib.config.env
-import nib.provider.types
-import nib.auth.store
-import nib.tools.atomic_file
+import naeb.jsonx
+import naeb.config.env
+import naeb.provider.types
+import naeb.auth.store
+import naeb.tools.atomic_file
 
 exports(File, Prov, Switch, Custom, ModelEntry, Val, DEFAULT_PROVIDER, home, load, parse, parse_value,
         resolve, apply_store, credentialed, startup_order, custom_providers, endpoint_id_problem,
@@ -34,7 +34,7 @@ exports(File, Prov, Switch, Custom, ModelEntry, Val, DEFAULT_PROVIDER, home, loa
         save_skill, save_mcp, load_skills, load_mcp, skill_enabled, enabled_skills, rewrite_value)
 
 const DEFAULT_PROVIDER = "anthropic"
-const SECRET_MSG = "secrets are not allowed; use NIB_API_KEY or DEEPSEEK_API_KEY (Codex uses CODEX_HOME/auth.json)"
+const SECRET_MSG = "secrets are not allowed; use NAEB_API_KEY or DEEPSEEK_API_KEY (Codex uses CODEX_HOME/auth.json)"
 
 // section numbers
 const SEC_TOP = 0
@@ -313,11 +313,11 @@ newline_of_(text: string) -> string {
 
 // ---- home ---------------------------------------------------------------
 
-// NIB_HOME, else $HOME/.nib. (path, "") or ("", "MissingHome").
+// NAEB_HOME, else $HOME/.naeb. (path, "") or ("", "MissingHome").
 home(envp: ptr) -> (string, string) {
-    if env.has(envp, "NIB_HOME") == 1 { return env.get(envp, "NIB_HOME"), "" }
+    if env.has(envp, "NAEB_HOME") == 1 { return env.get(envp, "NAEB_HOME"), "" }
     if env.has(envp, "HOME") == 0 { return "", "MissingHome" }
-    return join_(env.get(envp, "HOME"), ".nib"), ""
+    return join_(env.get(envp, "HOME"), ".naeb"), ""
 }
 
 // ---- value parsing ------------------------------------------------------
@@ -1139,8 +1139,8 @@ resolve(envp: ptr, text: string, path: string) -> (ptr, string, string) {
     if fp == null { return null, "InvalidConfig", d }
     file = fp as *File
     name = DEFAULT_PROVIDER
-    if env.has(envp, "NIB_PROVIDER") == 1 {
-        name = env.get(envp, "NIB_PROVIDER")
+    if env.has(envp, "NAEB_PROVIDER") == 1 {
+        name = env.get(envp, "NAEB_PROVIDER")
     } else if file.provider_set == 1 {
         name = file.provider_name
     }
@@ -1158,7 +1158,7 @@ resolve(envp: ptr, text: string, path: string) -> (ptr, string, string) {
         }
         i = i + 1
     }
-    if builtin == 0 && (found == 0 || name == "custom") { return null, "InvalidProvider", "NIB_PROVIDER: unknown provider '${name}'" }
+    if builtin == 0 && (found == 0 || name == "custom") { return null, "InvalidProvider", "NAEB_PROVIDER: unknown provider '${name}'" }
     e_base = settings.base_url
     e_model = settings.model
     e_envs = list.list_new()
@@ -1168,16 +1168,16 @@ resolve(envp: ptr, text: string, path: string) -> (ptr, string, string) {
         e_envs = types.definition_key_envs(name)
     }
     model = e_model
-    if env.has(envp, "NIB_MODEL") == 1 {
-        model = env.get(envp, "NIB_MODEL")
+    if env.has(envp, "NAEB_MODEL") == 1 {
+        model = env.get(envp, "NAEB_MODEL")
     } else if settings.model_set == 1 {
         model = settings.model
     }
     window = 0 as long
-    if env.has(envp, "NIB_CONTEXT_WINDOW") == 1 {
-        n = parse_uint_(env.get(envp, "NIB_CONTEXT_WINDOW"))
-        if n < (0 as long) { return null, "InvalidContextWindow", "NIB_CONTEXT_WINDOW: expected a positive integer" }
-        if n == (0 as long) { return null, "InvalidContextWindow", "NIB_CONTEXT_WINDOW: must be greater than zero" }
+    if env.has(envp, "NAEB_CONTEXT_WINDOW") == 1 {
+        n = parse_uint_(env.get(envp, "NAEB_CONTEXT_WINDOW"))
+        if n < (0 as long) { return null, "InvalidContextWindow", "NAEB_CONTEXT_WINDOW: expected a positive integer" }
+        if n == (0 as long) { return null, "InvalidContextWindow", "NAEB_CONTEXT_WINDOW: must be greater than zero" }
         window = n
     } else if settings.context_window >= (0 as long) {
         window = settings.context_window
@@ -1189,12 +1189,12 @@ resolve(envp: ptr, text: string, path: string) -> (ptr, string, string) {
         } else if name == "chat_completions" {
             window = 1000000 as long
         } else {
-            return null, "InvalidConfig", detail_(path, settings.model_line, "unknown model context window; set context_window or NIB_CONTEXT_WINDOW")
+            return null, "InvalidConfig", detail_(path, settings.model_line, "unknown model context window; set context_window or NAEB_CONTEXT_WINDOW")
         }
     }
     base_url = e_base
-    if env.has(envp, "NIB_BASE_URL") == 1 {
-        base_url = env.get(envp, "NIB_BASE_URL")
+    if env.has(envp, "NAEB_BASE_URL") == 1 {
+        base_url = env.get(envp, "NAEB_BASE_URL")
     } else if settings.base_set == 1 {
         base_url = settings.base_url
     }
@@ -1218,33 +1218,33 @@ resolve(envp: ptr, text: string, path: string) -> (ptr, string, string) {
     }
     c.simple = file.simple
     if file.open_set == 1 { c.open = string.copy(file.open) }
-    if env.has(envp, "NIB_REASONING_SUMMARY") == 1 {
-        v = env.get(envp, "NIB_REASONING_SUMMARY")
-        if v != "off" && v != "auto" { return null, "InvalidConfig", "NIB_REASONING_SUMMARY: expected off or auto" }
+    if env.has(envp, "NAEB_REASONING_SUMMARY") == 1 {
+        v = env.get(envp, "NAEB_REASONING_SUMMARY")
+        if v != "off" && v != "auto" { return null, "InvalidConfig", "NAEB_REASONING_SUMMARY: expected off or auto" }
         c.reasoning_summary = string.copy(v)
     }
-    if env.has(envp, "NIB_RUN_OUTPUT_BYTES") == 1 {
-        n2 = parse_uint_(env.get(envp, "NIB_RUN_OUTPUT_BYTES"))
-        if n2 < (16384 as long) || n2 > (16777216 as long) { return null, "InvalidConfig", "NIB_RUN_OUTPUT_BYTES: expected 16384..16777216 bytes" }
+    if env.has(envp, "NAEB_RUN_OUTPUT_BYTES") == 1 {
+        n2 = parse_uint_(env.get(envp, "NAEB_RUN_OUTPUT_BYTES"))
+        if n2 < (16384 as long) || n2 > (16777216 as long) { return null, "InvalidConfig", "NAEB_RUN_OUTPUT_BYTES: expected 16384..16777216 bytes" }
         lim = c.limits as *types.Limits
         lim.run_output_bytes = n2 as int
     }
-    if env.has(envp, "NIB_THINKING") == 0 && env.has(envp, "NIB_REASONING_EFFORT") == 0 {
+    if env.has(envp, "NAEB_THINKING") == 0 && env.has(envp, "NAEB_REASONING_EFFORT") == 0 {
         if file.effort_set == 1 { types.set_effort(cp, file.effort) }
     }
-    if env.has(envp, "NIB_THINKING") == 1 {
-        v2 = env.get(envp, "NIB_THINKING")
+    if env.has(envp, "NAEB_THINKING") == 1 {
+        v2 = env.get(envp, "NAEB_THINKING")
         if v2 == "on" {
             c.thinking = 1
         } else if v2 == "off" {
             c.thinking = 0
         } else {
-            return null, "InvalidThinking", "NIB_THINKING: expected on or off"
+            return null, "InvalidThinking", "NAEB_THINKING: expected on or off"
         }
     }
-    if env.has(envp, "NIB_REASONING_EFFORT") == 1 {
-        v3 = env.get(envp, "NIB_REASONING_EFFORT")
-        if types.effort_known(v3) == 0 { return null, "InvalidReasoningEffort", "NIB_REASONING_EFFORT: expected default|off|none|minimal|low|medium|high|xhigh|max" }
+    if env.has(envp, "NAEB_REASONING_EFFORT") == 1 {
+        v3 = env.get(envp, "NAEB_REASONING_EFFORT")
+        if types.effort_known(v3) == 0 { return null, "InvalidReasoningEffort", "NAEB_REASONING_EFFORT: expected default|off|none|minimal|low|medium|high|xhigh|max" }
         if v3 == "off" {
             c.thinking = 0
         } else if v3 != "default" {
@@ -1269,7 +1269,7 @@ resolve(envp: ptr, text: string, path: string) -> (ptr, string, string) {
     c.api_key = string.copy(key)
     if string.length(key) > 0 { c.key_source = "env" }
     h, herr = home(envp)
-    if herr == "" { c.nib_home = string.copy(h) }
+    if herr == "" { c.naeb_home = string.copy(h) }
     c.enabled_skills = enabled_skills(file.skills)
     c.hooks_after_edit = copy_strings_(file.hooks_after_edit)
     c.hooks_turn_end = copy_strings_(file.hooks_turn_end)
@@ -1279,14 +1279,14 @@ resolve(envp: ptr, text: string, path: string) -> (ptr, string, string) {
         j = j + 1
     }
     c.sandbox_workspace = file.sandbox_workspace
-    if env.has(envp, "NIB_SANDBOX") == 1 {
-        v4 = env.get(envp, "NIB_SANDBOX")
+    if env.has(envp, "NAEB_SANDBOX") == 1 {
+        v4 = env.get(envp, "NAEB_SANDBOX")
         if v4 == "workspace" {
             c.sandbox_workspace = 1
         } else if v4 == "off" {
             c.sandbox_workspace = 0
         } else {
-            return null, "InvalidConfig", "NIB_SANDBOX: expected workspace or off"
+            return null, "InvalidConfig", "NAEB_SANDBOX: expected workspace or off"
         }
     }
     home_dir = env.get(envp, "HOME")
@@ -1301,7 +1301,7 @@ resolve(envp: ptr, text: string, path: string) -> (ptr, string, string) {
 
 // ---- the stored key and startup choice --------------------------------------
 
-// Fills a missing key from nib's own store; environment keys win.
+// Fills a missing key from naeb's own store; environment keys win.
 apply_store(home_path: string, cp: ptr) {
     c = cp as *types.Config
     if string.length(c.api_key) > 0 { return }
@@ -1344,14 +1344,14 @@ pick_credentialed_(envp: ptr, home_path: string, text: string, path: string) -> 
         i = i + 1
     }
     picked = env.clone(envp)
-    env.remove(picked, "NIB_MODEL")
-    env.remove(picked, "NIB_BASE_URL")
-    env.remove(picked, "NIB_CONTEXT_WINDOW")
+    env.remove(picked, "NAEB_MODEL")
+    env.remove(picked, "NAEB_BASE_URL")
+    env.remove(picked, "NAEB_CONTEXT_WINDOW")
     j = 0
     while j < list.list_size(names) {
         nm, _g = list.get_string(names, j)
         j = j + 1
-        env.set(picked, "NIB_PROVIDER", nm)
+        env.set(picked, "NAEB_PROVIDER", nm)
         cp, err, _d2 = resolve(picked, text, path)
         if err != "" { continue }
         apply_store(home_path, cp)
@@ -1368,7 +1368,7 @@ load(envp: ptr, home_path: string) -> (ptr, string, string) {
     cp, err, detail = resolve(envp, text, path)
     if err != "" { return null, err, detail }
     apply_store(home_path, cp)
-    if env.has(envp, "NIB_PROVIDER") == 0 && credentialed(cp) == 0 {
+    if env.has(envp, "NAEB_PROVIDER") == 0 && credentialed(cp) == 0 {
         picked = pick_credentialed_(envp, home_path, text, path)
         if picked != null { cp = picked }
     }
@@ -1532,14 +1532,14 @@ save_model(envp: ptr, home_path: string, provider_id: string, model: string) -> 
     text, rerr = read_text_(path)
     if rerr != "" { return null, rerr, "" }
     selected = env.clone(envp)
-    env.remove(selected, "NIB_MODEL")
-    env.set(selected, "NIB_PROVIDER", provider_id)
-    if model != "" { env.set(selected, "NIB_MODEL", model) }
+    env.remove(selected, "NAEB_MODEL")
+    env.set(selected, "NAEB_PROVIDER", provider_id)
+    if model != "" { env.set(selected, "NAEB_MODEL", model) }
     cp, err, detail = resolve(selected, text, path)
     if err != "" { return null, err, detail }
     apply_store(home_path, cp)
     c = cp as *types.Config
-    if c.provider == "chat_completions" && c.model != types.definition_default_model("chat_completions") && env.has(envp, "NIB_CONTEXT_WINDOW") == 0 {
+    if c.provider == "chat_completions" && c.model != types.definition_default_model("chat_completions") && env.has(envp, "NAEB_CONTEXT_WINDOW") == 0 {
         fp, d = parse(text, path)
         if fp == null { return null, "InvalidConfig", d }
         if ((fp as *File).chat as *Prov).context_window < (0 as long) { return null, "UnknownModelContextWindow", "" }

@@ -5,7 +5,7 @@ import std.string
 import std.list
 import std.fs
 import term.screen
-import nib.tui.open
+import naeb.tui.open
 
 // One Gr per codepoint, column n, width 1.
 cells_(text: string) -> open.Gr[] {
@@ -80,7 +80,7 @@ main() {
             spec.assert_str_eq(err3, "EmptyTemplate", "empty template")
         }
         spec.it("only existing regular files inside the project resolve, once per path") callback {
-            base, e0 = fs.make_temp_dir("", "nibopen")
+            base, e0 = fs.make_temp_dir("", "naebopen")
             spec.assert_str_eq(e0, "", "make_temp_dir")
             fs.mkdir_p("${base}/project/src")
             fs.write("${base}/project/src/a.zig", "x")
@@ -135,7 +135,7 @@ main() {
             spec.assert_eq(open.count_only("+3 −1"), 1, "counts")
             spec.assert_eq(open.count_only("+ 3"), 0, "bare plus")
             spec.assert_eq(open.count_only(""), 0, "empty")
-            base, e0 = fs.make_temp_dir("", "nibopen")
+            base, e0 = fs.make_temp_dir("", "naebopen")
             spec.assert_str_eq(e0, "", "make_temp_dir")
             fs.mkdir_p("${base}/project/src")
             files = open.files_new()
@@ -145,7 +145,7 @@ main() {
             fs.remove_tree(base)
         }
         spec.it("(extra) launch starts the program detached and reports a missing one") callback {
-            base, e0 = fs.make_temp_dir("", "nibopen")
+            base, e0 = fs.make_temp_dir("", "naebopen")
             spec.assert_str_eq(e0, "", "make_temp_dir")
             cmd = list.list_new()
             list.list_add(cmd, "/usr/bin/touch")

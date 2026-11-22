@@ -19,8 +19,8 @@ import std.os hiding (exec, run_capture, run_pipe, run_pipe_drain_and_wait, run_
     os_run_stdio_raw, os_run_full_raw, os_run_supervised_raw, os_spawn_raw,
     os_spawn_to_raw)
 import std.string
-import nib.jsonx
-import nib.provider.types
+import naeb.jsonx
+import naeb.provider.types
 
 exports(MAX_ATTEMPTS, SLOTS, POINTS, Model, Attempt, Code, ArgSlot,
         new, release, elapsed, reset_attempt, received, received_at, content, finish_attempt,

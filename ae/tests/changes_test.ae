@@ -2,8 +2,8 @@
 import std.spec
 import std.string
 import std.list
-import nib.tools.diff
-import nib.tools.changes
+import naeb.tools.diff
+import naeb.tools.changes
 
 change_(l: ptr, i: int) -> *diff.Change { return list.list_get_raw(l, i) as *diff.Change }
 

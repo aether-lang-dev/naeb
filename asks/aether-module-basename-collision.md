@@ -1,10 +1,10 @@
 # Compiler: two modules with the same basename break each other's qualified types
 
-**From:** the nib Aether port (`aether-port` branch of paul-hammant/nib-code), its Session slice.
+**From:** the naeb Aether port (`aether-port` branch of aether-lang-dev/naeb), its Session slice.
 **To:** aether, aetherc (0.909.0). For whoever is preparing the compiler-bug PR.
 **Workaround meanwhile:** the port names its provider timing module
-`nib.provider.model_timing` instead of `nib.provider.timing`, because
-`nib.sandbox.timing` already exists.
+`naeb.provider.model_timing` instead of `naeb.provider.timing`, because
+`naeb.sandbox.timing` already exists.
 
 When a program contains two modules whose last path component is the same
 (`a.timing` and `b.timing`), a qualified type `timing.T` fails to resolve in

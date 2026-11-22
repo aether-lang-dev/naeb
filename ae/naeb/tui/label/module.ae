@@ -7,7 +7,7 @@
 import std.string
 import std.list
 import std.strbuilder
-import nib.session.tool_summary
+import naeb.session.tool_summary
 
 exports(actual_tool_summary, prompt_prefix)
 

@@ -1,15 +1,15 @@
 // Ports the tests of upstream src/tui/editor.zig under their names.
 // Not ported: the anonymous `test { _ = @import("../tui.zig"); }` (a Zig
 // test-discovery hook, no behaviour).
-// An image is nib.image's Image JSON (image.image_json).
+// An image is naeb.image's Image JSON (image.image_json).
 // Extra tests at the end (not upstream): mention parsing, ghost/placeholder.
 import std.spec
 import std.string
 import std.strbuilder
 import term.screen
 import term.input
-import nib.image
-import nib.tui.editor
+import naeb.image
+import naeb.tui.editor
 
 press_(e: *editor.Editor, cp: int, mods: int) {
     editor.key(e, input.key(cp, mods: mods))

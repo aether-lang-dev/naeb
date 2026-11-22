@@ -6,7 +6,7 @@ import std.spec
 import std.string
 import std.strbuilder
 import term.screen
-import nib.tui.smooth
+import naeb.tui.smooth
 
 repeat_(c: string, n: int) -> string {
     sb = strbuilder.new(64)

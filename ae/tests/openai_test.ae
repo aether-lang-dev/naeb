@@ -12,13 +12,13 @@ import std.string
 import std.list
 import std.json
 import std.fs
-import nib.image
-import nib.jsonx
-import nib.msg
-import nib.provider.types
-import nib.provider.sink
-import nib.provider.sse
-import nib.provider.openai
+import naeb.image
+import naeb.jsonx
+import naeb.msg
+import naeb.provider.types
+import naeb.provider.sink
+import naeb.provider.sse
+import naeb.provider.openai
 
 struct Counter {
     deltas: int
@@ -258,7 +258,7 @@ main() {
             spec.assert_eq(string.index_of(body, "fake-key"), -1, "key not in body")
         }
         spec.it("Chat Completions images use image_url parts and follow tool results in a user message") callback {
-            d, _e = fs.make_temp_dir("", "nib-chat-img")
+            d, _e = fs.make_temp_dir("", "naeb-chat-img")
             shot, serr = image.store("${d}/images", "shot.png", image.sample_png())
             spec.assert_str_eq(serr, "", "stored")
             cl = list.list_new()

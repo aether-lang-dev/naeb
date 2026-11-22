@@ -1,7 +1,7 @@
 // Ports src/tools/diff.zig's tests.
 import std.spec
 import std.string
-import nib.tools.diff
+import naeb.tools.diff
 
 expect_diff_(before: string, after: string, added: int, removed: int, want: string) {
     s = diff.compare(before, after)

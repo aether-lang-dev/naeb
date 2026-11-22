@@ -28,10 +28,10 @@ import std.os hiding (exec, run_capture, run_pipe, run_pipe_drain_and_wait, run_
     os_run_pipe_raw, os_run_pipe_drain_and_wait_raw, os_run_socket_raw,
     os_run_stdio_raw, os_run_full_raw, os_run_supervised_raw, os_spawn_raw,
     os_spawn_to_raw)
-import nib.jsonx
-import nib.lock
-import nib.tools.process
-import nib.tools.egress
+import naeb.jsonx
+import naeb.lock
+import naeb.tools.process
+import naeb.tools.egress
 
 exports(Monitor, Watch, new_monitor, watch, watch_tag, watch_report, take, close, take_child, close_child, parse_event, sbpl_op, LOG, SENTINEL_FILE)
 

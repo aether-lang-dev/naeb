@@ -1,21 +1,21 @@
-// tui: nib's terminal UI, the app (upstream src/tui.zig, with the App-taking
+// tui: naeb's terminal UI, the app (upstream src/tui.zig, with the App-taking
 // parts of src/tui/commands.zig (execute, select, modelSelection),
 // providers.zig and reflect.zig (saveReflection, issueRepo, fileIssues,
 // stopReflecting)).
 //
 // The app takes its terminal (term: a real tty or an in-memory one), its
-// Session (a nib.tui.port.Port: the real Session through nib.tui.live, or a
-// scripted one in specs) and its clock (nib.tui.clock) as explicit
-// instances, plus the environment (nib.config.env) it reads NIB_* from.
+// Session (a naeb.tui.port.Port: the real Session through naeb.tui.live, or a
+// scripted one in specs) and its clock (naeb.tui.clock) as explicit
+// instances, plus the environment (naeb.config.env) it reads NAEB_* from.
 // Nothing is module-level state. Specs drive it in-process: push keys and
 // mouse events into an in-memory terminal, post Session events through the
 // scripted port, call `step`, and read the screen the last render showed.
 //
 // Differences from upstream: terminal input comes from term.poll and app
-// events from the app's own queue (nib.tui.app_queue) as JSON text; the
+// events from the app's own queue (naeb.tui.app_queue) as JSON text; the
 // ticker thread is the poll timeout (an empty poll while busy is a tick);
 // events are handled one at a time with the same frame pacing (frames.due).
-// The clipboard reader is an instance field (`clip`, nib.tui.clipboard),
+// The clipboard reader is an instance field (`clip`, naeb.tui.clipboard),
 // where upstream has a test-only global override.
 
 import std.string
@@ -33,48 +33,48 @@ import std.fs
 import term
 import term.screen
 import term.input
-import nib.jsonx
-import nib.provider.types
-import nib.config
-import nib.config.env
-import nib.auth
-import nib.auth.models
-import nib.tools.changes
-import nib.tools.diff
-import nib.session.tool_summary
-import nib.tui.app_queue
-import nib.tui.port
-import nib.tui.clock
-import nib.tui.turn
-import nib.tui.frames
-import nib.tui.format
-import nib.tui.mode
-import nib.tui.bill
-import nib.tui.turn_summary
-import nib.tui.entry
-import nib.tui.transcript
-import nib.tui.turn_changes
-import nib.tui.agent_tree
-import nib.tui.editor
-import nib.tui.viewport
-import nib.tui.sel_history
-import nib.tui.selection
-import nib.tui.status
-import nib.tui.commands
-import nib.tui.menu
-import nib.tui.paths
-import nib.tui.tui_view
-import nib.tui.title
-import nib.tui.open
-import nib.tui.tasks
-import nib.tui.prediction
-import nib.tui.provider_flow
-import nib.tui.reflect
-import nib.tui.long_text
-import nib.tui.clipboard
-import nib.tui.fence_offer
-import nib.image
-import nib.session.skills
+import naeb.jsonx
+import naeb.provider.types
+import naeb.config
+import naeb.config.env
+import naeb.auth
+import naeb.auth.models
+import naeb.tools.changes
+import naeb.tools.diff
+import naeb.session.tool_summary
+import naeb.tui.app_queue
+import naeb.tui.port
+import naeb.tui.clock
+import naeb.tui.turn
+import naeb.tui.frames
+import naeb.tui.format
+import naeb.tui.mode
+import naeb.tui.bill
+import naeb.tui.turn_summary
+import naeb.tui.entry
+import naeb.tui.transcript
+import naeb.tui.turn_changes
+import naeb.tui.agent_tree
+import naeb.tui.editor
+import naeb.tui.viewport
+import naeb.tui.sel_history
+import naeb.tui.selection
+import naeb.tui.status
+import naeb.tui.commands
+import naeb.tui.menu
+import naeb.tui.paths
+import naeb.tui.tui_view
+import naeb.tui.title
+import naeb.tui.open
+import naeb.tui.tasks
+import naeb.tui.prediction
+import naeb.tui.provider_flow
+import naeb.tui.reflect
+import naeb.tui.long_text
+import naeb.tui.clipboard
+import naeb.tui.fence_offer
+import naeb.image
+import naeb.session.skills
 
 exports(App, new, free, start, run, step, settle, handle_input, handle_app, on_key, submit, render,
         report, toggle_simple, toggle_entry, click_entry, append_bill, finish_queued, execute, fence_text,
@@ -270,7 +270,7 @@ post(a: *App, json: string) -> bool { return app_queue.post(a.q, json) }
 // ---------------------------------------------------------------- lifecycle
 
 // An app over a terminal, a Session port and a clock. `envp` is the
-// environment (nib.config.env). `cwd` is the working directory ("" reads it).
+// environment (naeb.config.env). `cwd` is the working directory ("" reads it).
 new(t: @keep ptr, p: @keep ptr, clk: @keep ptr, envp: @keep ptr) -> *App {
     a = heap.new(App)
     a.t = t as *term.Terminal
@@ -570,7 +570,7 @@ env_get_(a: *App, name: string) -> string {
 }
 
 issue_repo_(a: *App) -> string {
-    repo = env_get_(a, "NIB_ISSUE_REPO")
+    repo = env_get_(a, "NAEB_ISSUE_REPO")
     if repo == "" {
         return ""
     }
@@ -1788,7 +1788,7 @@ file_issues_(a: *App, answer: string, reflections_path: string) {
     }
     string sid = call(a.p.session_id, a.p.ctx)
     short = if string.length(sid) > 8 { string.substring(sid, 0, 8) } else { sid }
-    job = reflect.issues_new(ds, repo, reflections_path, short, env_get_(a, "HOME"), a.cwd, "_Filed automatically by nib /reflect · nib 0.13.0-ae · ${(a.cfg as *types.Config).model} · effort ${effective_effort_(a)} · session ${short}_")
+    job = reflect.issues_new(ds, repo, reflections_path, short, env_get_(a, "HOME"), a.cwd, "_Filed automatically by naeb /reflect · naeb 0.13.0-ae · ${(a.cfg as *types.Config).model} · effort ${effective_effort_(a)} · session ${short}_")
     qq = a.q
     reflect.issues_start(job, a.gh, |text: string| {
         app_queue.post(qq, "{\"issue\":${jsonx.quote(text)}}")
@@ -1879,9 +1879,9 @@ select_model(a: *App, provider_id: string, model: string, note: string) {
     a.cfg = fresh_cfg
     a.context = stats_context_(a)
     refresh_credentials(a)
-    has_p = env_get_(a, "NIB_PROVIDER") != ""
-    has_m = env_get_(a, "NIB_MODEL") != ""
-    override = if has_p && has_m { " · NIB_PROVIDER/NIB_MODEL override at startup" } else if has_p { " · NIB_PROVIDER overrides at startup" } else if has_m { " · NIB_MODEL overrides at startup" } else { "" }
+    has_p = env_get_(a, "NAEB_PROVIDER") != ""
+    has_m = env_get_(a, "NAEB_MODEL") != ""
+    override = if has_p && has_m { " · NAEB_PROVIDER/NAEB_MODEL override at startup" } else if has_p { " · NAEB_PROVIDER overrides at startup" } else if has_m { " · NAEB_MODEL overrides at startup" } else { "" }
     fresh_note = if fresh { " · new session" } else { "" }
     if note != "" {
         report(a, entry.KIND_INFO, "${note}${fresh_note}${override}")

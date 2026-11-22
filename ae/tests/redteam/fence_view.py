@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The effective policy, visible (docs/naeb/adr/0001): tools.fence() returns
 the fence in force as data, the same in a sub-agent, with the naeb.ae and
-policy library it came from and their SHA-256s; nib has no tools.fence.
+policy library it came from and their SHA-256s; the unfenced build has no tools.fence.
 
 Local only: a fixture HOME of fake files, a fixture project whose naeb.ae
 (allowing a host under `.invalid`) is built by `naeb build -y` against this
@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.join(ROOT, "tests"))
 from mock_providers import Mock  # noqa: E402
 
 NAEB = os.environ.get("NAEB", os.path.join(ROOT, "target/build/bin/naeb"))
-NIB = os.environ.get("NIB", os.path.join(os.path.dirname(NAEB), "nib"))
+UNFENCED = os.environ.get("NAEB_UNFENCED", os.path.join(os.path.dirname(NAEB), "naeb-unfenced"))
 
 POLICY = """import naeb.policy
 
@@ -57,18 +57,18 @@ def main():
     atexit.register(shutil.rmtree, work, True)
     home = os.path.realpath(os.path.join(work, "home"))
     proj = os.path.join(home, "work", "proj")
-    nib_home = os.path.join(home, ".nib")
+    naeb_home = os.path.join(home, ".naeb")
     os.makedirs(os.path.join(proj, ".git"))
     os.makedirs(os.path.join(proj, "generated"))
     os.makedirs(os.path.join(home, ".m2", "repository"))
     os.makedirs(os.path.join(home, ".ssh"))
-    os.makedirs(nib_home)
+    os.makedirs(naeb_home)
     with open(os.path.join(proj, "naeb.ae"), "w") as f:
         f.write(POLICY)
     env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "HOME": home,
-        "NIB_HOME": nib_home,
+        "NAEB_HOME": naeb_home,
         "NAEB_SRC": ROOT,
         "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
         "LANG": "C.UTF-8",
@@ -118,13 +118,13 @@ def main():
     d = json.loads(json.loads(p.stdout.strip().splitlines()[-1])) if p.returncode == 0 else {}
     check("default-fence", d.get("policy", "missing") is None and d.get("hosts") == [], "the default fence was %r" % d)
 
-    # nib: no fence, no tools.fence.
-    p = subprocess.run([NIB, "js", "typeof tools.fence"], cwd=proj, env=env, capture_output=True, text=True, timeout=120)
-    check("nib-has-none", p.stdout.strip().endswith('"undefined"'), "nib said %r" % p.stdout[-200:])
+    # unfenced: no fence, no tools.fence.
+    p = subprocess.run([UNFENCED, "js", "typeof tools.fence"], cwd=proj, env=env, capture_output=True, text=True, timeout=120)
+    check("naeb-has-none", p.stdout.strip().endswith('"undefined"'), "the unfenced build said %r" % p.stdout[-200:])
 
     # A sub-agent sees the same fence as its parent.
     mock = Mock("chat_completions", code=AGENT_CODE)
-    menv = dict(env, NIB_PROVIDER="chat_completions", NIB_API_KEY=mock.key, NIB_BASE_URL=mock.url)
+    menv = dict(env, NAEB_PROVIDER="chat_completions", NAEB_API_KEY=mock.key, NAEB_BASE_URL=mock.url)
     a = subprocess.run([NAEB, "ask", "--json", "probe"], cwd=proj, env=menv, capture_output=True, text=True, timeout=300)
     tool = [c["content"] for _, _, req in mock.requests for c in req.get("messages", []) if c.get("role") == "tool"]
     mock.close()
