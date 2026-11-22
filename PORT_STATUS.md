@@ -25,7 +25,7 @@ The Aether sources live under `ae/`, beside the Zig originals, which stay
 untouched so `main` merges in cleanly:
 
 ```
-ae/main.ae               the binary's entry (name set once, in .build.ae's output())
+ae/naeb_unfenced_main.ae, ae/naeb_main.ae   the two binaries' entries (names set once, in .build.ae's output())
 ae/naeb/<concept>/        one module per upstream file or concept, imported as naeb.<concept>
                          (the naeb. prefix keeps them clear of std and aeb module names,
                          e.g. aeb's own `sandbox` SDK)
@@ -39,6 +39,15 @@ asks/                    what the port needs from Aether, written up for upstrea
 .build.ae, .tests.ae     aeb: `aeb .build.ae` builds target/build/bin/naeb-unfenced, `aeb .tests.ae` runs the suites
 pins                     AE_PIN / AEB_REF the port is verified against
 ```
+
+Names. The port is `naeb`; upstream is `nib`. `naeb` is the fenced command
+and `naeb-unfenced` the same agent with no fence (upstream's behaviour);
+configuration is `NAEB_*` and `~/.naeb`, where upstream has `NIB_*` and
+`~/.nib`. Upstream's own end-to-end tests, which are unchanged and hard-code
+`zig-out/bin/nib` and `NIB_*`, are run through `ae/tests/nib-oracle-launcher.py`,
+which translates the names (see `ae/tests/upstream-e2e.sh`). The Session log
+header keeps upstream's `nib_version` field so upstream's `scripts/stats.py`
+reads it.
 
 ## Decisions (Paul, 2026-11-12)
 
