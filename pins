@@ -52,7 +52,12 @@
 # the runner, a 12-character checkout path), the one failure being ae/tests/redteam/run.sh,
 # which passes alone from the same path (200 checks, 0 failures); the generated C of all 94
 # programs is the same on 0.934.0 and 0.935.0. Mocks and fixtures only, no provider traffic.
-AE_PIN=0.935.0
+# 0.936.0 (2026-11-22): a tracking-only bump, no new primitive needed and no source
+# change. Verified: aeb .tests.ae 88 of 89 on ae-x64 (Ubuntu 22.04 x86_64, aeb main as
+# the runner, a 60-character checkout path), the one failure being ae/tests/redteam/run.sh,
+# which fails there because the egress proxy's socket path is too long for that checkout
+# path and passes alone from a 6-character path (0 holes). Mocks and fixtures only, no provider traffic.
+AE_PIN=0.936.0
 
 # v0.344 (2026-11-12): aether.program and aether.program_test with lib().
 # v0.347 (2026-11-15): `aeb .tests.ae` refuses an unclosed or nested builder
