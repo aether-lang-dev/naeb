@@ -136,7 +136,12 @@ cd your-project
 naeb                          # interactive
 naeb ask 'explain the entry points'
 naeb -c                       # continue the last session here
+naeb --mode unfenced ask '...'   # no project fence, as upstream's nib behaves
 ```
+
+`naeb` is fenced by default (see below); `--mode unfenced` must be the first two
+arguments and is announced on stderr. Run the installed `naeb` from your project:
+it refuses to start from a binary inside a directory the fence lets commands write.
 
 On first run, start `naeb` and use `/provider` to choose a service and paste
 its API key. The key is entered masked and stored in `~/.naeb/auth.json` with
