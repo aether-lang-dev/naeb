@@ -106,6 +106,27 @@ main() {
             spec.assert_str_eq(read_(path), "one 2 2\n", "content")
             fs.remove_tree(d)
         }
+        spec.it("edit reports factual hints when old_text is not found") callback {
+            d = tmp_()
+            s = tools.new_scope(new_tools_(d), 1)
+            path = "${d}/h.txt"
+            fs.write(path, "alpha\n    beta_target()\ngamma\n")
+            rr = call_(s, "read", "{\"path\":${jsonx.quote(path)}}")
+            spec.assert_eq(rr.ok, 1, "read ok")
+            // Wrong indentation: the closest line, without claiming an external change.
+            ir = call_(s, "edit", "{\"path\":${jsonx.quote(path)},\"old_text\":\"\\tbeta_target()\\n\",\"new_text\":\"x\"}")
+            spec.assert_eq(ir.ok, 0, "refused")
+            spec.assert_true(string.index_of(ir.text, "closest line: L2") >= 0, "closest line: ${ir.text}")
+            spec.assert_true(string.index_of(ir.text, "file changed") < 0, "no change claimed: ${ir.text}")
+            // External modification: both facts.
+            fs.write(path, "changed\nalpha\n    beta_target()\ngamma\n")
+            cr = call_(s, "edit", "{\"path\":${jsonx.quote(path)},\"old_text\":\"\\tbeta_target()\\n\",\"new_text\":\"x\"}")
+            spec.assert_true(string.index_of(cr.text, "file changed since last read/write") >= 0, "change: ${cr.text}")
+            spec.assert_true(string.index_of(cr.text, "closest line: L3") >= 0, "line: ${cr.text}")
+            nr = call_(s, "edit", "{\"path\":${jsonx.quote(path)},\"old_text\":\"absent\",\"new_text\":\"x\"}")
+            spec.assert_true(string.index_of(nr.text, "closest line") < 0, "no line for text that is nowhere: ${nr.text}")
+            fs.remove_tree(d)
+        }
         spec.it("read slices lines and reports errors") callback {
             d = tmp_()
             s = tools.new_scope(new_tools_(d), 1)

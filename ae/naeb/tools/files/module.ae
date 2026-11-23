@@ -279,6 +279,47 @@ leaf_refused_(c: *Ctx, raw: string, dir: string, fold: int, leaf: string) -> str
     return ""
 }
 
+// ASCII whitespace an edit hint ignores around a line.
+trim_hint_(s: string) -> string {
+    from = 0
+    to = string.length(s)
+    while from < to && (s[from] == 32 || s[from] == 9 || s[from] == 13) { from = from + 1 }
+    while to > from && (s[to - 1] == 32 || s[to - 1] == 9 || s[to - 1] == 13) { to = to - 1 }
+    return string.substring(s, from, to)
+}
+
+// The 1-based line of `data` that old_text's first non-blank line (trimmed)
+// equals, else the first that contains it when it is 8 or more bytes; 0 none
+// (upstream closestLine).
+closest_line_(data: string, old_text: string) -> int {
+    needle = ""
+    olds = string.split(old_text, "\n")
+    for i in 0..string.array_size(olds) {
+        t = trim_hint_(string.array_get(olds, i))
+        if string.length(t) > 0 {
+            needle = t
+            break
+        }
+    }
+    string.string_array_free(olds)
+    if string.length(needle) == 0 { return 0 }
+    lines = string.split(data, "\n")
+    substring_hit = 0
+    found = 0
+    n = string.array_size(lines)
+    for j in 0..n {
+        t2 = trim_hint_(string.array_get(lines, j))
+        if t2 == needle {
+            found = j + 1
+            break
+        }
+        if substring_hit == 0 && string.length(needle) >= 8 && string.index_of(t2, needle) >= 0 { substring_hit = j + 1 }
+    }
+    string.string_array_free(lines)
+    if found > 0 { return found }
+    return substring_hit
+}
+
 edit(cp: ptr, args: string) -> (int, string) {
     c = cp as *Ctx
     usage = "expected { path: string, old_text: string, new_text: string, all?: boolean }"
@@ -311,7 +352,15 @@ edit(cp: ptr, args: string) -> (int, string) {
     }
     count = count_occurrences(data, old_text)
     if count == 0 {
+        // Facts only: the file changed since this session saw it, and the line nearest old_text.
+        changed = 0
+        st, stk, _stm = fs.stat(path, 1)
+        if stk == fs.KIND_OK && file_state.changed(c.state, path, st) == 1 { changed = 1 }
+        closest = closest_line_(data, old_text)
         file_state.unlock(fd)
+        if changed == 1 && closest > 0 { return 0, "old_text not found in ${raw}; file changed since last read/write; closest line: L${closest}" }
+        if changed == 1 { return 0, "old_text not found in ${raw}; file changed since last read/write" }
+        if closest > 0 { return 0, "old_text not found in ${raw}; closest line: L${closest}" }
         return 0, "old_text not found in ${raw}"
     }
     if count > 1 && all == 0 {

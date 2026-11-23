@@ -129,7 +129,7 @@ out (below).
 | 019eefc | retained Profile shown in status after resume | ported: the header's model, family and profile survive restore (a fork header keeps no profile), `session.resume_notice`, the `/status` line; `test_model` green |
 | 8bf2b98 | `tools.wait` guidance and execution in forked sessions | ported (823c6fa; the guidance wording with the final prompt) |
 | b44af92 | Codex fast mode | out by policy (Codex) |
-| b673d15 | config and log split into modules, edit hints, `/compact focus` | **not yet**: the module split is Zig structure (not ported as such); the edit hints and `/compact` focus are behaviour |
+| b673d15 | config and log split into modules, edit hints, `/compact focus` | ported: the edit hints (`closest line: Ln`, `file changed since last read/write`) and `/compact [focus]`; the module split is Zig structure and is not ported |
 | f7ed5ea | full truncated Run and background outputs saved to session files | ported (76376fb) |
 | 0540bfe | grep prefilter by required literal | ported (99b68ad) |
 
