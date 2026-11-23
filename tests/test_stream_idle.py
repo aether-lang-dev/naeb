@@ -17,7 +17,7 @@ from mock_stream_idle import Mock
 from test_llm import records
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "ae/tests/naeb-unfenced"
+BIN = ROOT / "ae/tests/run-unfenced"
 
 
 class StreamIdleTests:

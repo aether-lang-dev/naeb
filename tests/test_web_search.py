@@ -9,7 +9,7 @@ import unittest
 from mock_providers import Mock
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "ae/tests/naeb-unfenced"
+BIN = ROOT / "ae/tests/run-unfenced"
 
 CODE = """const found = await tools.search({query: "zig", count: 2});
 const unsearched = await tools.search({query: "nosearch"});

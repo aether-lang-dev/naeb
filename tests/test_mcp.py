@@ -11,7 +11,7 @@ from mock_mcp import HTTP
 from mock_providers import Mock
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "ae/tests/naeb-unfenced"
+BIN = ROOT / "ae/tests/run-unfenced"
 
 
 class MCP(unittest.TestCase):

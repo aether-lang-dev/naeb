@@ -1,7 +1,7 @@
 #!/bin/sh
 # ae/tests/upstream-e2e.sh: run upstream's Python end-to-end tests against the
 # Aether binary. tests/ is upstream's, edited only where a word pins the old
-# name (checked below); they drive ae/tests/naeb-unfenced, which runs the built
+# name (checked below); they drive ae/tests/run-unfenced, which runs the built
 # naeb with --mode unfenced.
 # Every test drives local mocks only (tests/mock_*.py); none reaches a real
 # provider.

@@ -15,7 +15,7 @@ import test_interjections as tui
 from test_interjections import Reply, fixture, history, wait_for
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "ae/tests/naeb-unfenced"
+BIN = ROOT / "ae/tests/run-unfenced"
 PNG = b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + struct.pack(">II", 640, 480) + b"\x08\x06\x00\x00\x00"
 ENCODED = base64.b64encode(PNG).decode()
 DATA_URL = "data:image/png;base64," + ENCODED

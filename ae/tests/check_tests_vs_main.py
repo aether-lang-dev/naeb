@@ -15,7 +15,7 @@ RULES = [  # (this branch's text, upstream's text); applied in this order
     (r"naeb_version", "nib_version"),
     (r"refused by naeb", "refused by nib"),
     (r"You are naeb", "You are nib"),
-    (r"ae/tests/naeb-unfenced", "zig-out/bin/nib"),
+    (r"ae/tests/run-unfenced", "zig-out/bin/nib"),
     (r"\.naeb-\*", ".nib-*"),
     (r"\.naeb/skills", ".nib/skills"),
     (r"\.naeb/sessions", ".nib/sessions"),

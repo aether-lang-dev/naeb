@@ -8,7 +8,7 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "ae/tests/naeb-unfenced"
+BIN = ROOT / "ae/tests/run-unfenced"
 
 
 def main():

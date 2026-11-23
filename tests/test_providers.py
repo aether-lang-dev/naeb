@@ -9,7 +9,7 @@ import unittest
 from mock_providers import Mock
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "ae/tests/naeb-unfenced"
+BIN = ROOT / "ae/tests/run-unfenced"
 
 
 class Providers(unittest.TestCase):

@@ -10,7 +10,7 @@ import std.fs
 import std.list
 import std.string
 
-// The Session header's nib_version carries the commit, as upstream's
+// The Session header's naeb_version carries the commit, as upstream's
 // build.zig does: written to a gitignored header the build_info module's C
 // side includes when present, with this checkout's path (naeb build
 // compiles policies against its ae/policy_lib).

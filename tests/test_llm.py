@@ -16,7 +16,7 @@ import unittest
 from mock_llm_tool import SCHEMA, SYSTEM, USAGE, content
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "ae/tests/naeb-unfenced"
+BIN = ROOT / "ae/tests/run-unfenced"
 INPUT = "独立 input 🙂\n第二行"
 
 

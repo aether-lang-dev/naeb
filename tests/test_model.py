@@ -52,7 +52,7 @@ def test_model(tmp):
         assert 'model = "claude-sonnet-5-5"' in text
         old = [json.loads(line) for line in (home / "sessions" / (original + ".jsonl")).read_text().splitlines()]
         assert old[-1].get("model") == "gpt-6.1-terra"
-        resumed = subprocess.run([str(Path(__file__).resolve().parents[1] / "ae/tests/naeb-unfenced"), "ask", "--resume", original, "again resumed"], cwd=tmp, env={**env, "NAEB_PROVIDER": "openai", "NAEB_MODEL": "gpt-6.1-terra"}, capture_output=True, text=True, timeout=15)
+        resumed = subprocess.run([str(Path(__file__).resolve().parents[1] / "ae/tests/run-unfenced"), "ask", "--resume", original, "again resumed"], cwd=tmp, env={**env, "NAEB_PROVIDER": "openai", "NAEB_MODEL": "gpt-6.1-terra"}, capture_output=True, text=True, timeout=15)
         assert resumed.returncode == 0, resumed.stderr
         assert "mock answer" in resumed.stdout
         assert not first.errors and not second.errors, (first.errors, second.errors)

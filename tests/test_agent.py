@@ -18,7 +18,7 @@ from mock_agent import USAGE
 from test_llm import records, wait_for
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "ae/tests/naeb-unfenced"
+BIN = ROOT / "ae/tests/run-unfenced"
 
 
 def alive(pid):

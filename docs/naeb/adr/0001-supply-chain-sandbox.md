@@ -68,7 +68,7 @@ off. The one way is `naeb --mode unfenced ...`, the first two arguments of the
 command line of the person starting naeb, announced on stderr and recorded as
 `"mode":"unfenced"` in the Session log header; a sub-agent of a fenced naeb is
 started fenced, and of an unfenced one unfenced, as its parent. (It was a
-second binary, `naeb-unfenced`, until the two were merged: nothing about the
+second binary until the two were merged: nothing about the
 fence needed a separate executable, since the fence is installed in-process
 and by the OS jail at start, and an unfenced naeb started from inside a fenced
 Run is still inside the Run's inherited Landlock or SBPL jail.) A child is never started

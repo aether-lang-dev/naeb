@@ -17,7 +17,7 @@ from http.server import BaseHTTPRequestHandler
 from mock_http import ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "ae/tests/naeb-unfenced"
+BIN = ROOT / "ae/tests/run-unfenced"
 DENIED = "ermission denied|not permitted"
 
 

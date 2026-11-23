@@ -22,7 +22,7 @@ from background_assertions import stop_result
 from test_interjections import Terminal, wait_for
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "ae/tests/naeb-unfenced"
+BIN = ROOT / "ae/tests/run-unfenced"
 
 
 def jsonl(path):

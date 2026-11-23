@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 import unittest
 
-BIN = Path(__file__).resolve().parents[1] / "ae/tests/naeb-unfenced"
+BIN = Path(__file__).resolve().parents[1] / "ae/tests/run-unfenced"
 
 
 class CliTests(unittest.TestCase):

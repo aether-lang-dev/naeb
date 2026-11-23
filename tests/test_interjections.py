@@ -21,7 +21,7 @@ import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "ae/tests/naeb-unfenced"
+BIN = ROOT / "ae/tests/run-unfenced"
 sys.path.insert(0, str(ROOT / "scripts"))
 from screen import screen
 

@@ -17,7 +17,7 @@ Ported through upstream commit: **a2dd439** (Release 0.13.0) for the files liste
   the upstream commit that file is ported through. `git diff <commit>..main -- <file>`
   is what the port still owes for that file.
 - The parity gate is upstream's own Python tests and mocks (`tests/`), run
-  against the Aether binary through `ae/tests/naeb-unfenced`. They differ from
+  against the Aether binary through `ae/tests/run-unfenced`. They differ from
   upstream's only by renamed words (`NIB_` to `NAEB_`, `nib_version` to
   `naeb_version`, `.nib` to `.naeb`, the program name in a few asserted
   messages); `ae/tests/check_tests_vs_main.py` applies the reverse substitution

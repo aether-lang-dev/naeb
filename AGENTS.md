@@ -42,7 +42,7 @@ ae/naeb/<concept>/   one Aether module per upstream file or concept, imported as
 ae/term/             the TUI's terminal layer (standalone: imports std only); its own README and tests
 ae/policy_lib/       what a project's naeb.ae imports (naeb.policy, naeb_templates.*)
 ae/tests/            std.spec suites (*_test.ae), the e2e harness (upstream-e2e.sh, run_upstream.py,
-                     check_tests_vs_main.py, naeb-unfenced), redteam/ (the fence's attack suite)
+                     check_tests_vs_main.py, run-unfenced), redteam/ (the fence's attack suite)
 tools/               check_layers.sh (which module may import which), upstream-diff.sh, tui_tests.sh
 asks/                what the port needs from Aether, written up for Aether's maintainers
 tests/, scripts/     upstream's Python end-to-end tests and mock providers; stats.py and charts.py
@@ -72,7 +72,7 @@ ae/tests/redteam/run.sh       # the fence's attack suite alone
 tools/tui_tests.sh            # the TUI suites alone; ae/term/run-tests.sh for the terminal layer
 ```
 
-- The oracle is `tests/test_*.py`. They drive `ae/tests/naeb-unfenced`, which runs
+- The oracle is `tests/test_*.py`. They drive `ae/tests/run-unfenced`, which runs
   `naeb --mode unfenced`, because their mock providers are on loopback and the
   fence allows no egress. `tests/` and `scripts/stats.py` may differ from `main`
   only by renamed words. Do not change an assertion to make a test pass; fix the

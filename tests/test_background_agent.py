@@ -24,7 +24,7 @@ from test_interjections import Terminal, history
 from test_llm import records, wait_for
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "ae/tests/naeb-unfenced"
+BIN = ROOT / "ae/tests/run-unfenced"
 
 
 class Mock(ThreadingHTTPServer):

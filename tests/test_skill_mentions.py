@@ -11,7 +11,7 @@ from test_interjections import Reply, fixture, finished, wait_for, users
 from screen import screen
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "ae/tests/naeb-unfenced"
+BIN = ROOT / "ae/tests/run-unfenced"
 
 
 def ask_expansion():
