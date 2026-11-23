@@ -60,9 +60,12 @@ naeb". Upstream's `scripts/stats.py` is edited the same way (`naeb_version`,
 Before any release the full red-team suite (`ae/tests/redteam/run.sh`, 0 holes,
 including `mode_selection.py`) and upstream's end-to-end suite
 (`ae/tests/upstream-e2e.sh`, 29 of 30 with `test_effort`'s Codex half the one
-failure) must be run and green on the single `naeb` binary. Last run complete:
-not yet on the single binary (the last complete runs, on the two-binary tree at
-f1a1d1a, 2026-11-22, were 89/89, 200 red-team checks with 0 holes, and e2e 29 of 30).
+failure) must be run and green on the single `naeb` binary. Last run complete on the
+single binary: upstream's e2e suite, 29 of 30, on cachyos 2026-11-23 at the commit
+that announces --mode unfenced only on a terminal; `aeb .tests.ae` without the
+red-team script 88/88 and `mode_selection.py` 0 failures at the commit before it.
+The full red-team suite has not yet been run on the single binary (last complete
+run: f1a1d1a, 2026-11-22, 200 checks, 0 holes).
 
 ## Decisions (Paul, 2026-11-12)
 
