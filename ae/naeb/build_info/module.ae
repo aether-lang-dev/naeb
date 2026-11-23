@@ -1,10 +1,10 @@
 // build_info: the version a Session header records (upstream build.zig's
-// nib_version: build.zig.zon's version, then +<short commit> when the build
+// naeb_version: build.zig.zon's version, then +<short commit> when the build
 // knew it). `naeb --version` adds the port's -ae tag.
 
 @source("build_info.c")
 
-exports(VERSION, commit, source_dir, nib_version, display_version)
+exports(VERSION, commit, source_dir, naeb_version, display_version)
 
 const VERSION = "0.13.0"
 
@@ -17,7 +17,7 @@ commit() -> string { return naeb_build_commit() }
 source_dir() -> string { return naeb_build_source_dir() }
 
 // build.zig.zon's version, plus +<commit> when the build had one.
-nib_version() -> string {
+naeb_version() -> string {
     c = naeb_build_commit()
     if c == "" { return VERSION }
     return "${VERSION}+${c}"

@@ -15,7 +15,7 @@ import test_interjections as tui
 from test_interjections import Reply, fixture, history, wait_for
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "zig-out/bin/nib"
+BIN = ROOT / "ae/tests/naeb-unfenced"
 PNG = b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + struct.pack(">II", 640, 480) + b"\x08\x06\x00\x00\x00"
 ENCODED = base64.b64encode(PNG).decode()
 DATA_URL = "data:image/png;base64," + ENCODED
@@ -44,8 +44,8 @@ class View(unittest.TestCase):
         mock = Mock(protocol, custom_run=custom_run, code=f"console.log(await tools.view({{path: {json.dumps(str(shot))}}}));")
         self.addCleanup(mock.close)
         home = tmp / "nib"
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("NIB_", "OPENAI_", "ANTHROPIC_", "DEEPSEEK_", "XAI_", "CODEX_"))}
-        env.update(HOME=str(tmp), NIB_HOME=str(home), NIB_PROVIDER=name, NIB_BASE_URL=mock.url, NIB_API_KEY=mock.key)
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("NAEB_", "OPENAI_", "ANTHROPIC_", "DEEPSEEK_", "XAI_", "CODEX_"))}
+        env.update(HOME=str(tmp), NAEB_HOME=str(home), NAEB_PROVIDER=name, NAEB_BASE_URL=mock.url, NAEB_API_KEY=mock.key)
         env[key_env] = mock.key
         if custom_config:
             home.mkdir()

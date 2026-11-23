@@ -192,7 +192,7 @@ def serve(port, logfile):
                 self.wfile.write(error)
                 return
             if prompt == "agent-parent:limits-child" and step == 0:
-                Path(os.environ["NIB_HOME"], "config.toml").write_text("[limits]\nmax_steps = 0\n")
+                Path(os.environ["NAEB_HOME"], "config.toml").write_text("[limits]\nmax_steps = 0\n")
             if prompt.startswith("agent-parent:"):
                 case = prompt.split(":", 1)[1]
                 continuing = case in ("limits-loop", "limits-budget") or (case == "limits-default" and step < 59)

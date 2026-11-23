@@ -13,7 +13,7 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "zig-out/bin/nib"
+BIN = ROOT / "ae/tests/naeb-unfenced"
 
 
 def auth(path, token="fake-access-initial", account="fake-account-initial"):
@@ -89,9 +89,9 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
     env = {key: value for key, value in os.environ.items()
-           if not key.startswith(("NIB_", "DEEPSEEK_", "OPENAI_", "CODEX_"))}
-    env.update(NIB_PROVIDER="codex", NIB_CODEX_TRANSPORT="sse", NIB_BASE_URL=f"http://127.0.0.1:{port}",
-               CODEX_HOME=str(auth_path.parent), HOME=str(tmp), NIB_HOME=str(tmp / "nib"), XDG_DATA_HOME=str(tmp / "data"),
+           if not key.startswith(("NAEB_", "DEEPSEEK_", "OPENAI_", "CODEX_"))}
+    env.update(NAEB_PROVIDER="codex", NAEB_CODEX_TRANSPORT="sse", NAEB_BASE_URL=f"http://127.0.0.1:{port}",
+               CODEX_HOME=str(auth_path.parent), HOME=str(tmp), NAEB_HOME=str(tmp / "nib"), XDG_DATA_HOME=str(tmp / "data"),
                XDG_CONFIG_HOME=str(tmp / "config"))
     cwd = tmp / "project"
     cwd.mkdir()
@@ -136,7 +136,7 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
             assert ("end" if ok else "error") in events[-1], events
             return events
 
-        summaries = ask("plain text", "--effort", "high", overrides={"NIB_THINKING": "off", "NIB_REASONING_SUMMARY": "auto"})
+        summaries = ask("plain text", "--effort", "high", overrides={"NAEB_THINKING": "off", "NAEB_REASONING_SUMMARY": "auto"})
         assert requests()[-1]["body"]["reasoning"] == {"effort": "high", "summary": "auto"}
         reasoning_deltas = [e["delta"]["text"] for e in summaries if e.get("delta", {}).get("kind") == "reasoning"]
         assert reasoning_deltas == ["Mock ", "reaso", "ning."] * 2, summaries
@@ -145,7 +145,7 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
         assert summaries[-1]["end"]["text"] == "Mock text complete.", summaries
         ask("plain text", "--effort", "off")
         assert requests()[-1]["body"]["reasoning"]["effort"] == "low"
-        defaults = ask("plain text", "--effort", "default", overrides={"NIB_REASONING_EFFORT": "high"})
+        defaults = ask("plain text", "--effort", "default", overrides={"NAEB_REASONING_EFFORT": "high"})
         assert "reasoning" not in requests()[-1]["body"]
         assert "summary" not in requests()[-1]["body"]
         assert not any(e.get("delta", {}).get("kind") == "reasoning" for e in defaults), defaults
@@ -164,7 +164,7 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
         assert headers["chatgpt-account-id"] == "fake-account-initial"
         assert headers["openai-beta"] == "responses=experimental" and headers["originator"] == "nib"
         assert body["model"] == "gpt-6.1-sol" and body["store"] is False and body["stream"] is True
-        assert "You are nib" in body["instructions"]
+        assert "You are naeb" in body["instructions"]
         assert "effort-specific" not in body["instructions"] and "run's effort" not in body["instructions"]
         assert "reasoning.encrypted_content" in body["include"]
         assert "messages" not in body
@@ -190,12 +190,12 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
         assert_cache_key(requests()[-1:], session)
         assert all(item in requests()[-1]["body"]["input"] for item in items), (items, requests()[-1]["body"]["input"])
         assert next(item for item in requests()[-1]["body"]["input"] if item.get("role") == "assistant")["phase"] == "final_answer"
-        disabled = ask("plain text", overrides={"NIB_MODEL": "gpt-6.1-terra", "NIB_THINKING": "off"})
+        disabled = ask("plain text", overrides={"NAEB_MODEL": "gpt-6.1-terra", "NAEB_THINKING": "off"})
         assert requests()[-1]["body"]["reasoning"] == {"effort": "none"}
         assert not any(e.get("delta", {}).get("kind") == "reasoning" for e in disabled)
 
         before = len(requests())
-        ask("plain text", overrides={"NIB_MODEL": "gpt-6.1-sol", "NIB_THINKING": "off"})
+        ask("plain text", overrides={"NAEB_MODEL": "gpt-6.1-sol", "NAEB_THINKING": "off"})
         assert requests()[-1]["body"]["reasoning"]["effort"] == "low"
         large = ask("large reasoning")
         large_id = large[0]["start"]["session_id"]
@@ -229,7 +229,7 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
 
         timing_home = tmp / "timing-home"
         for prompt in ("timing", "timing final only"):
-            timed = ask(prompt, overrides={"NIB_HOME": str(timing_home)})
+            timed = ask(prompt, overrides={"NAEB_HOME": str(timing_home)})
             timed_id = timed[0]["start"]["session_id"]
             _, timed_records = replay(timing_home / "sessions" / f"{timed_id}.jsonl")
             assert_timing(timed_records, final_only=prompt == "timing final only")
@@ -251,7 +251,7 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
             assert json.loads(replayed.stdout)["matched"] == 2, replayed.stdout
 
         before = len(requests())
-        legacy = ask("use tools", overrides={"NIB_CODEX_RUN_TOOL": "function"})
+        legacy = ask("use tools", overrides={"NAEB_CODEX_RUN_TOOL": "function"})
         legacy_id = legacy[0]["start"]["session_id"]
         legacy_body = requests()[before]["body"]
         assert legacy_body["tools"][0]["type"] == "function" and legacy_body["tools"][0]["strict"] is False
@@ -266,7 +266,7 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
         assert any(i.get("type") == "function_call_output" and i["call_id"] == old_call["call_id"] for i in continued[0]["body"]["input"])
         assert any(i.get("type") == "custom_tool_call_output" for i in continued[-1]["body"]["input"])
         before = len(requests())
-        ask("use tools", "--resume", legacy_id, overrides={"NIB_CODEX_RUN_TOOL": "function"})
+        ask("use tools", "--resume", legacy_id, overrides={"NAEB_CODEX_RUN_TOOL": "function"})
         assert requests()[before]["body"]["tools"][0]["type"] == "function"
         assert any(i.get("type") == "custom_tool_call" for i in requests()[before]["body"]["input"])
         print("Codex custom recovery/replay and legacy function resume/fallback passed")
@@ -371,7 +371,7 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
         print("Codex mid-stream recovery passed: partial deltas, server errors/disconnects, rate-limit hints, fatal context errors and diagnostic-only logs/stats")
 
         before = len(requests())
-        delegated = ask("delegate", overrides={"NIB_MODEL": "gpt-6-sol", "NIB_REASONING_EFFORT": "high"})
+        delegated = ask("delegate", overrides={"NAEB_MODEL": "gpt-6-sol", "NAEB_REASONING_EFFORT": "high"})
         assert delegated[-1]["end"]["usage"]["prompt_tokens"] == 9900
         steps = requests()[before:]
         assert len(steps) == 3
@@ -392,7 +392,7 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
         compact_dir = tmp / "compact"
         compact_dir.mkdir()
         for index in range(3):
-            compact = ask(f"compact {index}", overrides={"NIB_CONTEXT_WINDOW": "4096"}, workdir=compact_dir,
+            compact = ask(f"compact {index}", overrides={"NAEB_CONTEXT_WINDOW": "4096"}, workdir=compact_dir,
                 *(["--continue"] if index else []))
             if index == 0:
                 compact_id = compact[0]["start"]["session_id"]
@@ -406,8 +406,8 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
         for scenario in ("summary empty", "summary truncated"):
             failure_dir = tmp / scenario.replace(" ", "-")
             failure_dir.mkdir()
-            ask(scenario, overrides={"NIB_CONTEXT_WINDOW": "4096"}, workdir=failure_dir)
-            continued = ask("continue after summary failure", "--continue", overrides={"NIB_CONTEXT_WINDOW": "4096"}, workdir=failure_dir)
+            ask(scenario, overrides={"NAEB_CONTEXT_WINDOW": "4096"}, workdir=failure_dir)
+            continued = ask("continue after summary failure", "--continue", overrides={"NAEB_CONTEXT_WINDOW": "4096"}, workdir=failure_dir)
             assert any("automatic compaction failed, continuing" in event.get("notice", "") for event in continued), continued
             assert "end" in continued[-1]
         print("Codex child configuration and automatic compaction with the same model and minimal reasoning passed")
@@ -438,11 +438,11 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
         blocked = ask("read auth " + str(auth_path))
         assert "fake-access-initial" not in json.dumps(blocked)
         assert "denied" in blocked[-1]["end"]["text"].lower(), blocked
-        checked = ask("bash env", overrides={"NIB_API_KEY": "fake-nib-secret", "DEEPSEEK_API_KEY": "fake-deepseek-secret", "OPENAI_API_KEY": "fake-openai-secret"})
+        checked = ask("bash env", overrides={"NAEB_API_KEY": "fake-nib-secret", "DEEPSEEK_API_KEY": "fake-deepseek-secret", "OPENAI_API_KEY": "fake-openai-secret"})
         output = next(event["run_end"]["output"] for event in checked if "run_end" in event)
-        for key in ("NIB_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY"):
+        for key in ("NAEB_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY"):
             assert key not in output, output
-        cross = ask("plain text", "--resume", session, ok=False, overrides={"NIB_PROVIDER": "chat_completions", "NIB_API_KEY": "mock"})
+        cross = ask("plain text", "--resume", session, ok=False, overrides={"NAEB_PROVIDER": "chat_completions", "NAEB_API_KEY": "mock"})
         message = cross[-1]["error"]["message"]
         assert "SessionProviderMismatch" in message or "different provider" in message, cross
         log = tmp / f"nib/sessions/{session}.jsonl"
@@ -460,7 +460,7 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
             assert records[-1]["diagnostic"]["message"] == failed[-1]["error"]["message"]
             assert records[-1]["diagnostic"]["attempts"] == expected
         before = len(requests())
-        changed_model = ask("plain text", "--resume", session, ok=False, overrides={"NIB_MODEL": "gpt-6-sol"})
+        changed_model = ask("plain text", "--resume", session, ok=False, overrides={"NAEB_MODEL": "gpt-6-sol"})
         assert "different model" in changed_model[-1]["error"]["message"]
         assert len(requests()) == before
         print("Codex 401 reread, repeated-401 login guidance, credentials and tool isolation passed")
@@ -472,19 +472,19 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
                        f'base_url = "http://127.0.0.1:{port}"\ncontext_window = 272000\n'
                        '[chat_completions]\nmodel = "unused-chat-model"\n')
         config_path.write_text(config_text)
-        file_env = {key: None for key in ("NIB_PROVIDER", "NIB_MODEL", "NIB_BASE_URL", "NIB_CONTEXT_WINDOW")}
+        file_env = {key: None for key in ("NAEB_PROVIDER", "NAEB_MODEL", "NAEB_BASE_URL", "NAEB_CONTEXT_WINDOW")}
         ask("plain text", overrides=file_env)
         body = requests()[-1]["body"]
         assert body["model"] == "gpt-6-sol" and body["reasoning"]["effort"] == "high", body
-        ask("plain text", overrides=dict(file_env, NIB_MODEL="gpt-6.1-terra", NIB_REASONING_EFFORT="low"))
+        ask("plain text", overrides=dict(file_env, NAEB_MODEL="gpt-6.1-terra", NAEB_REASONING_EFFORT="low"))
         body = requests()[-1]["body"]
         assert body["model"] == "gpt-6.1-terra" and body["reasoning"]["effort"] == "low", body
-        ask("plain text", "--effort", "high", overrides=dict(file_env, NIB_REASONING_EFFORT="low"))
+        ask("plain text", "--effort", "high", overrides=dict(file_env, NAEB_REASONING_EFFORT="low"))
         assert requests()[-1]["body"]["reasoning"]["effort"] == "high"
         assert config_path.read_text() == config_text
         assert not (tmp / "data/nib").exists() and not (tmp / "config/nib").exists()
-        assert not (tmp / ".nib").exists()
-        print("Codex configuration E2E passed: NIB_HOME, file model, env/CLI precedence and ephemeral CLI effort")
+        assert not (tmp / ".naeb").exists()
+        print("Codex configuration E2E passed: NAEB_HOME, file model, env/CLI precedence and ephemeral CLI effort")
     finally:
         server.terminate()
         server.wait(timeout=5)

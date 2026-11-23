@@ -21,7 +21,7 @@ import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "zig-out/bin/nib"
+BIN = ROOT / "ae/tests/naeb-unfenced"
 sys.path.insert(0, str(ROOT / "scripts"))
 from screen import screen
 
@@ -182,15 +182,15 @@ def fixture(tmp, replies, config=None, provider="chat_completions", environment=
     if config:
         home.mkdir()
     env = {key: value for key, value in os.environ.items()
-           if not key.startswith(("NIB_", "DEEPSEEK_", "OPENAI_", "CODEX_"))}
+           if not key.startswith(("NAEB_", "DEEPSEEK_", "OPENAI_", "CODEX_"))}
     with Mock(replies) as mock:
         thread = threading.Thread(target=mock.serve_forever, daemon=True)
         thread.start()
         url = f"http://127.0.0.1:{mock.server_port}"
         if config:
             (home / "config.toml").write_text(config.replace("{url}", url))
-        env.update(NIB_PROVIDER=provider, NIB_API_KEY="mock",
-                   NIB_BASE_URL=url, NIB_HOME=str(home),
+        env.update(NAEB_PROVIDER=provider, NAEB_API_KEY="mock",
+                   NAEB_BASE_URL=url, NAEB_HOME=str(home),
                    HOME=str(tmp), TERM="xterm-256color", **(environment or {}))
         terminal = Terminal(tmp, env)
         try:
@@ -324,7 +324,7 @@ def test_busy_slash_notice(tmp):
 
 def test_reflect_disabled(tmp):
     tmp.mkdir()
-    for name, environment in (("unset", {}), ("off", {"NIB_ISSUE_REPO": "off"})):
+    for name, environment in (("unset", {}), ("off", {"NAEB_ISSUE_REPO": "off"})):
         with fixture(tmp / name, [], environment=environment) as (terminal, _, _):
             terminal.send("/reflect\r")
             terminal.until(b"unknown command /reflect")

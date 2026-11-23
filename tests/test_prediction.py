@@ -79,11 +79,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 @contextlib.contextmanager
 def fixture(tmp, predictions, turn_gates=None):
     tmp.mkdir()
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("NIB_", "DEEPSEEK_", "OPENAI_", "CODEX_"))}
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("NAEB_", "DEEPSEEK_", "OPENAI_", "CODEX_"))}
     with Mock(predictions, turn_gates) as mock:
         threading.Thread(target=mock.serve_forever, daemon=True).start()
-        env.update(NIB_PROVIDER="chat_completions", NIB_API_KEY="mock",
-                   NIB_BASE_URL=f"http://127.0.0.1:{mock.server_port}", NIB_HOME=str(tmp / "home"),
+        env.update(NAEB_PROVIDER="chat_completions", NAEB_API_KEY="mock",
+                   NAEB_BASE_URL=f"http://127.0.0.1:{mock.server_port}", NAEB_HOME=str(tmp / "home"),
                    HOME=str(tmp), TERM="xterm-256color")
         terminal = Terminal(tmp, env)
         try:

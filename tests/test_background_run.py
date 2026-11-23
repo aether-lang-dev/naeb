@@ -19,7 +19,7 @@ from test_interjections import Terminal
 from test_llm import wait_for
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "zig-out/bin/nib"
+BIN = ROOT / "ae/tests/naeb-unfenced"
 
 
 class Mock(ThreadingHTTPServer):
@@ -146,9 +146,9 @@ class BackgroundRunTests(unittest.TestCase):
         self.server = Mock(self.cwd)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
-        self.env = dict(os.environ, NIB_HOME=str(self.home), NIB_PROVIDER="chat_completions",
-                        NIB_API_KEY="mock", NIB_MODEL="mock",
-                        NIB_BASE_URL=f"http://127.0.0.1:{self.server.server_port}")
+        self.env = dict(os.environ, NAEB_HOME=str(self.home), NAEB_PROVIDER="chat_completions",
+                        NAEB_API_KEY="mock", NAEB_MODEL="mock",
+                        NAEB_BASE_URL=f"http://127.0.0.1:{self.server.server_port}")
 
     def tearDown(self):
         self.server.release.set()
@@ -310,7 +310,7 @@ class BackgroundRunTests(unittest.TestCase):
         auth.mkdir()
         (auth / "auth.json").write_text(json.dumps({"tokens": {
             "access_token": "fake", "account_id": "fake", "refresh_token": "fake", "id_token": "fake"}}))
-        self.env.update(NIB_PROVIDER="codex", NIB_MODEL="gpt-6.1-sol", CODEX_HOME=str(auth))
+        self.env.update(NAEB_PROVIDER="codex", NAEB_MODEL="gpt-6.1-sol", CODEX_HOME=str(auth))
         self.assert_overlap()
 
     def test_no_independent_work_waits_without_model_requests_or_final_text(self):

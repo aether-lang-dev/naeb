@@ -9,7 +9,7 @@ if CASES.exists(): shutil.rmtree(CASES)
 import pyte
 
 OUT.mkdir(parents=True, exist_ok=True)
-base = {k:v for k,v in os.environ.items() if not k.startswith(('NIB_', 'DEEPSEEK_', 'OPENAI_', 'CODEX_'))}
+base = {k:v for k,v in os.environ.items() if not k.startswith(('NAEB_', 'DEEPSEEK_', 'OPENAI_', 'CODEX_'))}
 base.update(TERM='xterm-256color', HOME=str(CASES/'user'), CODEX_HOME=str(CASES/'codex'))
 counter = 0
 class Terminal:
@@ -20,7 +20,7 @@ class Terminal:
         (self.cwd/'.git').touch()
         self.home = self.cwd/'home'
         self.home.mkdir(exist_ok=True)
-        self.env = dict(base, NIB_PROVIDER='chat_completions', NIB_API_KEY='mock', NIB_MODEL='mock-model', NIB_CONTEXT_WINDOW='128000', NIB_BASE_URL=f'http://127.0.0.1:{port}', NIB_HOME=str(self.home))
+        self.env = dict(base, NAEB_PROVIDER='chat_completions', NAEB_API_KEY='mock', NAEB_MODEL='mock-model', NAEB_CONTEXT_WINDOW='128000', NAEB_BASE_URL=f'http://127.0.0.1:{port}', NAEB_HOME=str(self.home))
         if extra: self.env.update(extra)
         self.master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
@@ -163,7 +163,7 @@ def capture():
     try:
         auth=CASES/'fake-codex';auth.mkdir(exist_ok=True)
         (auth/'auth.json').write_text(json.dumps({'tokens':{'access_token':'fake-access','account_id':'fake-account','refresh_token':'fake-refresh','id_token':'fake-id'}}))
-        extra={'NIB_PROVIDER':'codex','NIB_CODEX_TRANSPORT':'sse','NIB_MODEL':'gpt-6.1-sol','CODEX_HOME':str(auth)}
+        extra={'NAEB_PROVIDER':'codex','NAEB_CODEX_TRANSPORT':'sse','NAEB_MODEL':'gpt-6.1-sol','CODEX_HOME':str(auth)}
         for cols in (60,120,160):
             with Terminal('retry-'+str(cols),p,cols,extra=extra) as t:
                 t.send('stream retry cancel\r');t.drain(.4);t.snap('retrying');t.send('\x1b');t.drain(.6)

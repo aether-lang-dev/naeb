@@ -13,7 +13,7 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "zig-out/bin/nib"
+BIN = ROOT / "ae/tests/naeb-unfenced"
 RUN_OK = [True, True, True, False, True]
 
 
@@ -32,14 +32,14 @@ def check_case(provider, env, cwd, requests_path, user_effort, *, implicit=False
     args = [] if implicit else ["--effort", user_effort]
     case_env = dict(env)
     if user_effort == "default" and not implicit:
-        case_env["NIB_REASONING_EFFORT"] = "high"
+        case_env["NAEB_REASONING_EFFORT"] = "high"
     result = subprocess.run([str(BIN), "ask", "--json", "effort schedule", *args],
                             cwd=cwd, env=case_env, capture_output=True, timeout=30)
     label = (provider, user_effort, implicit)
     assert result.returncode == 0 and result.stderr == b"", (label, result.stdout, result.stderr)
     events = [json.loads(line) for line in result.stdout.splitlines()]
     assert events and all(len(event) == 1 for event in events), (label, events)
-    base = base_effort(provider, user_effort, env["NIB_MODEL"] == "gpt-6.1-sol")
+    base = base_effort(provider, user_effort, env["NAEB_MODEL"] == "gpt-6.1-sol")
     expected = [{"n": n, "effort": base} for n in range(1, len(RUN_OK) + 2)]
     actual = [event["step"] for event in events if "step" in event]
     assert actual == expected, (label, actual, expected)
@@ -70,7 +70,7 @@ def check_case(provider, env, cwd, requests_path, user_effort, *, implicit=False
         assert "step_effort" not in wire and "effort_source" not in wire, (label, body)
 
     session_id = events[0]["start"]["session_id"]
-    log_path = Path(env["NIB_HOME"]) / "sessions" / (session_id + ".jsonl")
+    log_path = Path(env["NAEB_HOME"]) / "sessions" / (session_id + ".jsonl")
     records = read_jsonl(log_path)
     steps = [record for record in records if record["from"] > 0
              and not record.get("diagnostic") and not record.get("repair")]
@@ -104,14 +104,14 @@ def main():
             cwd.mkdir()
             (cwd / ".git").write_text("gitdir: /unused\n")
             env = {key: value for key, value in os.environ.items()
-                   if not key.startswith(("NIB_", "DEEPSEEK_", "OPENAI_", "CODEX_", "MOCK_"))}
+                   if not key.startswith(("NAEB_", "DEEPSEEK_", "OPENAI_", "CODEX_", "MOCK_"))}
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
                 port = sock.getsockname()[1]
-            env.update(NIB_PROVIDER=provider, NIB_CODEX_TRANSPORT="sse", NIB_API_KEY="fake-key",
-                       NIB_BASE_URL=f"http://127.0.0.1:{port}", NIB_CONTEXT_WINDOW="128000",
-                       NIB_MODEL="gpt-6.1-terra" if provider == "codex" else "mock-model",
-                       HOME=str(tmp), NIB_HOME=str(tmp / "nib"), CODEX_HOME=str(tmp / "codex"),
+            env.update(NAEB_PROVIDER=provider, NAEB_CODEX_TRANSPORT="sse", NAEB_API_KEY="fake-key",
+                       NAEB_BASE_URL=f"http://127.0.0.1:{port}", NAEB_CONTEXT_WINDOW="128000",
+                       NAEB_MODEL="gpt-6.1-terra" if provider == "codex" else "mock-model",
+                       HOME=str(tmp), NAEB_HOME=str(tmp / "nib"), CODEX_HOME=str(tmp / "codex"),
                        XDG_DATA_HOME=str(tmp / "data"), XDG_CONFIG_HOME=str(tmp / "config"))
             credentials = tmp / "codex/auth.json"
             credentials.parent.mkdir()
@@ -133,7 +133,7 @@ def main():
                     case = check_case(provider, env, cwd, requests_path, effort)
                 check_case(provider, env, cwd, requests_path, "default", implicit=True)
                 if provider == "codex":
-                    check_case(provider, dict(env, NIB_MODEL="gpt-6.1-sol"), cwd, requests_path, "off")
+                    check_case(provider, dict(env, NAEB_MODEL="gpt-6.1-sol"), cwd, requests_path, "off")
                 check_legacy_resume(provider, env, cwd, *case)
                 print(f"{provider} effort E2E passed: constant user effort, inert legacy declarations and legacy log resume")
             finally:

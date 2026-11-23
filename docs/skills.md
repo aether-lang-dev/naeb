@@ -3,9 +3,9 @@
 New Sessions scan in this order, looking only one level deep for `<name>/SKILL.md` in each directory; later skills override earlier skills with the same name:
 
 1. `~/.agents/skills`
-2. `$NIB_HOME/skills` (default `~/.nib/skills`)
+2. `$NAEB_HOME/skills` (default `~/.naeb/skills`)
 3. `<project>/.agents/skills`
-4. `<project>/.nib/skills`
+4. `<project>/.naeb/skills`
 
 project uses the same root as the project AGENTS.md. Symlink directories are supported; hidden directories and loose Markdown files are ignored.
 
@@ -21,7 +21,7 @@ Put specific instructions in the body.
 
 name defaults to the directory name; description must be nonempty and supports plain, single-quoted, double-quoted, `|`, and `>` block text, retaining at most 1024 characters. Only files up to 64 KiB are read; other YAML fields are ignored. `disable-model-invocation: true` excludes the skill from the model index.
 
-All skills are disabled by default. Enable each in `$NIB_HOME/config.toml`:
+All skills are disabled by default. Enable each in `$NAEB_HOME/config.toml`:
 
 ```toml
 [skills]
@@ -40,4 +40,4 @@ Resumed Sessions retain their original system without rediscovering skills; file
 
 `$name` anywhere in a message uses that skill for the message only, without enabling it: `$release prepare 0.11.0`, `review this PR with $review`. A token is `$` at the start or after whitespace, followed by letters, digits, `_` or `-`; it counts only when it exactly matches a discovered skill name (so `$HOME`, `$1` and misspellings stay plain text). Skills with `disable-model-invocation: true` can be mentioned. Typing `$` in the TUI opens the same completion menu as `@`, listing discovered skills.
 
-On send, each distinct mentioned skill's SKILL.md (same 64 KiB limit) is appended after the message as `<skill name="…" location="…">body without frontmatter</skill>`, with one line saying relative paths resolve against its directory. The expanded text is what the Session log stores and what resume sends, so files are not read again; the TUI transcript shows only what was typed. The system prompt, config and `/skills` are unaffected. `nib ask` expands the same way.
+On send, each distinct mentioned skill's SKILL.md (same 64 KiB limit) is appended after the message as `<skill name="…" location="…">body without frontmatter</skill>`, with one line saying relative paths resolve against its directory. The expanded text is what the Session log stores and what resume sends, so files are not read again; the TUI transcript shows only what was typed. The system prompt, config and `/skills` are unaffected. `naeb ask` expands the same way.

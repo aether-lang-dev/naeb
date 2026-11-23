@@ -217,10 +217,10 @@ class ForkTests:
         mock = Mock()
         thread = threading.Thread(target=mock.serve_forever, daemon=True)
         thread.start()
-        self.env["NIB_BASE_URL"] = "http://127.0.0.1:" + str(mock.server_port)
-        self.env["NIB_CODEX_TRANSPORT"] = "sse"
+        self.env["NAEB_BASE_URL"] = "http://127.0.0.1:" + str(mock.server_port)
+        self.env["NAEB_CODEX_TRANSPORT"] = "sse"
         if self.provider == "codex":
-            self.env["NIB_MODEL"] = "gpt-6.1-sol"
+            self.env["NAEB_MODEL"] = "gpt-6.1-sol"
 
         def cleanup():
             mock.release.set()
@@ -709,7 +709,7 @@ class ForkTests:
 
     def test_large_current_assistant_does_not_compact_before_first_fork_request(self):
         window = 65536
-        self.env["NIB_CONTEXT_WINDOW"] = str(window)
+        self.env["NAEB_CONTEXT_WINDOW"] = str(window)
         mock = self.mock()
         large_text = "CURRENT_ASSISTANT_UTF8_PREFIX:" + "界🙂" * 30000
         self.assertGreater(len(large_text.encode("utf-8")) // 3, window * 3 // 4)
@@ -812,7 +812,7 @@ class ForkTests:
         self.assertEqual(done[0]["changes"], [])
 
     def test_fork_after_automatic_compaction_uses_compacted_parent_prefix(self):
-        self.env["NIB_CONTEXT_WINDOW"] = "65536"
+        self.env["NAEB_CONTEXT_WINDOW"] = "65536"
         mock = self.mock()
         mock.handlers["parent:old"] = lambda _: (None, "OLD_HISTORY_TO_COMPACT" + "x" * 24000)
         mock.plan("parent:middle")

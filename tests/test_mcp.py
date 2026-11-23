@@ -11,7 +11,7 @@ from mock_mcp import HTTP
 from mock_providers import Mock
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "zig-out/bin/nib"
+BIN = ROOT / "ae/tests/naeb-unfenced"
 
 
 class MCP(unittest.TestCase):
@@ -26,8 +26,8 @@ class MCP(unittest.TestCase):
         mock = mock_class(protocol, code=code)
         self.addCleanup(mock.close)
         (data / "config.toml").write_text(config)
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("NIB_", "OPENAI_", "ANTHROPIC_", "DEEPSEEK_", "XAI_", "CODEX_"))}
-        env.update(HOME=str(home), NIB_HOME=str(data), NIB_PROVIDER="anthropic" if protocol == "anthropic_messages" else "chat_completions", NIB_API_KEY=mock.key, NIB_BASE_URL=mock.url, ANTHROPIC_API_KEY=mock.key, GITHUB_TOKEN="fake-github-token", MCP_TEST_TOKEN="fake-mcp-token", MCP_UNLISTED="do-not-pass")
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("NAEB_", "OPENAI_", "ANTHROPIC_", "DEEPSEEK_", "XAI_", "CODEX_"))}
+        env.update(HOME=str(home), NAEB_HOME=str(data), NAEB_PROVIDER="anthropic" if protocol == "anthropic_messages" else "chat_completions", NAEB_API_KEY=mock.key, NAEB_BASE_URL=mock.url, ANTHROPIC_API_KEY=mock.key, GITHUB_TOKEN="fake-github-token", MCP_TEST_TOKEN="fake-mcp-token", MCP_UNLISTED="do-not-pass")
         def ask(prompt="probe", *args):
             result = subprocess.run([str(BIN), "ask", "--json", prompt, *args], cwd=project, env=env, text=True, capture_output=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

@@ -24,7 +24,7 @@ from test_interjections import Terminal, history
 from test_llm import records, wait_for
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "zig-out/bin/nib"
+BIN = ROOT / "ae/tests/naeb-unfenced"
 
 
 class Mock(ThreadingHTTPServer):
@@ -169,16 +169,16 @@ class BackgroundTests:
         (auth / "auth.json").write_text(json.dumps({"tokens": {
             "access_token": "fake", "account_id": "fake", "refresh_token": "fake", "id_token": "fake"}}))
         self.env = {k: v for k, v in os.environ.items()
-                    if not k.startswith(("NIB_", "DEEPSEEK_", "OPENAI_", "CODEX_"))}
-        self.env.update(NIB_PROVIDER=self.provider, NIB_API_KEY="fake", NIB_MODEL="mock-parent-model",
-                        NIB_HOME=str(self.home), CODEX_HOME=str(auth), HOME=str(self.tmp),
-                        NIB_REASONING_EFFORT="high", NIB_CONTEXT_WINDOW="128000", TERM="xterm-256color")
+                    if not k.startswith(("NAEB_", "DEEPSEEK_", "OPENAI_", "CODEX_"))}
+        self.env.update(NAEB_PROVIDER=self.provider, NAEB_API_KEY="fake", NAEB_MODEL="mock-parent-model",
+                        NAEB_HOME=str(self.home), CODEX_HOME=str(auth), HOME=str(self.tmp),
+                        NAEB_REASONING_EFFORT="high", NAEB_CONTEXT_WINDOW="128000", TERM="xterm-256color")
 
     def mock(self, case):
         mock = Mock(case, self.cwd)
         thread = threading.Thread(target=mock.serve_forever, daemon=True)
         thread.start()
-        self.env["NIB_BASE_URL"] = f"http://127.0.0.1:{mock.server_port}"
+        self.env["NAEB_BASE_URL"] = f"http://127.0.0.1:{mock.server_port}"
 
         def cleanup():
             for gate in mock.gates.values():

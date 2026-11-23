@@ -17,7 +17,7 @@ from mock_stream_idle import Mock
 from test_llm import records
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "zig-out/bin/nib"
+BIN = ROOT / "ae/tests/naeb-unfenced"
 
 
 class StreamIdleTests:
@@ -43,11 +43,11 @@ class StreamIdleTests:
         self.thread.start()
         self.addCleanup(self.stop_server)
         self.env = {key: value for key, value in os.environ.items()
-                    if not key.startswith(("NIB_", "DEEPSEEK_", "OPENAI_", "CODEX_", "MOCK_"))}
-        self.env.update(NIB_PROVIDER=self.provider, NIB_CODEX_TRANSPORT="sse", NIB_API_KEY="fake-idle-key",
-                        NIB_BASE_URL=f"http://127.0.0.1:{self.server.server_port}",
-                        NIB_MODEL="mock-idle-model", NIB_REASONING_EFFORT="high",
-                        NIB_CONTEXT_WINDOW="128000", NIB_HOME=str(self.home),
+                    if not key.startswith(("NAEB_", "DEEPSEEK_", "OPENAI_", "CODEX_", "MOCK_"))}
+        self.env.update(NAEB_PROVIDER=self.provider, NAEB_CODEX_TRANSPORT="sse", NAEB_API_KEY="fake-idle-key",
+                        NAEB_BASE_URL=f"http://127.0.0.1:{self.server.server_port}",
+                        NAEB_MODEL="mock-idle-model", NAEB_REASONING_EFFORT="high",
+                        NAEB_CONTEXT_WINDOW="128000", NAEB_HOME=str(self.home),
                         CODEX_HOME=str(auth), HOME=str(self.tmp),
                         XDG_CONFIG_HOME=str(self.tmp / "config"),
                         XDG_DATA_HOME=str(self.tmp / "data"), NO_PROXY="127.0.0.1,localhost")
@@ -208,7 +208,7 @@ class StreamIdleTests:
                             for e in events), events)
 
     def test_summary_retries_without_committing_failed_text(self):
-        self.env['NIB_CONTEXT_WINDOW'] = '32768'
+        self.env['NAEB_CONTEXT_WINDOW'] = '32768'
         for index in range(3):
             self.ask('compact-seed', *(['--continue'] if index else []))
         events, _, log = self.ask('after compact', '--continue')

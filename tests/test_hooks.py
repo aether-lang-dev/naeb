@@ -38,7 +38,7 @@ class Hooks(unittest.TestCase):
                         for name in ["a b", "c'你好"])
 
     def test_batch_and_silent_success(self):
-        self.configure(["printf '%s\\n' \"$NIB_EVENT\" \"$NIB_FILES\" > files; printf '%s\\n' {files} > args; echo once >> count"])
+        self.configure(["printf '%s\\n' \"$NAEB_EVENT\" \"$NAEB_FILES\" > files; printf '%s\\n' {files} > args; echo once >> count"])
         self.finish(self.start(self.edit()))
         self.assertEqual((self.cwd / "count").read_text(), "once\n")
         self.assertEqual((self.cwd / "args").read_text(), "a b\nc'你好\n")
@@ -57,7 +57,7 @@ class Hooks(unittest.TestCase):
         self.assertFalse((self.cwd / "should-not-run").exists())
 
     def test_turn_end_status(self):
-        self.configure(end=["printf '%s:%s' \"$NIB_EVENT\" \"$NIB_TURN_STATUS\" > ended"])
+        self.configure(end=["printf '%s:%s' \"$NAEB_EVENT\" \"$NAEB_TURN_STATUS\" > ended"])
         self.finish(self.start("console.log('ok')"))
         self.assertEqual((self.cwd / "ended").read_text(), "turn_end:completed")
 
@@ -66,7 +66,7 @@ class Hooks(unittest.TestCase):
         self.assertFalse((self.cwd / "count").exists())
 
     def test_failed_ask_turn_status(self):
-        self.configure(end=["printf '%s' \"$NIB_TURN_STATUS\" > ended"])
+        self.configure(end=["printf '%s' \"$NAEB_TURN_STATUS\" > ended"])
         with (self.home / "config.toml").open("a") as config:
             config.write("[limits]\nmax_steps = 1\n")
         process = self.start("console.log('one step')")
@@ -83,7 +83,7 @@ class Hooks(unittest.TestCase):
     def test_cancelled_tui_turn_status(self):
         project = self.tmp / "cancel-tui"
         reply = Reply("waiting", gated=True)
-        config = "[hooks]\nturn_end = " + json.dumps(["printf '%s' \"$NIB_TURN_STATUS\" > ended"]) + "\n"
+        config = "[hooks]\nturn_end = " + json.dumps(["printf '%s' \"$NAEB_TURN_STATUS\" > ended"]) + "\n"
         with fixture(project, [reply], config=config) as (terminal, _, _):
             terminal.send("wait\r")
             self.assertTrue(reply.received.wait(5))
@@ -106,7 +106,7 @@ class Hooks(unittest.TestCase):
         project = self.tmp / "tui"
         code = test_files.js_call("write", path="edited", content="hello")
         # JSON strings are also valid strings in the supported TOML subset.
-        config = "[hooks]\nafter_edit = [\"exit 1\"]\nturn_end = " + json.dumps(["printf '%s:%s' \"$NIB_EVENT\" \"$NIB_TURN_STATUS\" > ended; exit 1"]) + "\n"
+        config = "[hooks]\nafter_edit = [\"exit 1\"]\nturn_end = " + json.dumps(["printf '%s:%s' \"$NAEB_EVENT\" \"$NAEB_TURN_STATUS\" > ended; exit 1"]) + "\n"
         with fixture(project, [Reply(code=code), Reply("finished-hooks")], config=config) as (terminal, home, _):
             terminal.send("edit\r")
             wait_for(lambda: (project / "ended").exists(), "TUI turn-end hook")

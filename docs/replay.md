@@ -1,15 +1,15 @@
 # Tool recording and offline Run replay
 
-nib replay reruns saved JavaScript in fresh QuickJS sandboxes, substituting recorded tool returns for real tools. Inspect control flow, result handling, formatting, and first call divergence. No provider/model requests or real read/grep/bash/fetch/write/llm/agent execution.
+naeb replay reruns saved JavaScript in fresh QuickJS sandboxes, substituting recorded tool returns for real tools. Inspect control flow, result handling, formatting, and first call divergence. No provider/model requests or real read/grep/bash/fetch/write/llm/agent execution.
 
 ## Usage
 
 ```sh
 # ID is the full 32-character lowercase hexadecimal Session ID
-nib replay <session_id> --run 1:0
-nib replay <session_id> --run 1:0 --json
-nib replay <session_id> --all --json
-nib replay <session_id> --run 1:0 --script diagnose.js --json
+naeb replay <session_id> --run 1:0
+naeb replay <session_id> --run 1:0 --json
+naeb replay <session_id> --all --json
+naeb replay <session_id> --run 1:0 --script diagnose.js --json
 ```
 
 `--run <step>:<run>` uses different bases:
@@ -19,7 +19,7 @@ nib replay <session_id> --run 1:0 --script diagnose.js --json
 
 Example: first assistant Step has Runs `1:0` and `1:1`; next Step is a final answer; the first Run in a resumed new Turn is 3:0.
 
-Choose --run or --all; --script requires --run. Replay uses only `NIB_HOME` to locate logs, without keys/available providers. Defaults: [config.md](config.md).
+Choose --run or --all; --script requires --run. Replay uses only `NAEB_HOME` to locate logs, without keys/available providers. Defaults: [config.md](config.md).
 
 ### Strict replay
 
@@ -49,13 +49,13 @@ Script mode changes the program, so output equivalence is not judged; match is n
 
 ## Files and format
 
-Recording defaults on; `NIB_RECORD=off` disables, other/unset values enable. No TOML key; disabling never deletes old records. Children inherit environment but write separate calls files.
+Recording defaults on; `NAEB_RECORD=off` disables, other/unset values enable. No TOML key; disabling never deletes old records. Children inherit environment but write separate calls files.
 
 Two independent files per Session:
 
 ```text
-$NIB_HOME/sessions/<session_id>.jsonl        Main log: messages, code, model-visible Run output
-$NIB_HOME/sessions/<session_id>.calls.jsonl  Sidecar: calls/actual returns, created mode 0600
+$NAEB_HOME/sessions/<session_id>.jsonl        Main log: messages, code, model-visible Run output
+$NAEB_HOME/sessions/<session_id>.calls.jsonl  Sidecar: calls/actual returns, created mode 0600
 ```
 
 Append JSONL per Run, flushing/syncing at Run end. Main logs commit only complete Steps; crashes in later Runs of a Step may leave sidecars ahead. First recording after resume truncates from the first sidecar line with step >= new Step determined by main log, rebuilding dedup only from retained data. Later Runs in the same Recorder do not rescan, preserving earlier uncommitted Runs from this execution. Even tool-free Runs save metadata for pure-JS/time-dependent positioning. Recording failures warn/disable further recording, never fail tools/Sessions. Old logs without sidecars remain resumable but cannot invent recordings.
@@ -85,7 +85,7 @@ First results and each error retain at most **1 MiB (1,048,576 bytes)**, UTF-8-b
 
 Record only at shared settlement delivery, not worker-completed results undelivered to JS. At eval exit compare created/delivered totals; mismatch adds meta.incomplete: true even if only the highest index is missing without holes. Cancellation/JS timeout can leave calls undelivered. Ordinary errors do not stop siblings: `Promise.all` read rejection still waits for bash, and direct throw after tool creation still drains, so those error recordings remain complete/matchable. Missing entries yield incomplete=true/match=null; preserve discovered divergence diagnostically without treating it as conclusive.
 
-Load calls before final meta fills Run metadata. Missing meta/references or truncated entries mark `incomplete=true`; absent metadata does not imply time (internal placeholder 0) or complete matches. --all traverses recorded Runs, including metadata-only Runs; total excludes unrecorded `NIB_RECORD=off` Runs, not all main-log Runs. Recording limits affect neither original JS data nor model budgets; [run-output.md](run-output.md).
+Load calls before final meta fills Run metadata. Missing meta/references or truncated entries mark `incomplete=true`; absent metadata does not imply time (internal placeholder 0) or complete matches. --all traverses recorded Runs, including metadata-only Runs; total excludes unrecorded `NAEB_RECORD=off` Runs, not all main-log Runs. Recording limits affect neither original JS data nor model budgets; [run-output.md](run-output.md).
 
 ## JSON reports
 

@@ -352,7 +352,7 @@ class StatsTest(unittest.TestCase):
     def test_tool_data_mixed_logs_and_cli(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'bytes.jsonl'
-            records = synthetic_log(path, [['tools.read({path: \"a\"})', None]], nib_version='bytes')
+            records = synthetic_log(path, [['tools.read({path: \"a\"})', None]], naeb_version='bytes')
             records[1].update(tool_bytes=1000, output_bytes=250,
                 run_results=[dict(tool_bytes=100, output_bytes=value) for value in range(10, 111, 10)]
                             + [dict(tool_bytes=0, output_bytes=99), dict(tool_bytes=1), {}],
@@ -497,7 +497,7 @@ class StatsTest(unittest.TestCase):
             path = Path(directory) / 'background.jsonl'
             records = synthetic_log(path, [['tools.agent({prompt: "one", background: true})',
                                             'tools.read({path: "a"})',
-                                            'tools.agent({prompt: "three", background: true})', None]], nib_version='background')
+                                            'tools.agent({prompt: "three", background: true})', None]], naeb_version='background')
             records[1]['calls'] = [dict(name='agent', background=True, id='a1'),
                                    dict(name='agent'), dict(name='agent', dispatched=False)]
             records[2]['calls'] = []  # lifecycle remains available when calls are omitted
@@ -909,7 +909,7 @@ class StatsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory).resolve()
             plain, patched = directory / "plain.jsonl", directory / "patched.jsonl"
-            synthetic_log(plain, [[edit, read]], nib_version="test")
+            synthetic_log(plain, [[edit, read]], naeb_version="test")
             synthetic_log(patched, [[edit, edit, 'tools.bash({command: dynamic})']], patches_off=["b", "a"])
             calls_path = patched.with_suffix(".calls.jsonl")
             calls_path.write_text("\n".join(map(json.dumps, [
@@ -1080,13 +1080,13 @@ class StatsTest(unittest.TestCase):
         verify = 'tools.bash({command: "zig build"})'
         fixtures = [
             ('legacy', {}, [write_a, verify, None]),
-            ('modern', dict(nib_version='1.0', system_sha='shaA'), [write_a, write_b, verify, None]),
-            ('patched', dict(nib_version='1.0', system_sha='shaB', patches_off=['b', 'a']), [write_a, verify]),
-            ('reordered', dict(nib_version='2.0', system_sha='shaA', patches_off=['a', 'b', 'a']), [None]),
+            ('modern', dict(naeb_version='1.0', system_sha='shaA'), [write_a, write_b, verify, None]),
+            ('patched', dict(naeb_version='1.0', system_sha='shaB', patches_off=['b', 'a']), [write_a, verify]),
+            ('reordered', dict(naeb_version='2.0', system_sha='shaA', patches_off=['a', 'b', 'a']), [None]),
             ('system_only', dict(system_sha='shaB'), [write_a, verify]),
-            ('version_only', dict(nib_version='2.0'), [None]),
+            ('version_only', dict(naeb_version='2.0'), [None]),
             ('empty', dict(patches_off=[]), [None]),
-            ('invalid', dict(nib_version=False, system_sha=7, patches_off=None), [None]),
+            ('invalid', dict(naeb_version=False, system_sha=7, patches_off=None), [None]),
             ('old_second', {}, [None])]
         expected_members = dict(
             version={'1.0': ['modern', 'patched'], '2.0': ['reordered', 'version_only'],
@@ -1140,8 +1140,8 @@ class StatsTest(unittest.TestCase):
             self.assertEqual(empty['groups'], {})
             self.assertIn('No selected groups', stats.text_report(empty))
             self.assertEqual(stats.summarize(paths.values(), cwd=ROOT, group_by='version')['groups'], {})
-        for metadata, expected in [({}, 'unknown'), ({'nib_version': ''}, 'unknown'),
-                                   ({'system_sha': 's'}, 'none'), ({'nib_version': 'v'}, 'none'),
+        for metadata, expected in [({}, 'unknown'), ({'naeb_version': ''}, 'unknown'),
+                                   ({'system_sha': 's'}, 'none'), ({'naeb_version': 'v'}, 'none'),
                                    ({'patches_off': ''}, 'none'), ({'patches_off': [3]}, 'unknown'),
                                    ({'patches_off': {}}, 'unknown'), ({'patches_off': 'one'}, 'one')]:
             self.assertEqual(stats.header_group(metadata, 'patches'), expected)
@@ -1157,7 +1157,7 @@ class StatsTest(unittest.TestCase):
         new = int(datetime(2025, 1, 2, 12).timestamp() * 1000)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'gaps.jsonl'
-            records = synthetic_log(path, [[write, verify, write, verify]], nib_version='new')
+            records = synthetic_log(path, [[write, verify, write, verify]], naeb_version='new')
             for record, at in zip(records, [old, new, old, new, new]):
                 record['at'] = at
             path.write_text('\n'.join(map(json.dumps, records)))
@@ -2132,7 +2132,7 @@ class TransportTests(unittest.TestCase):
             path = Path(directory) / 'cache.jsonl'
             self.cache_log(path)
             rows = [json.loads(line) for line in path.read_text().splitlines()]
-            rows[0]['nib_version'] = '1.0.0'
+            rows[0]['naeb_version'] = '1.0.0'
             path.write_text('\n'.join(map(json.dumps, rows)) + '\n')
             output = subprocess.check_output([sys.executable, str(ROOT / 'scripts/stats.py'), str(path),
                                               '--group-by', 'version', '--json'])

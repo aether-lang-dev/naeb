@@ -20,7 +20,7 @@ Printing an entire array is still one entry. Print individual labels for separat
 
 Logged `tool_bytes` counts host→JS UTF-8 results (serialized JSON success, error text failure), whether used/awaited or not. Undelivered results count zero; agents count parent returned objects only. `output_bytes` counts actual model tool-result bytes including budgeted markers/errors/no-output notices/labels and unbudgeted remaining-Step hints, not original data size.
 
-Configure `[limits].run_output_bytes` or `NIB_RUN_OUTPUT_BYTES` (16384–16777216). New system prompts reflect effective settings; resumed Sessions retain original system. Minimum preserves heading/marker room; increases affect neither console capture nor JS results. Locate with grep then read ranges; batch long multi-file bodies or print excerpts.
+Configure `[limits].run_output_bytes` or `NAEB_RUN_OUTPUT_BYTES` (16384–16777216). New system prompts reflect effective settings; resumed Sessions retain original system. Minimum preserves heading/marker room; increases affect neither console capture nor JS results. Locate with grep then read ranges; batch long multi-file bodies or print excerpts.
 
 ## Capture limits
 
@@ -35,7 +35,7 @@ Call details are bounded too: retain all up to 64 calls, otherwise first/last 32
 
 Any range body still captured in head/tail shares display allocation normally; above all range text is omitted. Last 32 call details follow; final value/error numbering continues from original call count. Body/detail/format buffers do not grow without bound with call count. Omission counts combine capture and display losses.
 
-Standalone nib js/TUI `/js` show sandbox head/tail with `[console output truncated: N of T bytes omitted]`, including UTF-8 losses in N, without model display formatting; below limits output is unchanged.
+Standalone naeb js/TUI `/js` show sandbox head/tail with `[console output truncated: N of T bytes omitted]`, including UTF-8 losses in N, without model display formatting; below limits output is unchanged.
 
 ## Tool data and explicit limits
 
@@ -53,15 +53,15 @@ Search fields/UTF-8 columns: [ADR 0012](adr/0012-search-and-fetch-tools.md).
 
 ## File replacement, Session versions, and cross-process coordination
 
-edit/write write complete contents to random same-directory `.nib-*` files, then atomic same-directory rename, cleaning up on failure. Preserve existing permission bits; follow symlinks to real targets without replacing links. New inodes break hard-link sharing; other links keep old contents. File tools do not fsync: atomic visibility is not power-loss durability. Configuration writes retain fsync.
+edit/write write complete contents to random same-directory `.naeb-*` files, then atomic same-directory rename, cleaning up on failure. Preserve existing permission bits; follow symlinks to real targets without replacing links. New inodes break hard-link sharing; other links keep old contents. File tools do not fsync: atomic visibility is not power-loss durability. Configuration writes retain fsync.
 
 Sessions track last-observed inode/size/nanosecond mtime by canonical real path, updated by successful read (even one page), edit, write. Overwriting write compares current/observed versions and rejects external changes, requiring reread/new-content-based writes. Unobserved existing files still allow direct write; missing targets are creation. edit reads latest locked content and matches old_text, never replacing from stale Session snapshots; success updates versions.
 
-read/edit/write share cross-process advisory locks in `$NIB_HOME/locks/` (default `~/.nib/locks/`), named by canonical-path SHA-256 hex. Independent nib processes, children, relative/symlink aliases sharing NIB_HOME coordinate on one lock. read locks keep returned bytes/versions consistent among participating writers. Persist lock files; release unlocks/closes without unlink to avoid waiting/new writers locking different inodes. Lock waits remain cancelable.
+read/edit/write share cross-process advisory locks in `$NAEB_HOME/locks/` (default `~/.naeb/locks/`), named by canonical-path SHA-256 hex. Independent naeb processes, children, relative/symlink aliases sharing NAEB_HOME coordinate on one lock. read locks keep returned bytes/versions consistent among participating writers. Persist lock files; release unlocks/closes without unlink to avoid waiting/new writers locking different inodes. Lock waits remain cancelable.
 
-Locks coordinate only cooperating file tools sharing NIB_HOME; bash/editors/external programs do not participate automatically. Version checks detect prior changes, but uncooperative writes between check/rename remain possible. No absolute external-concurrency protection. Wait for external work and reread before edits when preserving its results.
+Locks coordinate only cooperating file tools sharing NAEB_HOME; bash/editors/external programs do not participate automatically. Version checks detect prior changes, but uncooperative writes between check/rename remain possible. No absolute external-concurrency protection. Wait for external work and reread before edits when preserving its results.
 
-Local regression needs no provider/key: build then python3 tests/test_files.py. Temporary NIB_HOME tests cover high-frequency multiprocess edits, aliases/symlinks, stale write/reread, paginated versions, permissions/hard links, cancelable lock waits, concurrent atomic-replacement reads.
+Local regression needs no provider/key: build then python3 tests/test_files.py. Temporary NAEB_HOME tests cover high-frequency multiprocess edits, aliases/symlinks, stale write/reread, paginated versions, permissions/hard links, cancelable lock waits, concurrent atomic-replacement reads.
 
 ## Run execution budgets and cancellation
 

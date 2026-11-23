@@ -24,7 +24,7 @@ class Server:
         method, params = request["method"], request.get("params", {})
         if self.record:
             with open(self.record, "a") as log:
-                log.write(json.dumps({"request": request, "headers": dict(headers or {}), "pid": os.getpid(), "cwd": os.getcwd(), "env": {k: os.environ.get(k) for k in ("MCP_TEST_TOKEN", "NIB_API_KEY", "MCP_UNLISTED")}}) + "\n")
+                log.write(json.dumps({"request": request, "headers": dict(headers or {}), "pid": os.getpid(), "cwd": os.getcwd(), "env": {k: os.environ.get(k) for k in ("MCP_TEST_TOKEN", "NAEB_API_KEY", "MCP_UNLISTED")}}) + "\n")
         def result(value):
             if not self.legacy:
                 value["resultType"] = "complete"
@@ -70,7 +70,7 @@ class Server:
             if name == "large":
                 text = "X" * 25000
             if name == "env":
-                text = json.dumps({"allowed": os.environ.get("MCP_TEST_TOKEN"), "github": os.environ.get("GITHUB_TOKEN"), "key": os.environ.get("NIB_API_KEY"), "unlisted": os.environ.get("MCP_UNLISTED"), "home": os.environ.get("HOME"), "cwd": os.getcwd()})
+                text = json.dumps({"allowed": os.environ.get("MCP_TEST_TOKEN"), "github": os.environ.get("GITHUB_TOKEN"), "key": os.environ.get("NAEB_API_KEY"), "unlisted": os.environ.get("MCP_UNLISTED"), "home": os.environ.get("HOME"), "cwd": os.getcwd()})
             if name == "sandbox":
                 try:
                     with open(args["path"], "w") as f:

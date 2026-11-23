@@ -39,7 +39,7 @@ class Update(unittest.TestCase):
 
     def run_update(self, version='9.9.9', base=None, **env):
         return subprocess.run([self.target, 'update', version], env=dict(os.environ,
-            NIB_DOWNLOAD_BASE=base or self.assets.as_uri(), **env), capture_output=True, text=True)
+            NAEB_DOWNLOAD_BASE=base or self.assets.as_uri(), **env), capture_output=True, text=True)
 
     def test_replace(self):
         result = self.run_update('v9.9.9')
@@ -83,7 +83,7 @@ class Update(unittest.TestCase):
         link.symlink_to(self.target)
         self.target = link
         (self.assets / 'SHA256SUMS').unlink()
-        result = self.run_update(NIB_SKIP_VERIFY='1')
+        result = self.run_update(NAEB_SKIP_VERIFY='1')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(link.is_symlink())
         self.assertEqual(subprocess.check_output([link], text=True), 'nib 9.9.9\n')

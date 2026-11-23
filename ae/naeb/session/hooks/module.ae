@@ -1,9 +1,7 @@
 // session.hooks: configured shell commands after a Run's edits and at the
 // end of a root Turn (upstream src/session/hooks.zig, docs/config.md#hooks).
-// The hook variables keep upstream's NIB_ names: they are the contract with
-// users' hook scripts, and upstream's unchanged tests/test_hooks.py reads them.
-// Each command runs through /bin/sh in the project root with NIB_EVENT,
-// NIB_FILES (newline-separated, relative to the root) and NIB_TURN_STATUS,
+// Each command runs through /bin/sh in the project root with NAEB_EVENT,
+// NAEB_FILES (newline-separated, relative to the root) and NAEB_TURN_STATUS,
 // {files} replaced by the shell-quoted paths, inside the bash write sandbox
 // when it is on. Commands run in order; the first failure stops the rest.
 
@@ -138,14 +136,14 @@ run(cp: ptr, event: string, commands: ptr, paths: ptr, status: string, timeout_m
     base = c.env
     if base == null { base = process.environ() }
     names = list.list_new()
-    list.list_add(names, "NIB_EVENT")
-    list.list_add(names, "NIB_FILES")
-    list.list_add(names, "NIB_TURN_STATUS")
+    list.list_add(names, "NAEB_EVENT")
+    list.list_add(names, "NAEB_FILES")
+    list.list_add(names, "NAEB_TURN_STATUS")
     if c.strip_env != "" { list.list_add(names, c.strip_env) }
     env = secrets.remove_from(env_without_(base, names))
-    list.list_add(env, "NIB_EVENT=${event}")
-    list.list_add(env, "NIB_FILES=${files}")
-    list.list_add(env, "NIB_TURN_STATUS=${status}")
+    list.list_add(env, "NAEB_EVENT=${event}")
+    list.list_add(env, "NAEB_FILES=${files}")
+    list.list_add(env, "NAEB_TURN_STATUS=${status}")
     started = os.now_monotonic_ms()
     redirect = "exec 2>&1"
     if event == "turn_end" { redirect = "exec >/dev/null 2>&1" }

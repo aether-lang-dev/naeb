@@ -22,9 +22,9 @@ def free_port():
 
 def base_env(home, **extra):
     env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("NIB_", "CODEX_")) and not k.endswith("_API_KEY") and "proxy" not in k.lower()
+           if not k.startswith(("NAEB_", "CODEX_")) and not k.endswith("_API_KEY") and "proxy" not in k.lower()
            and k not in ("DISPLAY", "WAYLAND_DISPLAY", "SSH_CONNECTION", "SSH_TTY")}
-    env.update(HOME=str(home), NIB_HOME=str(home / "nib"), CODEX_HOME=str(home / "codex"), TERM="xterm-256color")
+    env.update(HOME=str(home), NAEB_HOME=str(home / "nib"), CODEX_HOME=str(home / "codex"), TERM="xterm-256color")
     env.update(extra)
     return env
 
@@ -237,7 +237,7 @@ def test_codex_browser_login(tmp):
     issuer = Issuer()
     port = free_port()
     log = tmp / "opened.log"
-    env = base_env(home, NIB_AUTH_ISSUER=issuer.url, NIB_AUTH_PORT=str(port), DISPLAY=":0",
+    env = base_env(home, NAEB_AUTH_ISSUER=issuer.url, NAEB_AUTH_PORT=str(port), DISPLAY=":0",
                    PATH=f"{opener(tmp / 'bin', log)}:{os.environ['PATH']}")
     terminal = Terminal(tmp, env)
     try:
@@ -260,7 +260,7 @@ def test_codex_browser_login(tmp):
     finally:
         terminal.close()
     # Esc while waiting cancels and frees the callback port.
-    quiet = base_env(home, NIB_AUTH_ISSUER=issuer.url, NIB_AUTH_PORT=str(port), DISPLAY=":0",
+    quiet = base_env(home, NAEB_AUTH_ISSUER=issuer.url, NAEB_AUTH_PORT=str(port), DISPLAY=":0",
                      PATH=f"{opener(tmp / 'quiet', tmp / 'quiet.log', silent=True)}:{os.environ['PATH']}")
     terminal = Terminal(tmp, quiet)
     try:
@@ -282,7 +282,7 @@ def test_codex_device_login(tmp):
     home = tmp / "home"
     home.mkdir()
     issuer = Issuer(polls_before_approval=1)
-    env = base_env(home, NIB_AUTH_ISSUER=issuer.url, NIB_AUTH_NO_BROWSER="1")
+    env = base_env(home, NAEB_AUTH_ISSUER=issuer.url, NAEB_AUTH_NO_BROWSER="1")
     terminal = Terminal(tmp, env)
     try:
         terminal.send("/provider codex\r")
@@ -319,8 +319,8 @@ def test_codex_refresh(tmp):
             refresh = "old-refresh" if name == "nib" else "cli-refresh"
             path.write_text(json.dumps({**extra, "tokens": {"access_token": expired, "id_token": expired, "account_id": "acc-mock", "refresh_token": refresh}}))
             original_mode = mode(path)
-            env = base_env(home, NIB_HOME=str(home / "nib"), CODEX_HOME=str(home / "codex"), NIB_PROVIDER="codex",
-                           NIB_CODEX_TRANSPORT="sse", NIB_BASE_URL=f"http://127.0.0.1:{port}", NIB_AUTH_ISSUER=issuer.url)
+            env = base_env(home, NAEB_HOME=str(home / "nib"), CODEX_HOME=str(home / "codex"), NAEB_PROVIDER="codex",
+                           NAEB_CODEX_TRANSPORT="sse", NAEB_BASE_URL=f"http://127.0.0.1:{port}", NAEB_AUTH_ISSUER=issuer.url)
             before = len(requests.read_text().splitlines()) if requests.exists() else 0
             result = subprocess.run([str(BIN), "ask", "plain text"], cwd=tmp, env=env, capture_output=True, text=True, timeout=30)
             assert result.returncode == 0, result

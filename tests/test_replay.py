@@ -1,4 +1,4 @@
-"""Replay and /reflect privacy E2E, temporary NIB_HOME and local mock only.
+"""Replay and /reflect privacy E2E, temporary NAEB_HOME and local mock only.
 
 Run after zig build: python3 tests/test_replay.py
 """
@@ -22,7 +22,7 @@ from background_assertions import stop_result
 from test_interjections import Terminal, wait_for
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "zig-out/bin/nib"
+BIN = ROOT / "ae/tests/naeb-unfenced"
 
 
 def jsonl(path):
@@ -87,10 +87,10 @@ class ReplayTests(unittest.TestCase):
         self.addCleanup(thread.join)
         self.addCleanup(self.mock.shutdown)
         self.env = {key: value for key, value in os.environ.items()
-                    if not key.startswith(("NIB_", "DEEPSEEK_", "OPENAI_", "CODEX_"))}
-        self.env.update(NIB_HOME=str(self.home), HOME=str(self.tmp), TERM="xterm-256color",
-                        NIB_PROVIDER="chat_completions", NIB_API_KEY="local-mock-only",
-                        NIB_MODEL="mock-replay", NIB_BASE_URL=f"http://127.0.0.1:{self.mock.server_port}")
+                    if not key.startswith(("NAEB_", "DEEPSEEK_", "OPENAI_", "CODEX_"))}
+        self.env.update(NAEB_HOME=str(self.home), HOME=str(self.tmp), TERM="xterm-256color",
+                        NAEB_PROVIDER="chat_completions", NAEB_API_KEY="local-mock-only",
+                        NAEB_MODEL="mock-replay", NAEB_BASE_URL=f"http://127.0.0.1:{self.mock.server_port}")
 
     def command(self, *args, env=None, check=True):
         result = subprocess.run([str(BIN), *args], cwd=self.cwd, env=env or self.env,
@@ -317,7 +317,7 @@ class ReplayTests(unittest.TestCase):
         self.assertIsNone(report["match"])
 
     def test_record_off_creates_no_calls_file(self):
-        self.env["NIB_RECORD"] = "off"
+        self.env["NAEB_RECORD"] = "off"
         (self.cwd / "sample.txt").write_text("off probe")
         session = self.ask(['console.log(await tools.read({path: "sample.txt"}));'])
         self.assertFalse(self.calls_path(session).exists())
@@ -640,7 +640,7 @@ echo https://example.invalid/issues/1
 """)
         gh.chmod(0o700)
         env = dict(self.env, PATH=str(fakebin) + os.pathsep + self.env.get("PATH", ""),
-                   NIB_ISSUE_REPO="test/replay-privacy", FAKE_GH_BODY=str(body_path),
+                   NAEB_ISSUE_REPO="test/replay-privacy", FAKE_GH_BODY=str(body_path),
                    FAKE_GH_ARGS=str(args_path))
         self.mock.reply(text="baseline complete")
         terminal = Terminal(self.cwd, env)

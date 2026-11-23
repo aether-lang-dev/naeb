@@ -31,7 +31,7 @@ def content(message):
 def run_code(prompt):
     call = 'tools.llm({prompt: "llm_mock:echo", input: "独立 input 🙂\\n第二行"})'
     if prompt == "llm_limits_child":
-        return ('await tools.write(' + json.dumps({"path": os.path.join(os.environ["NIB_HOME"], "config.toml"),
+        return ('await tools.write(' + json.dumps({"path": os.path.join(os.environ["NAEB_HOME"], "config.toml"),
                 "content": "[limits]\nllm_concurrency = 0\n"}) + '); '
                 'await tools.agent({prompt: "llm_limits"})')
     if prompt == "llm_limits":

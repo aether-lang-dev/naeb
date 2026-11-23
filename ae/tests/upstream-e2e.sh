@@ -1,10 +1,8 @@
 #!/bin/sh
-# ae/tests/upstream-e2e.sh — run upstream's Python end-to-end tests,
-# unchanged, against the Aether binary. They hard-code zig-out/bin/nib and
-# configure it through NIB_* variables (that name is upstream's, so it stays
-# here), so zig-out/bin/nib is ae/tests/nib-oracle-launcher.py, which
-# translates NIB_* to naeb's NAEB_* and runs target/build/bin/naeb-unfenced
-# (zig-out/ is gitignored).
+# ae/tests/upstream-e2e.sh: run upstream's Python end-to-end tests against the
+# Aether binary. tests/ is upstream's, edited only where a word pins the old
+# name (checked below); they drive ae/tests/naeb-unfenced, which runs the built
+# naeb without a project fence.
 # Every test drives local mocks only (tests/mock_*.py); none reaches a real
 # provider.
 #
@@ -22,25 +20,16 @@ if [ ! -x "$BIN" ]; then
     echo "build first: aeb .build.ae" >&2
     exit 2
 fi
-# tests/ must be upstream's, byte for byte: a port of an upstream change is
-# not done until its tests come across too. Skipped where there is no git
-# (a lab lane's synced copy).
-if git rev-parse --verify -q main >/dev/null 2>&1 && ! git diff --quiet main -- tests/; then
-    echo "tests/ differs from main (upstream); copy upstream's files: git checkout main -- tests/" >&2
-    git diff --stat main -- tests/ >&2
-    exit 2
+# tests/ may differ from upstream's (main) only by the name substitutions;
+# skipped where there is no git (a lab lane's synced copy).
+if git rev-parse --git-dir >/dev/null 2>&1; then
+    python3 ae/tests/check_tests_vs_main.py || exit 2
 fi
-mkdir -p zig-out/bin
-ln -sf ../../ae/tests/nib-oracle-launcher.py zig-out/bin/nib
 
 # The tests that apply, one per line: FILE, then the tests left out of it
 # (substrings of Class.method, run through ae/tests/run_upstream.py) and
 # why. A file with nothing left out runs as upstream runs it.
 #   Codex*/codex: policy (API keys only, no Codex sign-in or WebSocket)
-#   Files run through ae/tests/run_upstream.py also get its SUBS table: the few
-#   assertions that pin the program name `nib` in a message, or `.nib` as the
-#   default home, are read as naeb's wording in memory; the file on disk is
-#   never touched (test_cli, test_session, test_model, test_background_bash).
 APPLY="tests/test_cli.py
 tests/test_providers.py
 tests/test_session.py
@@ -89,8 +78,7 @@ for f in $files; do
            [ -n "$entry" ] && skips=${entry#*|} ;;
     esac
     name=$(basename "$f" .py)
-    case $name in test_cli|test_session|test_model) via_runner=1 ;; *) via_runner=0 ;; esac
-    if [ -n "$skips" ] || [ "$via_runner" = 1 ]; then
+    if [ -n "$skips" ]; then
         # shellcheck disable=SC2086
         (cd tests && timeout 1800 python3 ../ae/tests/run_upstream.py "$name.py" $skips > "$LOGS/$name.log" 2>&1)
     else

@@ -9,7 +9,7 @@ import unittest
 from mock_providers import Mock
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "zig-out/bin/nib"
+BIN = ROOT / "ae/tests/naeb-unfenced"
 
 CODE = """const found = await tools.search({query: "zig", count: 2});
 const unsearched = await tools.search({query: "nosearch"});
@@ -29,9 +29,9 @@ class WebSearch(unittest.TestCase):
         mock = Mock(protocol, code=code, **mock_args)
         self.addCleanup(mock.close)
         home = Path(tmp.name)
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("NIB_", "OPENAI_", "ANTHROPIC_", "DEEPSEEK_", "XAI_", "CODEX_"))}
-        env.update(HOME=tmp.name, NIB_HOME=str(home / "nib"), NIB_PROVIDER=provider, NIB_BASE_URL=mock.url,
-                   NIB_CODEX_TRANSPORT="sse", NIB_CODEX_RUN_TOOL="function")
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("NAEB_", "OPENAI_", "ANTHROPIC_", "DEEPSEEK_", "XAI_", "CODEX_"))}
+        env.update(HOME=tmp.name, NAEB_HOME=str(home / "nib"), NAEB_PROVIDER=provider, NAEB_BASE_URL=mock.url,
+                   NAEB_CODEX_TRANSPORT="sse", NAEB_CODEX_RUN_TOOL="function")
         if key_env:
             env[key_env] = mock.key
         else:
@@ -116,8 +116,8 @@ try { await tools.search({query: "中".repeat(129)}); } catch (e) { long = e.mes
         sessions = [f for f in (home / "nib/sessions").glob("*.jsonl") if not f.name.endswith(".calls.jsonl")]
         self.assertEqual(len(sessions), 1)
         before = len(mock.searches)
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("NIB_", "DEEPSEEK_"))}
-        env["NIB_HOME"] = str(home / "nib")
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("NAEB_", "DEEPSEEK_"))}
+        env["NAEB_HOME"] = str(home / "nib")
         result = subprocess.run([str(BIN), "replay", sessions[0].stem, "--all", "--json"], env=env, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         report = json.loads(result.stdout)

@@ -6,13 +6,13 @@ import subprocess
 import tempfile
 import unittest
 
-BIN = Path(__file__).resolve().parents[1] / "zig-out/bin/nib"
+BIN = Path(__file__).resolve().parents[1] / "ae/tests/naeb-unfenced"
 
 
 class CliTests(unittest.TestCase):
     def test_help_without_configuration(self):
         with tempfile.TemporaryDirectory() as directory:
-            env = dict(os.environ, NIB_PROVIDER="invalid", NIB_HOME=directory)
+            env = dict(os.environ, NAEB_PROVIDER="invalid", NAEB_HOME=directory)
             for args in (["--help"], ["-h"], ["ask", "--help"]):
                 result = subprocess.run([str(BIN), *args], env=env, capture_output=True, text=True, timeout=5)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -22,7 +22,7 @@ class CliTests(unittest.TestCase):
             for args in (["--x"], ["ask", "--x"], ["ask", "prompt", "--x"]):
                 result = subprocess.run([str(BIN), *args], env=env, capture_output=True, text=True, timeout=5)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertEqual(result.stderr, "nib: Unknown option: --x · run nib --help\n")
+                self.assertEqual(result.stderr, "naeb: Unknown option: --x · run naeb --help\n")
 
     def test_machine_error_code_stays_stable(self):
         result = subprocess.run([str(BIN), "ask", "--json"], capture_output=True, text=True, timeout=5)

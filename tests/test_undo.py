@@ -280,12 +280,12 @@ def test_background_agent(tmp):
 
     tmp.mkdir()
     home = tmp / "home"
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("NIB_", "OPENAI_", "DEEPSEEK_", "CODEX_"))}
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("NAEB_", "OPENAI_", "DEEPSEEK_", "CODEX_"))}
     with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as mock:
         thread = threading.Thread(target=mock.serve_forever, daemon=True)
         thread.start()
-        env.update(NIB_PROVIDER="chat_completions", NIB_API_KEY="mock",
-                   NIB_BASE_URL=f"http://127.0.0.1:{mock.server_port}", NIB_HOME=str(home),
+        env.update(NAEB_PROVIDER="chat_completions", NAEB_API_KEY="mock",
+                   NAEB_BASE_URL=f"http://127.0.0.1:{mock.server_port}", NAEB_HOME=str(home),
                    HOME=str(tmp), TERM="xterm-256color")
         terminal = Terminal(tmp, env)
         try:

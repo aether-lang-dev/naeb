@@ -26,11 +26,11 @@ Line count is only an observation: sudden growth warrants design review, but min
 
 ## Grounded in the present, ready for the future
 
-nib targets increasingly capable models: provide facts and capabilities without making judgments for them. Ask of a design: would a perfect model still need this?
+naeb targets increasingly capable models: provide facts and capabilities without making judgments for them. Ask of a design: would a perfect model still need this?
 
 What remains belongs to the design: facts models cannot see (limits, costs, timing, truncation, inputs actually received on errors), capability extensions (llm, agent, per-Step effort, interjections), boundaries (irreversible/external operations, credentials, untrusted external content), user policies (budgets, limits, automatic publication), and corrections to stale information (e.g. a Run failure or user interjection invalidates an earlier effort reduction).
 
-Present-day compromises are valuable but should be identifiable, measurable, and removable. Three categories: model patches (current model mistakes), implementation compromises (our implementation needs improvement), and hardcoded policies (values users should configure). Register each in [compromises.md](compromises.md), with location, reason, signal, and removal condition; unregistered compromises do not enter code. Prompt model patches live in `src/session/prompt.zig`'s patches, disabled through `NIB_PATCHES_OFF` to compare continued necessity using scripts/stats.py.
+Present-day compromises are valuable but should be identifiable, measurable, and removable. Three categories: model patches (current model mistakes), implementation compromises (our implementation needs improvement), and hardcoded policies (values users should configure). Register each in [compromises.md](compromises.md), with location, reason, signal, and removal condition; unregistered compromises do not enter code. Prompt model patches live in `src/session/prompt.zig`'s patches, disabled through `NAEB_PATCHES_OFF` to compare continued necessity using scripts/stats.py.
 
 Tool descriptions and system prompts state facts and costs for models to weigh, without prescribing when to use capabilities.
 
@@ -48,7 +48,7 @@ Tool descriptions and system prompts state facts and costs for models to weigh, 
   - [0007 Stable system; complete-Step compaction](adr/0007-context-compaction.md)
   - [0008 Thinking models; deepseek-flash default](adr/0008-thinking-models.md)
   - [0009 Concurrent tools with JS ordering](adr/0009-concurrent-tools.md)
-  - [0010 Subagents: independent nib subprocesses](adr/0010-subagents.md)
+  - [0010 Subagents: independent naeb subprocesses](adr/0010-subagents.md)
   - [0011 One Provider interface, two wire protocols](adr/0011-provider-wire-protocols.md)
   - [0012 Native Zig grep, glob, and fetch](adr/0012-search-and-fetch-tools.md)
   - [0013 tools.llm: lightweight single-step map](adr/0013-llm-functions.md)
@@ -68,7 +68,7 @@ Tool descriptions and system prompts state facts and costs for models to weigh, 
 - [replay.md](replay.md): recording, offline Run replay, diagnostic scripts, privacy boundaries
 - [reflect.md](reflect.md): read-only reflection, saved answers, automatic issue publication
 - [mcp.md](mcp.md): opt-in servers, context index, transports, protocol detection, lifecycle, sandbox, and limits
-- [config.md](config.md): `NIB_HOME`, files, environment, precedence, effort persistence
+- [config.md](config.md): `NAEB_HOME`, files, environment, precedence, effort persistence
 - [codex.md](codex.md): local Codex login, configuration, credential boundaries
 - [run-output.md](run-output.md): data integrity, explicit limits, Run display budgets, execution timeouts
 - [tool-delegation.md](tool-delegation.md): read / llm / agent choices, interfaces, delegation implementation
@@ -79,11 +79,11 @@ Tool descriptions and system prompts state facts and costs for models to weigh, 
 
 These are easily reversible; a note suffices:
 
-- **Unified user directory `NIB_HOME` (default ~/.nib).** Like ~/.codex / ~/.claude, keep global instructions, nonsecret configuration, and Sessions together for discovery/backup. No XDG paths or automatic migration. `config.toml` uses a small custom TOML subset rather than a dependency for a few scalar keys. No API keys/tokens in editable, backed-up configuration; Codex owns its login. TUI `/effort` saves confirmed choices automatically, atomically updating top-level effort while preserving other lines; default deletes the key, CLI overrides do not persist. Defer project configuration and another merge policy; use `AGENTS.md` for project conventions. Format/precedence: [config.md](config.md).
+- **Unified user directory `NAEB_HOME` (default ~/.naeb).** Like ~/.codex / ~/.claude, keep global instructions, nonsecret configuration, and Sessions together for discovery/backup. No XDG paths or automatic migration. `config.toml` uses a small custom TOML subset rather than a dependency for a few scalar keys. No API keys/tokens in editable, backed-up configuration; Codex owns its login. TUI `/effort` saves confirmed choices automatically, atomically updating top-level effort while preserving other lines; default deletes the key, CLI overrides do not persist. Defer project configuration and another merge policy; use `AGENTS.md` for project conventions. Format/precedence: [config.md](config.md).
 - Providers support Codex Responses (default, gpt-6.1-sol) and Chat Completions (DeepSeek); see [0011](adr/0011-provider-wire-protocols.md).
 - TUI uses libvaxis. / commands: `/help`, `/new`, `/resume <id>`, `/compact`, `/effort [level]`, `/copy`, `/reflect [focus]`, `/js <code>`, `/tasks`, `/stop <id>`, `/undo`, `/status`, defined in one `src/tui/commands.zig` table generating help, command candidates, and argument candidates. Typing / lists prefix matches above input: ↑↓ select, Tab completes, Enter executes (commands needing arguments complete first and wait), Esc closes. `/resume` lists Sessions with user messages in the current directory, newest first; empty Sessions are excluded, also by -c. `/help` and `/copy` work during Turns; `/copy` uses terminal OSC 52 and has no effect without terminal support.
 
-  Layout: transcript, one reserved status row, / menu, rounded input flush with the last row, hints. The status row holds the activity line when busy, browsing history, or showing temporary feedback, and is blank otherwise. Busy shows spinner, phase (waiting for model / generating response / writing Run / running tools / waiting for background / retrying / compacting), cumulative Turn time, and Esc to cancel; history shows ↑ history · PgDn to return; copy feedback shares the row. These states may coexist. Input uses at least one line and at most 1/3 screen height, scrolling internally to keep the cursor visible; empty input shows muted Message nib · / for commands. The bottom border shows model and context percentage from available usage, with concise Turn-footer statistics; detailed timing, Steps, and cache data live in /status. Update after each request's usage and complete Step commit, without waiting for Turn end; ctx estimates latest committed context and refreshes after compaction. Do not infer unreported tokens from streamed text. Omit fields right-to-left when space runs out, truncating model names only if needed and preserving corners. Below 8 rows hide hints; below 6 rows or 8 columns degrade to › . Hints list only implemented send/newline/command/ctrl+o actions.
+  Layout: transcript, one reserved status row, / menu, rounded input flush with the last row, hints. The status row holds the activity line when busy, browsing history, or showing temporary feedback, and is blank otherwise. Busy shows spinner, phase (waiting for model / generating response / writing Run / running tools / waiting for background / retrying / compacting), cumulative Turn time, and Esc to cancel; history shows ↑ history · PgDn to return; copy feedback shares the row. These states may coexist. Input uses at least one line and at most 1/3 screen height, scrolling internally to keep the cursor visible; empty input shows muted Message naeb · / for commands. The bottom border shows model and context percentage from available usage, with concise Turn-footer statistics; detailed timing, Steps, and cache data live in /status. Update after each request's usage and complete Step commit, without waiting for Turn end; ctx estimates latest committed context and refreshes after compaction. Do not infer unreported tokens from streamed text. Omit fields right-to-left when space runs out, truncating model names only if needed and preserving corners. Below 8 rows hide hints; below 6 rows or 8 columns degrade to › . Hints list only implemented send/newline/command/ctrl+o actions.
 
   User messages use ›, a left blue bar, and subtle shading; body text keeps default foreground without whole-message bold. Blend terminal-reported backgrounds slightly with blue for light/dark themes; without reports, retain the bar. Messages over 5 lines or 800 Unicode characters collapse by default to their first line plus muted … +N lines; truncate the first line to available columns using identical live/replay rules, opened by click like Runs. Reasoning is hidden from the transcript, including restored history, without affecting model reasoning, logs, or thinking activity. Runs keep stable parent titles, summarize actual calls, avoid duplicate read/search paths in titles, and list changes separately, e.g. src/a.zig +3 −1. Click a Run (Ctrl+O for the latest) expands Changes / Result / Script; long diffs state preview scope (at most 60 lines). Subagent trees always remain below Runs, independent of expansion, one row per task with id, prompt summary, state, Step, and latest tools/files, truncating rather than wrapping on narrow screens. Final states persist after Run completion; restored history keeps recorded background/supersession states.
 
@@ -104,10 +104,10 @@ Second-phase input plans:
 
 - **Withdraw individual uninserted messages.** Step-boundary interjections, end continuation, and Esc restoration exist; individual queued-message selection/withdrawal awaits real demand for finer control.
 - **@ file references.** Reuse / menu and `walk.zig`, inserting paths only. First finish compatibility between the single candidate menu and new layout, then add triggers/path filters.
-- **Cross-process input history `~/.nib/history.jsonl` and ctrl+r search.** Current scope is in-process drafts and Session-log resume. Persistent history needs sensitive-input handling, retention, and multiprocess appends; search needs separate interaction state, designed together in phase two.
+- **Cross-process input history `~/.naeb/history.jsonl` and ctrl+r search.** Current scope is in-process drafts and Session-log resume. Persistent history needs sensitive-input handling, retention, and multiprocess appends; search needs separate interaction state, designed together in phase two.
 - **ctrl+g edits drafts through $EDITOR.** Needs terminal suspension/restoration, temporary cleanup, and reimport after paste expansion; integrate once the draft model stabilizes in phase two.
 
-Run tool concurrency, nib ask --json, and `tools.agent` are implemented; see ADR 0009–0010, [ask-json.md](ask-json.md), and [tool-delegation.md](tool-delegation.md). After zig build, `python3 tests/test_session.py` checks resume, machine events, subagent concurrency/depth/usage/cancellation, and startup overhead, entirely with local mocks and no real keys. Other deferred alternatives live in their ADRs: daemon ([0005](adr/0005-process-per-session.md)), cross-Run variables ([0003](adr/0003-stateless-runs.md)), hybrid native calls and Python runtime ([0002](adr/0002-run-code-only.md)).
+Run tool concurrency, naeb ask --json, and `tools.agent` are implemented; see ADR 0009–0010, [ask-json.md](ask-json.md), and [tool-delegation.md](tool-delegation.md). After zig build, `python3 tests/test_session.py` checks resume, machine events, subagent concurrency/depth/usage/cancellation, and startup overhead, entirely with local mocks and no real keys. Other deferred alternatives live in their ADRs: daemon ([0005](adr/0005-process-per-session.md)), cross-Run variables ([0003](adr/0003-stateless-runs.md)), hybrid native calls and Python runtime ([0002](adr/0002-run-code-only.md)).
 
 ## Measurements
 
@@ -123,12 +123,12 @@ Tool/bash statistics estimate JS/static-shell call sites, not actual loop/dynami
 |---|---|---|---|
 | Source lines (`src/` + `build.zig`, including tests) | 3766 (2026-11-01, after concurrency, NDJSON, subagents) | — | `wc -l build.zig src/**/*.zig` (zsh) |
 | TUI frame draw, 5000 entries, 100×24 | Bottom following 102.5 → 29.7 µs; 1200 lines up 1149.5 → 57.2 µs (2026-11-01, ReleaseFast, before → after height cache) | — | After warmup, median of 5 group means, 32 frames/group, draw only (feat/tui-polish report) |
-| nib js '1+1' mean including startup | 1.6 ms (2026-11-01, ReleaseFast) | — | Average of 100 iterations |
+| naeb js '1+1' mean including startup | 1.6 ms (2026-11-01, ReleaseFast) | — | Average of 100 iterations |
 | Tool Promise.all / successive await: two sleep 0.3 | 307 / 611 ms (2026-11-01, Debug) | — | `src/tools.zig` tests, ADR 0009 |
 | Child startup to NDJSON start (including log sync, no TLS) | Debug median 11.82 ms; ReleaseFast median 1.30 ms (2026-11-01) | — | `tests/test_session.py`, 10 runs, ADR 0010 |
 | Above command peak RSS | 3.7 MB (2026-11-01) | — | `/usr/bin/time -f %M` |
 | Binary size (ReleaseFast, stripped) | 1.9 MB (2026-11-01) | — | ls -l after strip |
 | Idle TUI PSS (one Turn, no TLS) | 3.08 MB/process, 30.8 MB for 10 (2026-11-01, ReleaseFast) | — | 10 TUIs each completing one local-mock Turn; read `/proc/<pid>/smaps_rollup` Pss |
-| One HTTPS request peak RSS (including TLS) | 7.6 MB (2026-11-01, ReleaseFast) | — | `/usr/bin/time -f %M nib ask hi` (invalid key, 401) |
+| One HTTPS request peak RSS (including TLS) | 7.6 MB (2026-11-01, ReleaseFast) | — | `/usr/bin/time -f %M naeb ask hi` (invalid key, 401) |
 
 See [tui-ux.md](tui-ux.md) for background-task management, waiting phases, and recovery notices.

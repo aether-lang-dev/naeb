@@ -20,7 +20,7 @@ sys.dont_write_bytecode = True
 from mock_llm_tool import codex_run
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "zig-out/bin/nib"
+BIN = ROOT / "ae/tests/naeb-unfenced"
 PNG = b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + struct.pack(">II", 640, 480) + b"\x08\x06\x00\x00\x00"
 VIEW = {}
 
@@ -288,10 +288,10 @@ def run_case(tmp, mode, *, resume=None, home=None, extra=None):
         (home / "config.toml").write_text("[limits]\nstream_idle_timeout_s = 3\nstream_content_timeout_s = " +
             ("3" if mode == "request-progress" else "1") + "\nrequest_timeout_s = " +
             ("1" if mode == "request-progress" else "3") + "\n")
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("NIB_", "CODEX_"))}
-    env.update(NIB_HOME=str(home), CODEX_HOME=str(tmp / "auth"), NIB_PROVIDER="codex", NIB_MODEL="gpt-6.1-terra",
-               NIB_BASE_URL=f"http://127.0.0.1:{server.server_port}",
-               NIB_REASONING_EFFORT="medium")
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("NAEB_", "CODEX_"))}
+    env.update(NAEB_HOME=str(home), CODEX_HOME=str(tmp / "auth"), NAEB_PROVIDER="codex", NAEB_MODEL="gpt-6.1-terra",
+               NAEB_BASE_URL=f"http://127.0.0.1:{server.server_port}",
+               NAEB_REASONING_EFFORT="medium")
     if extra:
         env.update(extra)
     args = [str(BIN), "ask", "--json", "resumed" if resume else "roundtrip"]
@@ -316,7 +316,7 @@ def run_case(tmp, mode, *, resume=None, home=None, extra=None):
 
 def check_saved_run(tmp, session, home):
     result = subprocess.run([str(BIN), "replay", session, "--all", "--json"], cwd=tmp,
-                            env=dict(os.environ, NIB_HOME=str(home)), capture_output=True, timeout=10)
+                            env=dict(os.environ, NAEB_HOME=str(home)), capture_output=True, timeout=10)
     assert result.returncode == 0 and result.stderr == b"", (result.stdout, result.stderr)
     report = json.loads(result.stdout)
     assert report["total"] == report["matched"] == 1, report
@@ -328,9 +328,9 @@ def test_tui_stale(tmp):
     from test_interjections import Terminal, wait_for, finished
     server = Mock("stale-close")
     home = tmp / "tui-stale"
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("NIB_", "CODEX_"))}
-    env.update(NIB_HOME=str(home), CODEX_HOME=str(tmp / "auth"), NIB_PROVIDER="codex", NIB_MODEL="gpt-6.1-terra",
-               NIB_BASE_URL=f"http://127.0.0.1:{server.server_port}", TERM="xterm-256color")
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("NAEB_", "CODEX_"))}
+    env.update(NAEB_HOME=str(home), CODEX_HOME=str(tmp / "auth"), NAEB_PROVIDER="codex", NAEB_MODEL="gpt-6.1-terra",
+               NAEB_BASE_URL=f"http://127.0.0.1:{server.server_port}", TERM="xterm-256color")
     terminal = Terminal(tmp, env)
     try:
         terminal.send("roundtrip\r")
@@ -346,9 +346,9 @@ def test_tui_cancel(tmp):
     from test_interjections import Terminal, wait_for, finished
     server = Mock("cancel")
     home = tmp / "tui-cancel"
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("NIB_", "CODEX_"))}
-    env.update(NIB_HOME=str(home), CODEX_HOME=str(tmp / "auth"), NIB_PROVIDER="codex", NIB_MODEL="gpt-6.1-terra",
-               NIB_CODEX_TRANSPORT="websocket", NIB_BASE_URL=f"http://127.0.0.1:{server.server_port}", TERM="xterm-256color")
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("NAEB_", "CODEX_"))}
+    env.update(NAEB_HOME=str(home), CODEX_HOME=str(tmp / "auth"), NAEB_PROVIDER="codex", NAEB_MODEL="gpt-6.1-terra",
+               NAEB_CODEX_TRANSPORT="websocket", NAEB_BASE_URL=f"http://127.0.0.1:{server.server_port}", TERM="xterm-256color")
     terminal = Terminal(tmp, env)
     try:
         terminal.send("roundtrip\r")
@@ -407,13 +407,13 @@ def main():
         (tmp / "shot.png").write_bytes(PNG)
         data_url = "data:image/png;base64," + base64.b64encode(PNG).decode()
         for transport in ("websocket", "sse"):
-            viewed, _, view_session, view_home = run_case(tmp, "view", home=tmp / f"view-{transport}", extra=dict(NIB_CODEX_TRANSPORT=transport))
+            viewed, _, view_session, view_home = run_case(tmp, "view", home=tmp / f"view-{transport}", extra=dict(NAEB_CODEX_TRANSPORT=transport))
             second = viewed.requests[1]["body"]
             output = next(i for i in second["input"] if i.get("type") == "custom_tool_call_output")["output"]
             assert output[0]["type"] == "input_text" and output[1] == dict(type="input_image", image_url=data_url), output
             if transport == "websocket":
                 assert second["previous_response_id"] == "resp-1-1" and [i["type"] for i in second["input"]] == ["custom_tool_call_output"], second
-            resumed_view, _, _, _ = run_case(tmp, "normal", resume=view_session, home=view_home, extra=dict(NIB_CODEX_TRANSPORT=transport))
+            resumed_view, _, _, _ = run_case(tmp, "normal", resume=view_session, home=view_home, extra=dict(NAEB_CODEX_TRANSPORT=transport))
             replayed = next(i for i in resumed_view.requests[0]["body"]["input"] if i.get("type") == "custom_tool_call_output")["output"]
             assert replayed[1] == dict(type="input_image", image_url=data_url), replayed
         for mode in ("background", "background-prefix", "background-ordered", "background-reconnect"):
@@ -523,9 +523,9 @@ def main():
             case_home = tmp / mode
             case_home.mkdir()
             (case_home / "config.toml").write_text("[limits]\nstream_idle_timeout_s = 1\n")
-            env = {k: v for k, v in os.environ.items() if not k.startswith(("NIB_", "CODEX_"))}
-            env.update(NIB_HOME=str(case_home), CODEX_HOME=str(tmp / "auth"), NIB_PROVIDER="codex", NIB_MODEL="gpt-6.1-terra",
-                       NIB_CODEX_TRANSPORT="websocket", NIB_BASE_URL=f"http://127.0.0.1:{server.server_port}")
+            env = {k: v for k, v in os.environ.items() if not k.startswith(("NAEB_", "CODEX_"))}
+            env.update(NAEB_HOME=str(case_home), CODEX_HOME=str(tmp / "auth"), NAEB_PROVIDER="codex", NAEB_MODEL="gpt-6.1-terra",
+                       NAEB_CODEX_TRANSPORT="websocket", NAEB_BASE_URL=f"http://127.0.0.1:{server.server_port}")
             child = subprocess.Popen([str(BIN), "ask", "--json", "roundtrip"], cwd=tmp, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             try:
                 first = json.loads(child.stdout.readline())

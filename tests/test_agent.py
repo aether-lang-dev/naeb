@@ -18,7 +18,7 @@ from mock_agent import USAGE
 from test_llm import records, wait_for
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "zig-out/bin/nib"
+BIN = ROOT / "ae/tests/naeb-unfenced"
 
 
 def alive(pid):
@@ -65,11 +65,11 @@ class AgentTests:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
         self.env = {key: value for key, value in os.environ.items()
-                    if not key.startswith(("NIB_", "DEEPSEEK_", "OPENAI_", "CODEX_", "MOCK_"))}
-        self.env.update(NIB_PROVIDER=self.provider, NIB_API_KEY="fake-agent-key",
-                        NIB_BASE_URL=f"http://127.0.0.1:{port}", NIB_MODEL="mock-parent-model",
-                        NIB_THINKING="on", NIB_REASONING_EFFORT="high", NIB_CONTEXT_WINDOW="128000",
-                        NIB_HOME=str(home), CODEX_HOME=str(auth), HOME=str(self.tmp))
+                    if not key.startswith(("NAEB_", "DEEPSEEK_", "OPENAI_", "CODEX_", "MOCK_"))}
+        self.env.update(NAEB_PROVIDER=self.provider, NAEB_API_KEY="fake-agent-key",
+                        NAEB_BASE_URL=f"http://127.0.0.1:{port}", NAEB_MODEL="mock-parent-model",
+                        NAEB_THINKING="on", NAEB_REASONING_EFFORT="high", NAEB_CONTEXT_WINDOW="128000",
+                        NAEB_HOME=str(home), CODEX_HOME=str(auth), HOME=str(self.tmp))
         self.requests = self.tmp / "requests.jsonl"
         self.server_stderr = open(self.tmp / "server.stderr", "w+")
         self.addCleanup(self.server_stderr.close)

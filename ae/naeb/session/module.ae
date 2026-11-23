@@ -67,7 +67,7 @@ exports(Session, Options, Sink, Ran, new_options, new_sink, init, turn, turn_wit
         set_activity, enqueue, take_queued, switch_config, steps_logged,
         VERSION)
 
-const VERSION = "0.13.0-ae"   // `naeb --version`; Session headers record build_info.nib_version()
+const VERSION = "0.13.0-ae"   // `naeb --version`; Session headers record build_info.naeb_version()
 
 struct Options {
     home: string             // $NAEB_HOME
@@ -429,7 +429,7 @@ initialize_fork_(s: *Session, fp: ptr, cwd: string) -> string {
     members = ",\"mcp_servers\":${agent_input.mcp_servers_json(c.mcp_servers)},\"cwd\":${jsonx.quote(cwd)},\"provider\":${jsonx.quote(c.provider)}"
     if c.custom_provider != "" { members = "${members},\"custom_provider\":${jsonx.quote(c.custom_provider)}" }
     members = "${members},\"model\":${jsonx.quote(c.model)},\"parent_session_id\":${jsonx.quote(s.parent_session_id)},\"cache_key\":${jsonx.quote(s.cache_key)}"
-    members = "${members},\"forked_from\":{\"session\":${jsonx.quote(f.session)},\"message_count\":${f.message_count}},\"nib_version\":${jsonx.quote(build_info.nib_version())}"
+    members = "${members},\"forked_from\":{\"session\":${jsonx.quote(f.session)},\"message_count\":${f.message_count}},\"naeb_version\":${jsonx.quote(build_info.naeb_version())}"
     tokens = compact.estimate_tokens(msgs, 0, list.list_size(msgs))
     return log.commit(s.log, s.history, 0, msgs, tokens, members, 1)
 }
@@ -495,7 +495,7 @@ initialize_history_(s: *Session, cwd: string) -> string {
     if c.custom_provider != "" { members = "${members},\"custom_provider\":${jsonx.quote(c.custom_provider)}" }
     members = "${members},\"model\":${jsonx.quote(c.model)}"
     if s.parent_session_id != "" { members = "${members},\"parent_session_id\":${jsonx.quote(s.parent_session_id)}" }
-    members = "${members},\"cache_key\":${jsonx.quote(s.cache_key)},\"nib_version\":${jsonx.quote(build_info.nib_version())},\"system_sha\":${jsonx.quote(prompt.system_sha(base))}"
+    members = "${members},\"cache_key\":${jsonx.quote(s.cache_key)},\"naeb_version\":${jsonx.quote(build_info.naeb_version())},\"system_sha\":${jsonx.quote(prompt.system_sha(base))}"
     off = prompt.disabled_patches(o.patches_off)
     if list.list_size(off) > 0 { members = "${members},\"patches_off\":${json_list_(off)}" }
     members = "${members},\"profile\":${jsonx.quote(profile.name(profile.for_model(c.model)))}"

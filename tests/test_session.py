@@ -14,7 +14,7 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "zig-out/bin/nib"
+BIN = ROOT / "ae/tests/naeb-unfenced"
 
 
 def read_requests(path):
@@ -142,9 +142,9 @@ with tempfile.TemporaryDirectory(prefix="nib-session-e2e-") as directory:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
     env = {key: value for key, value in os.environ.items()
-           if not key.startswith(("NIB_", "DEEPSEEK_", "OPENAI_", "CODEX_"))}
-    env.update(NIB_PROVIDER="chat_completions", NIB_API_KEY="mock", NIB_BASE_URL=f"http://127.0.0.1:{port}",
-               NIB_CONTEXT_WINDOW="128000", NIB_HOME=str(tmp / "nib"), XDG_DATA_HOME=str(tmp / "data"),
+           if not key.startswith(("NAEB_", "DEEPSEEK_", "OPENAI_", "CODEX_"))}
+    env.update(NAEB_PROVIDER="chat_completions", NAEB_API_KEY="mock", NAEB_BASE_URL=f"http://127.0.0.1:{port}",
+               NAEB_CONTEXT_WINDOW="128000", NAEB_HOME=str(tmp / "nib"), XDG_DATA_HOME=str(tmp / "data"),
                XDG_CONFIG_HOME=str(tmp / "config"), CODEX_HOME=str(tmp / "codex"), HOME=str(tmp))
     server = subprocess.Popen(["python3", str(ROOT / "tests/mock_llm.py"), str(port), str(requests_path)],
                               env=dict(env, MOCK_PROMPT_TOKENS="3300"), stdout=subprocess.DEVNULL)
@@ -169,7 +169,7 @@ with tempfile.TemporaryDirectory(prefix="nib-session-e2e-") as directory:
         global_agents.write_text("GLOBAL_MARKER")
 
         def ask(*args, workdir=cwd, window="128000", ok=True, input=None, overrides=None):
-            child_env = dict(env, NIB_CONTEXT_WINDOW=window)
+            child_env = dict(env, NAEB_CONTEXT_WINDOW=window)
             child_env.update(overrides or {})
             child_env = {key: value for key, value in child_env.items() if value is not None}
             result = subprocess.run([str(BIN), "ask", *args], cwd=workdir,
@@ -180,7 +180,7 @@ with tempfile.TemporaryDirectory(prefix="nib-session-e2e-") as directory:
         stats_home = tmp / "stats-home"
         stats_started_ms = time.time_ns() // 1_000_000
         for prompt in ("stats good", "stats bad", "stats_missing", "delegate_probe"):
-            ask(prompt, overrides={"NIB_HOME": str(stats_home)})
+            ask(prompt, overrides={"NAEB_HOME": str(stats_home)})
         stats_finished_ms = time.time_ns() // 1_000_000
         stats_paths = list((stats_home / "sessions").glob("[0-9a-f]" * 32 + ".jsonl"))
         assert len(stats_paths) == 5
@@ -193,7 +193,7 @@ with tempfile.TemporaryDirectory(prefix="nib-session-e2e-") as directory:
         assert sum(not result["ok"] for r in step_records for result in r["run_results"]) == 1
         report = json.loads(subprocess.check_output(
             ["python3", str(ROOT / "scripts/stats.py"), "--json"],
-            env=dict(env, NIB_HOME=str(stats_home))))
+            env=dict(env, NAEB_HOME=str(stats_home))))
         counts = report["overall"]
         for key, value in dict(sessions=5, root_sessions=4, child_sessions=1, turns=5, steps=9,
                                runs=4, runs_failed=1, runs_with_status=4, runs_unknown=0,
@@ -227,17 +227,17 @@ with tempfile.TemporaryDirectory(prefix="nib-session-e2e-") as directory:
         assert "effort-specific" not in system and "run's effort" not in system
         base = system.split("\n\nInstructions below apply in order; later instructions take priority.\n", 1)[0]
         version = re.search(r'\.version = "([^"]+)"', (ROOT / "build.zig.zon").read_text())[1]
-        assert re.fullmatch(re.escape(version) + r"(?:\+[0-9a-f]+)?", header["nib_version"]), header
+        assert re.fullmatch(re.escape(version) + r"(?:\+[0-9a-f]+)?", header["naeb_version"]), header
         git_commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT,
                                     capture_output=True, text=True)
         if git_commit.returncode == 0:
-            assert header["nib_version"] == version + "+" + git_commit.stdout.strip(), header
+            assert header["naeb_version"] == version + "+" + git_commit.stdout.strip(), header
         assert header["system_sha"] == hashlib.sha256(base.encode()).hexdigest()[:12], header
         assert "patches_off" not in header
         assert header["profile"] == "deepseek", header["profile"]
-        assert all(not any(key in record for key in ("nib_version", "system_sha", "patches_off", "profile"))
+        assert all(not any(key in record for key in ("naeb_version", "system_sha", "patches_off", "profile"))
                    for record in initial_records[1:])
-        assert system.index("You are nib") < system.index("GLOBAL_MARKER") < system.index("PROJECT_MARKER")
+        assert system.index("You are naeb") < system.index("GLOBAL_MARKER") < system.index("PROJECT_MARKER")
         assert "async mcp(" not in system and "<mcp_tools>" not in system
         assert "IGNORED_XDG_MARKER" not in system
         global_agents.write_text("CHANGED_GLOBAL")
@@ -245,7 +245,7 @@ with tempfile.TemporaryDirectory(prefix="nib-session-e2e-") as directory:
         req = read_requests(requests_path)[-2]["messages"]
         assert req == first + [{"role": "user", "content": "second"}]
         assert req[0]["content"] == system
-        ask("third", "--resume", log.stem, overrides={"NIB_PATCHES_OFF": "all"})
+        ask("third", "--resume", log.stem, overrides={"NAEB_PATCHES_OFF": "all"})
         assert log.read_bytes().splitlines()[0] == original_header
         safe, _ = replay(log)
         ask("reject1", "-c", ok=False)
@@ -293,7 +293,7 @@ with tempfile.TemporaryDirectory(prefix="nib-session-e2e-") as directory:
         for prompt, expected in [
                 ("run_summary_test", {"counts": [{"name": "edit", "count": 1}, {"name": "bash", "count": 1}], "omitted": 0, "files": []}),
                 ("run_summary_overflow", {"counts": [{"name": "read", "count": 200}], "omitted": 3, "files": [{"tool": "read", "path": "summary.txt"}]})]:
-            summary_events = events(ask("--json", prompt, overrides={"NIB_HOME": str(summary_home)}))
+            summary_events = events(ask("--json", prompt, overrides={"NAEB_HOME": str(summary_home)}))
             run_end = next(event["run_end"] for event in summary_events if "run_end" in event)
             assert run_end["tool_summary"] == expected, run_end
             summary_id = summary_events[0]["start"]["session_id"]
@@ -355,7 +355,7 @@ with tempfile.TemporaryDirectory(prefix="nib-session-e2e-") as directory:
             drain_cwd = tmp / case
             drain_cwd.mkdir()
             drained = events(ask("--json", case, workdir=drain_cwd,
-                                 overrides={"NIB_HOME": str(tmp / (case + "-home"))}))
+                                 overrides={"NAEB_HOME": str(tmp / (case + "-home"))}))
             runs = [event["run_end"] for event in drained if "run_end" in event]
             assert len(runs) == 1, drained
             assert runs[0]["ok"] is expected_ok, runs[0]
@@ -364,7 +364,7 @@ with tempfile.TemporaryDirectory(prefix="nib-session-e2e-") as directory:
             assert (drain_cwd / "marker").read_text() == "finished\n", runs[0]
         print("Run drain E2E passed: failed read leaves sibling bash running; reject/fulfill drain continuation calls")
         timing_home = tmp / "timing-home"
-        timed = events(ask("--json", "timing", overrides={"NIB_HOME": str(timing_home)}))
+        timed = events(ask("--json", "timing", overrides={"NAEB_HOME": str(timing_home)}))
         timed_id = timed[0]["start"]["session_id"]
         _, timed_records = replay(timing_home / "sessions" / f"{timed_id}.jsonl")
         assert_timing(timed_records)
@@ -706,7 +706,7 @@ with tempfile.TemporaryDirectory(prefix="nib-session-e2e-") as directory:
         for _ in range(10):
             started = time.monotonic()
             probe = subprocess.Popen([str(BIN), "ask", "--json", "-"], cwd=cwd,
-                                     env=dict(env, NIB_AGENT_DEPTH="1", NIB_PARENT_SESSION_ID=parent_id),
+                                     env=dict(env, NAEB_AGENT_DEPTH="1", NAEB_PARENT_SESSION_ID=parent_id),
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             try:
                 probe.stdin.write(b"child probe")
@@ -734,10 +734,10 @@ with tempfile.TemporaryDirectory(prefix="nib-session-e2e-") as directory:
             child_header = replay(child_log)[1][0]
             child_base = child_header["messages"][0]["content"].split(
                 "\n\nInstructions below apply in order; later instructions take priority.\n", 1)[0]
-            assert child_header["nib_version"] == header["nib_version"]
+            assert child_header["naeb_version"] == header["naeb_version"]
             assert child_header["system_sha"] == hashlib.sha256(child_base.encode()).hexdigest()[:12]
         patches_home = tmp / "patches-home"
-        ask("patch labels", overrides={"NIB_HOME": str(patches_home), "NIB_PATCHES_OFF": "all"})
+        ask("patch labels", overrides={"NAEB_HOME": str(patches_home), "NAEB_PATCHES_OFF": "all"})
         patches_header = replay(next((patches_home / "sessions").glob("[0-9a-f]" * 32 + ".jsonl")))[1][0]
         patch_ids = re.findall(r'\.id = "([^"]+)"', (ROOT / "src/session/prompt.zig").read_text().split("fn patchLines", 1)[0])
         assert "expected-continuation" in patches_header["patches_off"], patches_header
@@ -747,19 +747,19 @@ with tempfile.TemporaryDirectory(prefix="nib-session-e2e-") as directory:
             "\n\nInstructions below apply in order; later instructions take priority.\n", 1)[0]
         assert patches_header["system_sha"] == hashlib.sha256(changed_base.encode()).hexdigest()[:12]
         child_patches = events(ask("--json", "child patches", overrides={
-            "NIB_HOME": str(patches_home), "NIB_PATCHES_OFF": "all",
-            "NIB_AGENT_DEPTH": "1", "NIB_PARENT_SESSION_ID": log.stem}))
+            "NAEB_HOME": str(patches_home), "NAEB_PATCHES_OFF": "all",
+            "NAEB_AGENT_DEPTH": "1", "NAEB_PARENT_SESSION_ID": log.stem}))
         child_patch_log = patches_home / "sessions" / (child_patches[0]["start"]["session_id"] + ".jsonl")
         child_patch_header = replay(child_patch_log)[1][0]
         assert child_patch_header["parent_session_id"] == log.stem
         assert child_patch_header["patches_off"] == sorted(patch_ids)
-        assert child_patch_header["nib_version"] == header["nib_version"]
+        assert child_patch_header["naeb_version"] == header["naeb_version"]
         legacy_records = replay(child_patch_log)[1]
-        for key in ("nib_version", "system_sha", "patches_off"):
+        for key in ("naeb_version", "system_sha", "patches_off"):
             legacy_records[0].pop(key)
         child_patch_log.write_text("\n".join(map(json.dumps, legacy_records)) + "\n")
         legacy_header = child_patch_log.read_bytes().splitlines()[0]
-        ask("--resume", child_patch_log.stem, "legacy resume", overrides={"NIB_HOME": str(patches_home)})
+        ask("--resume", child_patch_log.stem, "legacy resume", overrides={"NAEB_HOME": str(patches_home)})
         assert child_patch_log.read_bytes().splitlines()[0] == legacy_header
         print("Experiment header E2E passed: version/base hash, all patches, children and frozen/legacy resume header")
         print("Subagent resume E2E passed: --continue skips children, explicit child resume retains depth")
@@ -770,40 +770,40 @@ with tempfile.TemporaryDirectory(prefix="nib-session-e2e-") as directory:
                        '[chat_completions]\nmodel = "file-chat-model"\n'
                        f'base_url = "http://127.0.0.1:{port}"\ncontext_window = 128000\n')
         config_path.write_text(config_text)
-        file_env = {key: None for key in ("NIB_PROVIDER", "NIB_MODEL", "NIB_BASE_URL", "NIB_CONTEXT_WINDOW")}
+        file_env = {key: None for key in ("NAEB_PROVIDER", "NAEB_MODEL", "NAEB_BASE_URL", "NAEB_CONTEXT_WINDOW")}
         configured = events(ask("--json", "model from file", overrides=file_env))
         configured_id = configured[0]["start"]["session_id"]
         assert replay(tmp / "nib/sessions" / f"{configured_id}.jsonl")[1][0]["model"] == "file-chat-model"
         assert read_requests(requests_path)[-1]["thinking"] == {"type": "enabled"}
         overridden = events(ask("--json", "env overrides file",
-                                overrides=dict(file_env, NIB_MODEL="env-chat-model", NIB_THINKING="off")))
+                                overrides=dict(file_env, NAEB_MODEL="env-chat-model", NAEB_THINKING="off")))
         overridden_id = overridden[0]["start"]["session_id"]
         assert replay(tmp / "nib/sessions" / f"{overridden_id}.jsonl")[1][0]["model"] == "env-chat-model"
         assert read_requests(requests_path)[-1]["thinking"] == {"type": "disabled"}
-        ask("CLI overrides env", "--effort", "high", overrides=dict(file_env, NIB_THINKING="off"))
+        ask("CLI overrides env", "--effort", "high", overrides=dict(file_env, NAEB_THINKING="off"))
         assert read_requests(requests_path)[-1]["thinking"] == {"type": "enabled"}
         assert config_path.read_text() == config_text
         assert not (tmp / "data/nib").exists()
         assert (legacy_agents.parent / "config.toml").read_text() == "not valid TOML"
-        assert not (tmp / ".nib").exists()
-        print("Configuration E2E passed: NIB_HOME, ignored XDG paths, file model, env/CLI precedence and ephemeral CLI effort")
+        assert not (tmp / ".naeb").exists()
+        print("Configuration E2E passed: NAEB_HOME, ignored XDG paths, file model, env/CLI precedence and ephemeral CLI effort")
         config_path.write_text('# header\napi_key = "not-a-real-key"\n')
         failed = events(ask("--json", "invalid config", ok=False))
         message = failed[-1]["error"]["message"]
-        assert f"{config_path}:2:" in message and "NIB_API_KEY" in message, failed
+        assert f"{config_path}:2:" in message and "NAEB_API_KEY" in message, failed
         assert "not-a-real-key" not in message
         envelope = {"prompt": "inherited configuration", "config": {
             "provider": "chat_completions", "base_url": f"http://127.0.0.1:{port}",
             "api_key": "mock", "model": "inherited-model", "context_window": 128000,
             "thinking": True, "reasoning_effort": "high"}}
         inherited = events(ask("--json", "--agent-input", "-", input=json.dumps(envelope).encode(),
-                               overrides={"NIB_AGENT_DEPTH": "1", "NIB_PROVIDER": "invalid-env-provider"}))
+                               overrides={"NAEB_AGENT_DEPTH": "1", "NAEB_PROVIDER": "invalid-env-provider"}))
         inherited_id = inherited[0]["start"]["session_id"]
         assert replay(tmp / "nib/sessions" / f"{inherited_id}.jsonl")[1][0]["model"] == "inherited-model"
         config_path.write_text(config_text)
-        fallback = events(ask("--json", "default home", overrides={"NIB_HOME": None}))
-        assert (tmp / ".nib/sessions" / (fallback[0]["start"]["session_id"] + ".jsonl")).exists()
-        print("Configuration boundaries passed: path/line diagnostics, child stdin bypass and HOME/.nib fallback")
+        fallback = events(ask("--json", "default home", overrides={"NAEB_HOME": None}))
+        assert (tmp / ".naeb/sessions" / (fallback[0]["start"]["session_id"] + ".jsonl")).exists()
+        print("Configuration boundaries passed: path/line diagnostics, child stdin bypass and HOME/.naeb fallback")
         for request in read_requests(requests_path):
             valid_messages(request["messages"])
         for path in (tmp / "nib/sessions").glob("[0-9a-f]" * 32 + ".jsonl"):

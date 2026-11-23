@@ -512,7 +512,7 @@ checked(rep: string) -> (string, string) {
 exchange_(t: *Transport, method: string, params_in: string, notification: int, cancel: @keep ptr, ms: long) -> (string, string) {
     params = params_in
     if t.modern == 1 {
-        meta = "{\"io.modelcontextprotocol/protocolVersion\":${jsonx.quote(t.version)},\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"naeb\",\"version\":${jsonx.quote(build_info.nib_version())}}}"
+        meta = "{\"io.modelcontextprotocol/protocolVersion\":${jsonx.quote(t.version)},\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"naeb\",\"version\":${jsonx.quote(build_info.naeb_version())}}}"
         params = jsonx.with_member(params, "_meta", meta)
     }
     id = t.next_id
@@ -851,7 +851,7 @@ ensure_(t: *Transport, cancel: @keep ptr) -> string {
     if verdict != "legacy" { return verdict }
     t.modern = 0
     t.version = LEGACY_VERSION
-    init = "{\"protocolVersion\":${jsonx.quote(LEGACY_VERSION)},\"capabilities\":{},\"clientInfo\":{\"name\":\"naeb\",\"version\":${jsonx.quote(build_info.nib_version())}}}"
+    init = "{\"protocolVersion\":${jsonx.quote(LEGACY_VERSION)},\"capabilities\":{},\"clientInfo\":{\"name\":\"naeb\",\"version\":${jsonx.quote(build_info.naeb_version())}}}"
     rep, ierr = exchange_(t, "initialize", init, 0, cancel, TIMEOUT_MS as long)
     if ierr != "" { return ierr }
     result, cerr = checked(rep)

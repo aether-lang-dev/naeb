@@ -1,7 +1,7 @@
 # MCP tools
 
-MCP servers extend nib with tools. Servers are off by default. Configure them in
-`$NIB_HOME/config.toml`, then enable them with `/mcp on <id>` (or `[mcp]` switches).
+MCP servers extend naeb with tools. Servers are off by default. Configure them in
+`$NAEB_HOME/config.toml`, then enable them with `/mcp on <id>` (or `[mcp]` switches).
 `/mcp` lists configured servers, switches, and the last known tool count or failure.
 `/mcp off <id>` disables a server for new Sessions. Changes are saved atomically,
 preserving comments and other settings.
@@ -46,7 +46,7 @@ Switches apply to new Sessions. Current and resumed Sessions retain their origin
 system prompt and MCP configuration snapshot; `/new` loads current configuration.
 Old logs without an MCP snapshot enable no servers. Subagents inherit the parent
 configuration and own independent connections. Credentials are read from the
-process environment, not stored in Session logs by nib; server tool content itself
+process environment, not stored in Session logs by naeb; server tool content itself
 is recorded like all other tool output.
 
 ## Run API
@@ -104,7 +104,7 @@ without notifying). There is no background notification stream or polling loop.
 
 ## Stdio environment and sandbox
 
-Stdio servers use `$NIB_HOME/mcp/<id>/` as cwd, with HOME unchanged. Use an absolute
+Stdio servers use `$NAEB_HOME/mcp/<id>/` as cwd, with HOME unchanged. Use an absolute
 command path or a command available on PATH; file arguments are relative to the
 state directory. This gives servers a writable state directory without changing
 their home-directory lookup behavior.
@@ -112,7 +112,7 @@ their home-directory lookup behavior.
 Only PATH, HOME, LANG, LC_ALL, LC_CTYPE, TMPDIR, TZ, SYSTEMROOT and explicitly named
 `env` variables are passed through. Credential stripping applies before explicit
 allowlisted variables are added, so a deliberately named `GITHUB_TOKEN` reaches
-that server. Unlisted environment values and nib's provider credentials do not.
+that server. Unlisted environment values and naeb's provider credentials do not.
 In opt-in workspace mode, servers use the bash OS write sandbox with the normal project/temp/cache/extra
 writable roots plus their state directory. If the configured sandbox is unavailable,
 stdio startup fails. The default `[sandbox] mode = "off"` skips the write sandbox

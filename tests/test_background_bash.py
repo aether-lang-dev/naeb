@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from screen import screen
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "zig-out/bin/nib"
+BIN = ROOT / "ae/tests/naeb-unfenced"
 
 
 def bash(command, **options):
@@ -374,16 +374,16 @@ class BackgroundBashTests:
         (auth / "auth.json").write_text(json.dumps({"tokens": {
             "access_token": "fake", "account_id": "fake", "refresh_token": "fake", "id_token": "fake"}}))
         self.env = {k: v for k, v in os.environ.items()
-                    if not k.startswith(("NIB_", "DEEPSEEK_", "OPENAI_", "CODEX_", "MOCK_"))}
-        self.env.update(NIB_PROVIDER=self.provider, NIB_API_KEY="fake", NIB_MODEL="mock-parent-model",
-                        NIB_REASONING_EFFORT="high", NIB_CONTEXT_WINDOW="128000",
-                        NIB_HOME=str(self.home), CODEX_HOME=str(auth), HOME=str(self.tmp), TERM="xterm-256color")
+                    if not k.startswith(("NAEB_", "DEEPSEEK_", "OPENAI_", "CODEX_", "MOCK_"))}
+        self.env.update(NAEB_PROVIDER=self.provider, NAEB_API_KEY="fake", NAEB_MODEL="mock-parent-model",
+                        NAEB_REASONING_EFFORT="high", NAEB_CONTEXT_WINDOW="128000",
+                        NAEB_HOME=str(self.home), CODEX_HOME=str(auth), HOME=str(self.tmp), TERM="xterm-256color")
 
     def mock(self, case):
         mock = Mock(case, self.cwd)
         thread = threading.Thread(target=mock.serve_forever, daemon=True)
         thread.start()
-        self.env["NIB_BASE_URL"] = f"http://127.0.0.1:{mock.server_port}"
+        self.env["NAEB_BASE_URL"] = f"http://127.0.0.1:{mock.server_port}"
 
         def cleanup():
             mock.model_gate.set()
@@ -948,7 +948,7 @@ class BackgroundBashTests:
         self.assert_accounting(mock, events)
 
     def test_completion_after_auto_compaction(self):
-        self.env["NIB_CONTEXT_WINDOW"] = "8192"
+        self.env["NAEB_CONTEXT_WINDOW"] = "8192"
         mock = self.mock("compact")
         process = self.start()
         wait_for(lambda: mock.summary_seen.is_set(), timeout=10)
@@ -1001,7 +1001,7 @@ class BackgroundBashTests:
         mock = self.mock("reject")
         events = self.finish(self.start())
         self.assertFalse([e for e in events if "background" in e])
-        self.assertIn("refused by nib", next(e["run_end"]["output"] for e in events if "run_end" in e))
+        self.assertIn("refused by naeb", next(e["run_end"]["output"] for e in events if "run_end" in e))
         self.assertFalse([r for r in self.log(events) if r.get("background")])
 
     def test_failed_launching_run_does_not_cancel_started_job(self):

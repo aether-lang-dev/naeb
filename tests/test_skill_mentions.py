@@ -11,7 +11,7 @@ from test_interjections import Reply, fixture, finished, wait_for, users
 from screen import screen
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "zig-out/bin/nib"
+BIN = ROOT / "ae/tests/naeb-unfenced"
 
 
 def ask_expansion():
@@ -33,8 +33,8 @@ def ask_expansion():
                         break
                 except OSError:
                     time.sleep(.05)
-            env = dict(os.environ, HOME=str(home), NIB_HOME=str(data), NIB_PROVIDER="chat_completions", NIB_MODEL="mock", NIB_API_KEY="mock", NIB_BASE_URL=f"http://127.0.0.1:{port}/v1")
-            skill = project / ".nib/skills/release/SKILL.md"
+            env = dict(os.environ, HOME=str(home), NAEB_HOME=str(data), NAEB_PROVIDER="chat_completions", NAEB_MODEL="mock", NAEB_API_KEY="mock", NAEB_BASE_URL=f"http://127.0.0.1:{port}/v1")
+            skill = project / ".naeb/skills/release/SKILL.md"
             skill.parent.mkdir(parents=True)
             skill.write_text("---\nname: release\ndescription: Ship it\ndisable-model-invocation: true\n---\nRELEASE-BODY-MARKER")
 
@@ -66,7 +66,7 @@ def ask_expansion():
 def tui_menu(tmp):
     reply = Reply("done")
     with fixture(tmp, [reply]) as (terminal, home, _):
-        skill = tmp / ".nib/skills/review/SKILL.md"
+        skill = tmp / ".naeb/skills/review/SKILL.md"
         skill.parent.mkdir(parents=True)
         skill.write_text("---\ndescription: Review a change\n---\nREVIEW-BODY")
         terminal.send("check this $re")

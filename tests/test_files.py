@@ -17,7 +17,7 @@ import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "zig-out/bin/nib"
+BIN = ROOT / "ae/tests/naeb-unfenced"
 
 
 def js_call(name, **args):
@@ -82,7 +82,7 @@ class FileTests(unittest.TestCase):
         self.home = self.tmp / "nib"
         self.home.mkdir()
         self.env = {k: v for k, v in os.environ.items()
-                    if not k.startswith(("NIB_", "OPENAI_", "DEEPSEEK_", "CODEX_"))}
+                    if not k.startswith(("NAEB_", "OPENAI_", "DEEPSEEK_", "CODEX_"))}
         server = ThreadingHTTPServer(("127.0.0.1", 0), MockHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -93,9 +93,9 @@ class FileTests(unittest.TestCase):
             thread.join()
         self.addCleanup(stop_server)
         self.env.update(
-            NIB_PROVIDER="chat_completions", NIB_API_KEY="mock",
-            NIB_BASE_URL=f"http://127.0.0.1:{server.server_port}",
-            NIB_CONTEXT_WINDOW="128000", NIB_HOME=str(self.home), HOME=str(self.tmp),
+            NAEB_PROVIDER="chat_completions", NAEB_API_KEY="mock",
+            NAEB_BASE_URL=f"http://127.0.0.1:{server.server_port}",
+            NAEB_CONTEXT_WINDOW="128000", NAEB_HOME=str(self.home), HOME=str(self.tmp),
             XDG_DATA_HOME=str(self.tmp / "data"), XDG_CONFIG_HOME=str(self.tmp / "config"),
             CODEX_HOME=str(self.tmp / "codex"))
 
@@ -183,7 +183,7 @@ class FileTests(unittest.TestCase):
         locks = list((self.home / "locks").iterdir())
         self.assertEqual([p.name for p in locks],
                          [hashlib.sha256(os.fsencode(target.resolve())).hexdigest()])
-        self.assertEqual(list(self.cwd.glob(".nib-*")), [])
+        self.assertEqual(list(self.cwd.glob(".naeb-*")), [])
 
     def check_stale_write(self, modification):
         target = self.cwd / "observed"
@@ -226,7 +226,7 @@ class FileTests(unittest.TestCase):
 
     def test_stale_write_after_separate_nib_process(self):
         child = js_call("write", path="observed", content="others\n")
-        self.check_stale_write(command("env", "NIB_API_KEY=mock", BIN, "ask", "--json", child)
+        self.check_stale_write(command("env", "NAEB_API_KEY=mock", BIN, "ask", "--json", child)
                                + " > /dev/null")
 
     def test_read_page_records_version_and_edit_refreshes_it(self):
@@ -264,7 +264,7 @@ class FileTests(unittest.TestCase):
         self.assertEqual((self.cwd / "hardlink").stat().st_ino, inode)
         self.assertTrue((self.cwd / "symlink").is_symlink())
         self.assertEqual((self.cwd / "nested/new").read_text(), "created\n")
-        self.assertEqual(list(self.cwd.rglob(".nib-*")), [])
+        self.assertEqual(list(self.cwd.rglob(".naeb-*")), [])
 
     def test_lock_wait_sigterm_is_prompt_for_read_edit_write(self):
         target = self.cwd / "locked"
@@ -328,7 +328,7 @@ class FileTests(unittest.TestCase):
         self.assertEqual(failures, [])
         self.assertIn(96 * 1024, observations)
         self.assertIn(128 * 1024, observations)
-        self.assertEqual(list(self.cwd.glob(".nib-*")), [])
+        self.assertEqual(list(self.cwd.glob(".naeb-*")), [])
 
 
 if __name__ == "__main__":

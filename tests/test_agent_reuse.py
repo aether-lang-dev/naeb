@@ -1,4 +1,4 @@
-"""Task-ID reuse E2E with gated local mocks and temporary NIB_HOME only.
+"""Task-ID reuse E2E with gated local mocks and temporary NAEB_HOME only.
 
     zig build && python3 tests/test_agent_reuse.py
 """
@@ -139,8 +139,8 @@ class ReuseTests:
         mock = Mock(parent, self.cwd)
         thread = threading.Thread(target=mock.serve_forever, daemon=True)
         thread.start()
-        self.env["NIB_BASE_URL"] = "http://127.0.0.1:" + str(mock.server_port)
-        self.env["NIB_CODEX_TRANSPORT"] = "sse"
+        self.env["NAEB_BASE_URL"] = "http://127.0.0.1:" + str(mock.server_port)
+        self.env["NAEB_CODEX_TRANSPORT"] = "sse"
 
         def cleanup():
             mock.release.set()

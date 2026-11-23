@@ -16,7 +16,7 @@ import unittest
 from mock_llm_tool import SCHEMA, SYSTEM, USAGE, content
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "zig-out/bin/nib"
+BIN = ROOT / "ae/tests/naeb-unfenced"
 INPUT = "独立 input 🙂\n第二行"
 
 
@@ -61,11 +61,11 @@ class LlmTests:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
         cls.env = {key: value for key, value in os.environ.items()
-                   if not key.startswith(("NIB_", "DEEPSEEK_", "OPENAI_", "CODEX_", "MOCK_"))}
-        cls.env.update(NIB_PROVIDER=cls.provider, NIB_CODEX_TRANSPORT="sse", NIB_API_KEY="fake-llm-key",
-                       NIB_BASE_URL=f"http://127.0.0.1:{port}", NIB_MODEL="mock-parent-model",
-                       NIB_REASONING_EFFORT="high", NIB_CONTEXT_WINDOW="128000",
-                       NIB_HOME=str(home), CODEX_HOME=str(auth), HOME=str(cls.tmp),
+                   if not key.startswith(("NAEB_", "DEEPSEEK_", "OPENAI_", "CODEX_", "MOCK_"))}
+        cls.env.update(NAEB_PROVIDER=cls.provider, NAEB_CODEX_TRANSPORT="sse", NAEB_API_KEY="fake-llm-key",
+                       NAEB_BASE_URL=f"http://127.0.0.1:{port}", NAEB_MODEL="mock-parent-model",
+                       NAEB_REASONING_EFFORT="high", NAEB_CONTEXT_WINDOW="128000",
+                       NAEB_HOME=str(home), CODEX_HOME=str(auth), HOME=str(cls.tmp),
                        XDG_CONFIG_HOME=str(cls.tmp / "config"), XDG_DATA_HOME=str(cls.tmp / "data"))
         cls.server_stderr = open(cls.tmp / "server.stderr", "w+")
         cls.addClassCleanup(cls.server_stderr.close)
@@ -115,7 +115,7 @@ class LlmTests:
         self.assertIn("end", events[-1], events)
         session_id = events[0]["start"]["session_id"]
         self.assert_tool_docs(session_id)
-        steps = [record for record in records(Path(self.env["NIB_HOME"]) / "sessions" / (session_id + ".jsonl"))
+        steps = [record for record in records(Path(self.env["NAEB_HOME"]) / "sessions" / (session_id + ".jsonl"))
                  if "model_ms" in record]
         timing = events[-1]["end"]["timing"]
         for name in ("llm", "agent"):
@@ -127,7 +127,7 @@ class LlmTests:
         return events
 
     def assert_tool_docs(self, session_id, child=False):
-        log = Path(self.env["NIB_HOME"]) / "sessions" / (session_id + ".jsonl")
+        log = Path(self.env["NAEB_HOME"]) / "sessions" / (session_id + ".jsonl")
         system = records(log)[0]["messages"][0]["content"]
         self.assertNotIn("{{llm_options}}", system)
         self.assertIn("model: [", system)
@@ -236,7 +236,7 @@ class LlmTests:
         snapshots = [event["usage"] for event in events[:run_end] if "usage" in event]
         self.assertTrue(any(usage["prompt_tokens"] > 100 for usage in snapshots), events)
         session_id = events[0]["start"]["session_id"]
-        log = records(Path(self.env["NIB_HOME"]) / "sessions" / (session_id + ".jsonl"))
+        log = records(Path(self.env["NAEB_HOME"]) / "sessions" / (session_id + ".jsonl"))
         calls = [call for step in log for call in step.get("calls", [])]
         self.assertEqual(len(calls), 10)
         self.assertTrue(all(call["name"] == "llm" and call["ok"] for call in calls), calls)
@@ -298,7 +298,7 @@ class LlmTests:
         self.assertEqual(probe["llm"], "function")
         self.assertEqual(probe["agent"], "undefined")
         root_id = events[0]["start"]["session_id"]
-        children = [path for path in (Path(self.env["NIB_HOME"]) / "sessions").glob("*.jsonl")
+        children = [path for path in (Path(self.env["NAEB_HOME"]) / "sessions").glob("*.jsonl")
                     if records(path)[0].get("parent_session_id") == root_id]
         self.assertEqual(len(children), 1)
         self.assert_tool_docs(children[0].stem, child=True)

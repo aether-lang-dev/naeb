@@ -9,7 +9,7 @@ import unittest
 from mock_providers import Mock
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "zig-out/bin/nib"
+BIN = ROOT / "ae/tests/naeb-unfenced"
 
 
 class Providers(unittest.TestCase):
@@ -18,14 +18,14 @@ class Providers(unittest.TestCase):
             home = Path(tmp)
             mock = Mock(protocol, custom_run=name == "openai")
             self.addCleanup(mock.close)
-            env = {k: v for k, v in os.environ.items() if not k.startswith(("NIB_", "OPENAI_", "ANTHROPIC_", "DEEPSEEK_", "XAI_", "CODEX_"))}
-            env.update(NIB_API_KEY=mock.key, DEEPSEEK_API_KEY=mock.key, HOME=tmp, NIB_HOME=str(home / "nib"), NIB_PROVIDER=name, NIB_BASE_URL=mock.url)
+            env = {k: v for k, v in os.environ.items() if not k.startswith(("NAEB_", "OPENAI_", "ANTHROPIC_", "DEEPSEEK_", "XAI_", "CODEX_"))}
+            env.update(NAEB_API_KEY=mock.key, DEEPSEEK_API_KEY=mock.key, HOME=tmp, NAEB_HOME=str(home / "nib"), NAEB_PROVIDER=name, NAEB_BASE_URL=mock.url)
             env[key_env] = mock.key
             if custom:
                 (home / "nib").mkdir()
                 (home / "nib/config.toml").write_text(f'[providers.{name}]\nprotocol = "{protocol}"\nbase_url = "{mock.url}"\nmodel = "custom-model"\ncontext_window = 128000\napi_key_env = "{key_env}"\n')
             def ask(prompt, *args, ok=True, provider=None):
-                result = subprocess.run([str(BIN), "ask", "--json", prompt, *args], cwd=tmp, env=dict(env, NIB_PROVIDER=provider or name), capture_output=True, text=True, timeout=30)
+                result = subprocess.run([str(BIN), "ask", "--json", prompt, *args], cwd=tmp, env=dict(env, NAEB_PROVIDER=provider or name), capture_output=True, text=True, timeout=30)
                 self.assertEqual(result.returncode == 0, ok, result.stdout + result.stderr)
                 return [json.loads(line) for line in result.stdout.splitlines()]
             events = ask("round trip", "--effort", "high")
@@ -75,8 +75,8 @@ class Providers(unittest.TestCase):
             home.mkdir()
             sections = "".join(f'[providers.{name}]\nprotocol = "responses"\nbase_url = "{mock.url}"\nmodel = "local-model"\ncontext_window = 128000\n' for name in ("one", "two"))
             (home / "config.toml").write_text('provider = "one"\n' + sections)
-            env = {k: v for k, v in os.environ.items() if not k.startswith("NIB_")}
-            env.update(HOME=tmp, NIB_HOME=str(home))
+            env = {k: v for k, v in os.environ.items() if not k.startswith("NAEB_")}
+            env.update(HOME=tmp, NAEB_HOME=str(home))
             def run(*args):
                 return subprocess.run([str(BIN), "ask", "--json", *args], cwd=tmp, env=env, capture_output=True, text=True, timeout=10)
             first = run("round trip")
@@ -84,7 +84,7 @@ class Providers(unittest.TestCase):
             session = json.loads(first.stdout.splitlines()[0])["start"]["session_id"]
             header = json.loads((home / "sessions" / (session + ".jsonl")).read_text().splitlines()[0])
             self.assertEqual(header["custom_provider"], "one")
-            env["NIB_PROVIDER"] = "two"
+            env["NAEB_PROVIDER"] = "two"
             other = run("again", "--resume", session)
             self.assertNotEqual(other.returncode, 0)
             self.assertIn("different provider", other.stdout)
@@ -105,8 +105,8 @@ class Providers(unittest.TestCase):
                     home.mkdir()
                     extra = f"max_output = {limit}\n" if limit else ""
                     (home / "config.toml").write_text(f'provider = "site"\n[providers.site]\nprotocol = "{protocol}"\nbase_url = "{mock.url}"\nmodel = "m"\ncontext_window = 128000\n{extra}')
-                    env = {k: v for k, v in os.environ.items() if not k.startswith("NIB_")}
-                    env.update(HOME=tmp, NIB_HOME=str(home))
+                    env = {k: v for k, v in os.environ.items() if not k.startswith("NAEB_")}
+                    env.update(HOME=tmp, NAEB_HOME=str(home))
                     result = subprocess.run([str(BIN), "ask", "--json", "round trip"], cwd=tmp, env=env, capture_output=True, text=True, timeout=30)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     bodies = [json.loads(body) if isinstance(body, (str, bytes)) else body for _, _, body in mock.requests]

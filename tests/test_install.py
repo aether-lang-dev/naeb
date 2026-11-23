@@ -31,7 +31,7 @@ class InstallerTest(unittest.TestCase):
             sums = assets / 'SHA256SUMS'
             sums.write_text(hashlib.sha256(asset.read_bytes()).hexdigest() + '  ' + asset.name + '\n')
             env = dict(os.environ, PATH=str(fake) + ':' + os.environ['PATH'],
-                       NIB_DOWNLOAD_BASE=assets.as_uri(), NIB_INSTALL_DIR=str(work / 'bin with spaces'))
+                       NAEB_DOWNLOAD_BASE=assets.as_uri(), NAEB_INSTALL_DIR=str(work / 'bin with spaces'))
 
             def run():
                 return subprocess.run(['sh', str(ROOT / 'install.sh')], env=env,
@@ -47,7 +47,7 @@ class InstallerTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('Checksum mismatch', result.stderr)
             self.assertEqual(installed.read_bytes(), data)
-            env['NIB_SKIP_VERIFY'] = '1'
+            env['NAEB_SKIP_VERIFY'] = '1'
             self.assertEqual(run().returncode, 0)
             uname.write_text('#!/bin/sh\necho unsupported\n')
             result = run()

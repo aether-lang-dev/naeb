@@ -21,7 +21,7 @@ ERRORS = {
     'run_timeout': r'run (?:timed out|timeout)',
     'subagent': r'subagent(?::| stopped| failed|.*timeout)|AgentFailed|InvalidAgentOutput|MissingAgentResult',
     'tool_arguments': r'expected \{|arguments must be a JSON object',
-    'denied': r'refused by nib|CredentialAccessDenied',
+    'denied': r'refused by naeb|CredentialAccessDenied',
     'interrupted': r'\[interrupted(?: by user|: process terminated)\]|Error: run canceled',
     'provider_failure': None,
     'other_failure': None,
@@ -65,7 +65,7 @@ def diagnostics(text):
             continue
         if not isinstance(value, str):
             continue
-        if re.match(r'^(?:(?:\w*Error|error):|subagent(?::| stopped)|expected \{|CredentialAccessDenied|refused by nib|arguments must be)', value):
+        if re.match(r'^(?:(?:\w*Error|error):|subagent(?::| stopped)|expected \{|CredentialAccessDenied|refused by naeb|arguments must be)', value):
             yield value
 
 
@@ -492,13 +492,13 @@ def mechanical_step(codes, recorded_step, recordings):
 
 
 def header_group(header, group_by):
-    field = {'version': 'nib_version', 'system': 'system_sha', 'patches': 'patches_off', 'profile': 'profile'}[group_by]
+    field = {'version': 'naeb_version', 'system': 'system_sha', 'patches': 'patches_off', 'profile': 'profile'}[group_by]
     value = header.get(field)
     if group_by != 'patches':
         return value if isinstance(value, str) and value.strip() else 'unknown'
     if field not in header:
         return 'none' if any(isinstance(header.get(k), str) and header[k].strip()
-                             for k in ('nib_version', 'system_sha')) else 'unknown'
+                             for k in ('naeb_version', 'system_sha')) else 'unknown'
     if value == [] or value == '':
         return 'none'
     if isinstance(value, list) and all(isinstance(v, str) and v for v in value):
@@ -1398,8 +1398,8 @@ def summarize(paths, since=None, cwd=None, group_by=None, *, _systems=None, _ste
                               _step_filter=(group_by, key) if group_by in ('transport', 'incremental', 'full_reason') else None)
             if group['overall']['sessions']:
                 report['groups'][key] = group
-        report['notes'][0] += (' --group-by transport/incremental/full_reason groups complete Steps by actual transport/continuation state; one session may appear in multiple groups; missing fields mean unknown. Filter by record; mixed-transport Turns are not complete wall-time samples. Other groups use header nib_version/system_sha/patches_off/profile; '
-            'missing/invalid values mean unknown; missing patches_off with valid nib_version or system_sha means none; '
+        report['notes'][0] += (' --group-by transport/incremental/full_reason groups complete Steps by actual transport/continuation state; one session may appear in multiple groups; missing fields mean unknown. Filter by record; mixed-transport Turns are not complete wall-time samples. Other groups use header naeb_version/system_sha/patches_off/profile; '
+            'missing/invalid values mean unknown; missing patches_off with valid naeb_version or system_sha means none; '
             'explicitly empty patch sets also mean none; patch arrays group as deduplicated sorted sets, with the complete core report recomputed per group.')
     return report
 
@@ -1546,7 +1546,7 @@ def main():
     parser.add_argument('--group-by', choices=('version', 'system', 'patches', 'profile', 'transport', 'incremental', 'full_reason'), help='group by session metadata, actual Step transport, incremental state or full-request reason')
     parser.add_argument('--json', action='store_true', help='emit JSON instead of text')
     args = parser.parse_args()
-    inputs = args.paths or [Path(os.environ.get('NIB_HOME', '~/.nib')).expanduser() / 'sessions']
+    inputs = args.paths or [Path(os.environ.get('NAEB_HOME', '~/.nib')).expanduser() / 'sessions']
     paths = set()
     for path in inputs:
         path = path.expanduser()

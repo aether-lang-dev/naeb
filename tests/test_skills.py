@@ -8,7 +8,7 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "zig-out/bin/nib"
+BIN = ROOT / "ae/tests/naeb-unfenced"
 
 
 def main():
@@ -30,21 +30,21 @@ def main():
                         break
                 except OSError:
                     time.sleep(.05)
-            env = dict(os.environ, HOME=str(home), NIB_HOME=str(data), NIB_PROVIDER="chat_completions", NIB_MODEL="mock", NIB_API_KEY="mock", NIB_BASE_URL=f"http://127.0.0.1:{port}/v1")
+            env = dict(os.environ, HOME=str(home), NAEB_HOME=str(data), NAEB_PROVIDER="chat_completions", NAEB_MODEL="mock", NAEB_API_KEY="mock", NAEB_BASE_URL=f"http://127.0.0.1:{port}/v1")
             def ask(*args):
                 result = subprocess.run([str(BIN), "ask", "child probe", *args], cwd=project, env=env, capture_output=True, timeout=20)
                 assert result.returncode == 0, result.stderr
                 return json.loads(requests.read_text().splitlines()[-1])["messages"][0]["content"]
             bare = ask()
             assert "<available_skills>" not in bare
-            skill = project / ".nib/skills/example/SKILL.md"
+            skill = project / ".naeb/skills/example/SKILL.md"
             skill.parent.mkdir(parents=True)
             skill.write_text('---\nname: example\ndescription: "Example <task>"\n---\nFull instructions')
             for name, content in {
                 "invalid": "---\nname: invalid\n---",
                 "disabled": "---\ndescription: hidden\ndisable-model-invocation: true\n---",
             }.items():
-                path = project / f".nib/skills/{name}/SKILL.md"
+                path = project / f".naeb/skills/{name}/SKILL.md"
                 path.parent.mkdir(parents=True)
                 path.write_text(content)
             assert ask() == bare, "off-by-default skills must not change the system bytes"

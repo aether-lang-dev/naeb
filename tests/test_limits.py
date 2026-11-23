@@ -20,7 +20,7 @@ class LlmLimits(unittest.TestCase):
     assert_tool_docs = LlmTests.assert_tool_docs
 
     def test_child_llm_limits_after_config_is_poisoned(self):
-        config = Path(self.env["NIB_HOME"]) / "config.toml"
+        config = Path(self.env["NAEB_HOME"]) / "config.toml"
         config.write_text("[limits]\nllm_calls_per_run = 3\nllm_concurrency = 2\nllm_input_kib = 17\n")
         self.addCleanup(config.unlink, missing_ok=True)
         events = self.ask("llm_limits_child")
@@ -39,7 +39,7 @@ class LlmLimits(unittest.TestCase):
         self.assertEqual(config.read_text(), "[limits]\nllm_concurrency = 0\n")
 
     def test_calls_and_concurrency_and_docs(self):
-        config = Path(self.env["NIB_HOME"]) / "config.toml"
+        config = Path(self.env["NAEB_HOME"]) / "config.toml"
         config.write_text("[limits]\nllm_calls_per_run = 3\nllm_concurrency = 2\nllm_input_kib = 17\n")
         self.addCleanup(config.unlink, missing_ok=True)
         events = self.ask("llm_limits")
@@ -52,7 +52,7 @@ class LlmLimits(unittest.TestCase):
         self.assertEqual(run_end["tool_summary"], {"counts": [{"name": "llm", "count": 3}], "omitted": 0, "files": []})
         self.assertEqual(max(e["active"] for e in starts), 2, self.observed())
         session = events[0]["start"]["session_id"]
-        system = records(Path(self.env["NIB_HOME"]) / "sessions" / (session + ".jsonl"))[0]["messages"][0]["content"]
+        system = records(Path(self.env["NAEB_HOME"]) / "sessions" / (session + ".jsonl"))[0]["messages"][0]["content"]
         self.assertIn("2 concurrent/process, 3/Run, 17 KiB", system)
         self.assertNotIn("{{llm_limits}}", system)
 
@@ -65,10 +65,10 @@ class AgentLimits(unittest.TestCase):
     ask = AgentTests.ask
 
     def configure(self):
-        (Path(self.env["NIB_HOME"]) / "config.toml").write_text("[limits]\nmax_steps = 2\n")
+        (Path(self.env["NAEB_HOME"]) / "config.toml").write_text("[limits]\nmax_steps = 2\n")
 
     def test_agent_concurrency_queues_and_completes(self):
-        (Path(self.env["NIB_HOME"]) / "config.toml").write_text("[limits]\nagent_concurrency = 2\n")
+        (Path(self.env["NAEB_HOME"]) / "config.toml").write_text("[limits]\nagent_concurrency = 2\n")
         results, _ = self.ask("limits-queue")
         self.assertEqual(len(results), 5)
         self.assertTrue(all(r["ok"] for r in results), results)
@@ -91,10 +91,10 @@ class AgentLimits(unittest.TestCase):
 
     def session_log(self, events):
         session = events[0]["start"]["session_id"]
-        return records(Path(self.env["NIB_HOME"]) / "sessions" / (session + ".jsonl"))
+        return records(Path(self.env["NAEB_HOME"]) / "sessions" / (session + ".jsonl"))
 
     def limited_turn(self, case, steps):
-        (Path(self.env["NIB_HOME"]) / "config.toml").write_text(f"[limits]\nmax_steps = {steps}\n")
+        (Path(self.env["NAEB_HOME"]) / "config.toml").write_text(f"[limits]\nmax_steps = {steps}\n")
         process = self.start(case)
         output, error = process.communicate(timeout=20)
         self.assertEqual(error, "")
@@ -157,7 +157,7 @@ class AgentLimits(unittest.TestCase):
 
     def test_configured_run_output_budget(self):
         (self.cwd / "budget.txt").write_text("x" * 50000)
-        self.env["NIB_RUN_OUTPUT_BYTES"] = "32768"
+        self.env["NAEB_RUN_OUTPUT_BYTES"] = "32768"
         events, outputs = self.limited_turn("limits-budget", 1)
         payload = outputs[0].removesuffix("\n[0 Steps left in this Turn]")
         self.assertGreater(len(payload.encode()), 16 * 1024)
@@ -214,7 +214,7 @@ class AgentLimits(unittest.TestCase):
         requests = records(self.requests)
         child = [r for r in requests if r["prompt"] == "agent-child:limits-loop"]
         self.assertEqual([r["step"] for r in child], [0, 1], requests)
-        self.assertEqual((Path(self.env["NIB_HOME"]) / "config.toml").read_text(),
+        self.assertEqual((Path(self.env["NAEB_HOME"]) / "config.toml").read_text(),
                          "[limits]\nmax_steps = 0\n")
 
 

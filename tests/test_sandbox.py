@@ -17,7 +17,7 @@ from http.server import BaseHTTPRequestHandler
 from mock_http import ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "zig-out/bin/nib"
+BIN = ROOT / "ae/tests/naeb-unfenced"
 DENIED = "ermission denied|not permitted"
 
 
@@ -77,11 +77,11 @@ class SandboxTests(unittest.TestCase):
             thread.join()
         self.addCleanup(stop_server)
         self.env = {k: v for k, v in os.environ.items()
-                    if not k.startswith(("NIB_", "OPENAI_", "DEEPSEEK_", "CODEX_"))}
+                    if not k.startswith(("NAEB_", "OPENAI_", "DEEPSEEK_", "CODEX_"))}
         self.env.update(
-            NIB_SANDBOX="workspace", NIB_PROVIDER="chat_completions", NIB_API_KEY="mock",
-            NIB_BASE_URL=f"http://127.0.0.1:{server.server_port}",
-            NIB_CONTEXT_WINDOW="128000", NIB_HOME=str(self.home), HOME=str(self.base),
+            NAEB_SANDBOX="workspace", NAEB_PROVIDER="chat_completions", NAEB_API_KEY="mock",
+            NAEB_BASE_URL=f"http://127.0.0.1:{server.server_port}",
+            NAEB_CONTEXT_WINDOW="128000", NAEB_HOME=str(self.home), HOME=str(self.base),
             XDG_DATA_HOME=str(self.base / "data"), XDG_CONFIG_HOME=str(self.base / "config"),
             CODEX_HOME=str(self.base / "codex"), LC_ALL="C")
         for name in ("TMPDIR", "XDG_CACHE_HOME", "CARGO_HOME", "GOPATH"):
@@ -116,7 +116,7 @@ class SandboxTests(unittest.TestCase):
         self.assertEqual(result, {"exit_code": 0, "output": "ok\n"})
 
     def test_default_allows_external_writes_without_notice(self):
-        self.env.pop("NIB_SANDBOX")
+        self.env.pop("NAEB_SANDBOX")
         self.assertEqual(self.recorded(f"touch {self.outside}")["exit_code"], 0)
         self.run_js("await tools.write({path: '../file-tool', content: 'old'}); await tools.edit({path: '../file-tool', old_text: 'old', new_text: 'new'});")
         self.assertEqual((self.base / "file-tool").read_text(), "new")
@@ -165,15 +165,15 @@ class SandboxTests(unittest.TestCase):
         self.assertFalse((self.base / "dotdot").exists())
 
     def test_off_by_environment_and_config(self):
-        result = self.recorded(f"touch {self.outside}", NIB_SANDBOX="off")
+        result = self.recorded(f"touch {self.outside}", NAEB_SANDBOX="off")
         self.assertEqual(result["exit_code"], 0, result)
         self.assertTrue(self.outside.exists())
         self.outside.unlink()
-        self.env.pop("NIB_SANDBOX")
+        self.env.pop("NAEB_SANDBOX")
         (self.home / "config.toml").write_text('[sandbox]\nmode = "off"\n')
         self.assertEqual(self.recorded(f"touch {self.outside}")["exit_code"], 0)
         self.outside.unlink()
-        self.assertNotEqual(self.recorded(f"touch {self.outside}", NIB_SANDBOX="workspace")["exit_code"], 0)
+        self.assertNotEqual(self.recorded(f"touch {self.outside}", NAEB_SANDBOX="workspace")["exit_code"], 0)
 
     def test_configured_writable_roots(self):
         extra = self.base / "extra"

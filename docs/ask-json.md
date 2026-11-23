@@ -1,6 +1,6 @@
 # ask NDJSON interface
 
-`nib ask --json '<prompt>'` writes NDJSON to stdout: one single-key object per line, emitted in order and flushed immediately. stderr has no human-readable progress or color. Prompt - reads stdin through EOF, also in ordinary ask. Exit 0 on success, nonzero on failure.
+`naeb ask --json '<prompt>'` writes NDJSON to stdout: one single-key object per line, emitted in order and flushed immediately. stderr has no human-readable progress or color. Prompt - reads stdin through EOF, also in ordinary ask. Exit 0 on success, nonzero on failure.
 
 - {"start":{"session_id":"<32-character-lowercase-hex>"}}: Session initialized; resume keeps its id.
 - {"step":{"n":3,"effort":"low"}}: before each main-model Step request. n starts at 1 per Turn; effort is the actual request level, or default when no server level is specified. Retries do not repeat events; compaction emits none. Subsequent `run_start/run_end` belong to this Step until the next step event. Ordinary ask hides it; TUI retains metadata but default Run titles hide effort.
