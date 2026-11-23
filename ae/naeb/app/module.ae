@@ -576,7 +576,10 @@ run_(envp: @keep ptr, fence: @keep ptr) {
             got = 0
             while got == 0 {
                 got = os.signal_received(watch)
-                if got == 0 { sleep(20) }
+                // A tight poll: a Run that signals its own process (a child agent's worker
+                // killing it) ends in a few milliseconds, and the Turn must see the signal
+                // before it starts the next Step, not up to 20 ms after.
+                if got == 0 { sleep(1) }
             }
             sync.atomic_store(sig_cell, got as long)
             sync.atomic_store(cancel, 1)
