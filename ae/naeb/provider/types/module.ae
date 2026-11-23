@@ -308,7 +308,7 @@ definition_key_envs(id: string) -> ptr {
 
 definition_default_model(id: string) -> string {
     match id {
-        "openai" -> { return "gpt-6.1-sol" }
+        "openai" -> { return "gpt-6.2-sol" }
         "anthropic" -> { return "claude-sonnet-5-5" }
         "xai" -> { return "grok-4.7" }
         _ -> { return "deepseek-flash" }
@@ -329,7 +329,7 @@ definition_custom_run(id: string) -> int {
 model_context_window(id: string, model: string) -> long {
     match id {
         "openai" -> {
-            if model == "gpt-6.1-sol" || model == "gpt-6.1-terra" { return 1050000 as long }
+            if model == "gpt-6.2-sol" || model == "gpt-6.2-astra" || model == "gpt-6.1-sol" || model == "gpt-6.1-terra" { return 1050000 as long }
         }
         "anthropic" -> {
             if model == "claude-opus-5-5" || model == "claude-sonnet-5-5" || model == "claude-haiku-5-5" || model == "claude-fable-5-1" { return 1000000 as long }
@@ -351,6 +351,8 @@ definition_models(id: string) -> ptr {
     l = list.list_new()
     match id {
         "openai" -> {
+            list.list_add(l, "gpt-6.2-sol")
+            list.list_add(l, "gpt-6.2-astra")
             list.list_add(l, "gpt-6.1-sol")
             list.list_add(l, "gpt-6.1-terra")
         }
@@ -375,7 +377,7 @@ definition_models(id: string) -> ptr {
 
 // Responses models that cannot switch reasoning off (upstream responses.zig `models`).
 model_can_disable_reasoning(model: string) -> int {
-    if model == "gpt-6.1-sol" || model == "gpt-6-astra" { return 0 }
+    if model == "gpt-6.2-sol" || model == "gpt-6.2-astra" || model == "gpt-6.1-sol" || model == "gpt-6-astra" { return 0 }
     return 1
 }
 

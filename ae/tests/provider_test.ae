@@ -212,6 +212,25 @@ main() {
             spec.assert_eq(has_id_(ids, "codex"), 0, "codex absent")
         }
 
+        // e327dbb: GPT-6.2 catalogs and reasoning (the openai service; codex is not a provider here)
+        spec.it("GPT-6.2 catalogs and reasoning across services (adapted: openai only)") callback {
+            spec.assert_str_eq(types.definition_default_model("openai"), "gpt-6.2-sol", "default")
+            names = ["gpt-6.2-sol", "gpt-6.2-astra"]
+            i = 0
+            while i < 2 {
+                cp = types.new_config("openai", "", "", names[i])
+                spec.assert_eq(types.model_can_disable_reasoning(names[i]), 0, "cannot disable ${names[i]}")
+                spec.assert_eq(types.model_context_window("openai", names[i]) as int, 1050000, "window ${names[i]}")
+                spec.assert_eq(types.vision(cp), 1, "vision ${names[i]}")
+                spec.assert_str_eq(provider.effective_effort(cp), "server default", "default effort")
+                spec.assert_str_eq(types.set_effort(cp, "off"), "", "set off")
+                spec.assert_str_eq(provider.effective_effort(cp), "low", "off is low")
+                spec.assert_str_eq(types.set_effort(cp, "high"), "", "set high")
+                spec.assert_str_eq(provider.effective_effort(cp), "high", "high")
+                i = i + 1
+            }
+        }
+
         spec.it("vision follows provider tables and custom declarations (adapted: openai for codex)") callback {
             spec.assert_eq(types.vision(types.new_config("openai", "", "", "gpt-6.1-sol")), 1, "openai")
             spec.assert_eq(types.vision(types.new_config("anthropic", "", "", "claude-sonnet-5-5")), 1, "anthropic")

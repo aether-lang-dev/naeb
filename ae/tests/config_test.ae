@@ -589,7 +589,7 @@ main() {
             new_home = "${d}/new"
             _c2, nerr, _d4 = config.save_model(e, new_home, "openai", "")
             spec.assert_str_eq(nerr, "", "new home")
-            spec.assert_str_eq(read_("${new_home}/config.toml"), "provider = \"openai\"\n[openai]\nmodel = \"gpt-6.1-sol\"\n", "created")
+            spec.assert_str_eq(read_("${new_home}/config.toml"), "provider = \"openai\"\n[openai]\nmodel = \"gpt-6.2-sol\"\n", "created")
             spec.assert_eq(mode_("${new_home}/config.toml"), 384, "0600")
             cc = env.clone(e)
             env.set(cc, "NAEB_PROVIDER", "chat_completions")
