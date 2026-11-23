@@ -443,7 +443,7 @@ initialize_fork_(s: *Session, fp: ptr, cwd: string) -> string {
     members = ",\"mcp_servers\":${agent_input.mcp_servers_json(c.mcp_servers)},\"cwd\":${jsonx.quote(cwd)},\"provider\":${jsonx.quote(c.provider)}"
     if c.custom_provider != "" { members = "${members},\"custom_provider\":${jsonx.quote(c.custom_provider)}" }
     members = "${members},\"model\":${jsonx.quote(c.model)},\"parent_session_id\":${jsonx.quote(s.parent_session_id)},\"cache_key\":${jsonx.quote(s.cache_key)}"
-    members = "${members},\"forked_from\":{\"session\":${jsonx.quote(f.session)},\"message_count\":${f.message_count}},\"naeb_version\":${jsonx.quote(build_info.naeb_version())},\"tuning\":${tuning.to_log(tuning.Resolved { delivery: s.tuning_delivery, validation: s.tuning_validation })},\"mode\":${jsonx.quote(mode_name_(s.tools))}"
+    members = "${members},\"forked_from\":{\"session\":${jsonx.quote(f.session)},\"message_count\":${f.message_count}},\"naeb_version\":${jsonx.quote(build_info.naeb_version())}${family_members_(c.model)},\"tuning\":${tuning.to_log(tuning.Resolved { delivery: s.tuning_delivery, validation: s.tuning_validation })},\"mode\":${jsonx.quote(mode_name_(s.tools))}"
     tokens = compact.estimate_tokens(msgs, 0, list.list_size(msgs))
     return log.commit(s.log, s.history, 0, msgs, tokens, members, 1)
 }
@@ -492,6 +492,18 @@ json_list_(l: ptr) -> string {
     return "${out}]"
 }
 
+// The log header's `family` and `profile` members (a leading comma), from the model name.
+family_members_(model: string) -> string {
+    fam = profile.family_for_model(model)
+    return ",\"family\":${jsonx.quote(profile.family_name(fam))},\"profile\":${jsonx.quote(profile.name(profile.for_family(fam)))}"
+}
+
+// What the Session's delivery means for it: tools.wait exists only where
+// the Session can expose it (upstream Tools.backgroundMode).
+background_mode_(s: *Session) -> int {
+    return tuning.background_mode(tuning.Resolved { delivery: s.tuning_delivery, validation: s.tuning_validation }, tools.wait_enabled(s.tools) == 1)
+}
+
 // Fixes the tuning variants of a new Session: the model's profile, then NAEB_TUNE.
 // (NAEB_TUNE is validated at start-up, so a failure here is not user-facing.)
 resolve_tuning_(s: *Session) -> string {
@@ -518,7 +530,7 @@ initialize_history_(s: *Session, cwd: string) -> string {
     l = c.limits as *types.Limits
     terr = resolve_tuning_(s)
     if terr != "" { return terr }
-    template = prompt.render_system(cwd, tools.docs(s.tools), l.run_output_bytes as long, o.patches_off, c.model, s.tuning_validation, tools.wait_enabled(s.tools) == 1)
+    template = prompt.render_system(cwd, tools.docs(s.tools), l.run_output_bytes as long, o.patches_off, profile.for_model(c.model), s.tuning_validation, background_mode_(s))
     base = prompt.step_limit_prompt(template, l.max_steps as long)
     global = atomic_file.join(o.home, "AGENTS.md")
     root = instructions.project_root(cwd)
@@ -534,7 +546,7 @@ initialize_history_(s: *Session, cwd: string) -> string {
     members = "${members},\"cache_key\":${jsonx.quote(s.cache_key)},\"naeb_version\":${jsonx.quote(build_info.naeb_version())},\"system_sha\":${jsonx.quote(prompt.system_sha(base))}"
     off = prompt.disabled_patches(o.patches_off)
     if list.list_size(off) > 0 { members = "${members},\"patches_off\":${json_list_(off)}" }
-    members = "${members},\"profile\":${jsonx.quote(profile.name(profile.for_model(c.model)))}"
+    members = "${members}${family_members_(c.model)}"
     members = "${members},\"tuning\":${tuning.to_log(tuning.Resolved { delivery: s.tuning_delivery, validation: s.tuning_validation })}"
     members = "${members},\"mode\":${jsonx.quote(mode_name_(s.tools))}"
     msgs = list.list_new()
@@ -1044,11 +1056,8 @@ background_run_(s: *Session, j: *RunJob, sk: ptr, started: long) -> *Executed {
     j.id = progress.add(t.progress, progress.KIND_RUN, "Run", rs.id, 1)
     background.adopt_run(t.background, j.id, rs.id, j.cancel, j.done, j as ptr)
     list.list_add(s.bg_runs, j as ptr)
-    notice = "Run still executing after ${l.run_background_after_ms} ms; continuing in background as ${j.id}. Its captured output is preserved and will arrive automatically as a message when it finishes. Continue useful work meanwhile; no ps, cat/tail logs, sleep, empty Runs or timeout reruns to check/wait. Do not read its redirected logs before completion. If no independent work remains, end the model response immediately with a brief text reply and no run/tool call (not even console.log); Session waits locally, delivers the result and continues the Turn. After edit/write changes, rerun the same command/cwd directly: older Run bash stops with {superseded_by}, not failure. Do not wait for the stale result."
-    if tools.wait_enabled(s.tools) == 1 {
-        notice = string.replace_all(notice, "will arrive automatically as a message when it finishes", "will arrive appended to the output of your next Run when it finishes")
-        notice = string.replace_all(notice, "end the model response immediately with a brief text reply and no run/tool call (not even console.log); Session waits locally, delivers the result and continues the Turn.", "call await tools.wait() (optionally after other work in the same Run); it returns the results when the tasks finish.")
-    }
+    mode = background_mode_(s)
+    notice = "Run still executing after ${l.run_background_after_ms} ms; continuing in background as ${j.id}. Captured output is preserved. ${prompt.background_delivery(mode)} ${prompt.background_wait(mode)}"
     text = output.step_limit_output(notice, remaining_steps_(s))
     sj = tool_summary.to_json(tool_summary.empty())
     emit_(sk, "{\"run_end\":{\"background_id\":${jsonx.quote(j.id)},\"ok\":true,\"output\":${jsonx.quote(text)},\"changes\":[],\"tool_summary\":${sj}}}")
@@ -1624,7 +1633,7 @@ run_steps_(s: *Session, pending: ptr, sk: @keep ptr, cancel: @keep ptr) -> (stri
         carried_bytes = 0 as long
         folded = list.list_new()
         held = 0
-        if s.tuning_delivery == tuning.DELIVERY_TOOL && ncalls > 0 && waiting == 0 {
+        if tuning.folds_results(background_mode_(s)) && ncalls > 0 && waiting == 0 {
             held = 1
             poll_(s, sk)
             folded, carried_bytes = fold_inbox_(s, pending, sk)

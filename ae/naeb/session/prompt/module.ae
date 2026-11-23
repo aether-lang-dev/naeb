@@ -3,9 +3,13 @@
 //
 // Differences from upstream, all in what is passed: NAEB_PATCHES_OFF is a
 // parameter (the caller reads the environment), render_system takes the
-// tools documentation text, the Run output budget and the model name
-// instead of a Tools host (model "" and bytes output.MAX_BYTES when the
+// tools documentation text, the Run output budget, the profile and the
+// background mode instead of a Tools host (bytes output.MAX_BYTES when the
 // host has no Config), and a Step limit is a long with -1 for "none".
+//
+// The one deliberate difference in the text: upstream joins the background
+// guidance to the next bullet with no newline ("...continues the Turn.- Default
+// to doing..."); here the bullet starts on its own line.
 
 import std.string
 import std.strbuilder
@@ -17,15 +21,15 @@ import naeb.session.output
 import naeb.session.tuning
 
 exports(TOOLS_JSON, SYSTEM_TEMPLATE, Patch, patches, patch_lines, render_patches, patch_disabled,
-        disabled_patches, system_sha, render_system, tool_delivery, tool_delivery_from, tool_delivery_to, validation_run_text, validation_rule_text,
+        disabled_patches, system_sha, render_system, render_common, background_delivery, background_wait, validation_rule_text,
         turn_budget_text, step_limit_prompt)
 
 const TOOLS_JSON = "[{\"type\":\"function\",\"function\":{\"name\":\"run\",\n\"description\":\"Run JavaScript in a fresh sandbox. The `tools` API it can call is described in the system prompt.\",\n\"parameters\":{\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\n\"description\":\"JavaScript source. Top-level await is allowed; the last expression's value is returned.\"}},\n\"required\":[\"code\"]}}}]"
 
-// Six "{s}" markers (cwd, tools docs, what one Run can do, output budget,
+// Six "{s}" markers (cwd, tools docs, background guidance, output budget,
 // the validation rule, patch lines) and one "{d}" (tool concurrency), as
 // upstream's format string after its comptime step.
-const SYSTEM_TEMPLATE = "You are naeb, a coding agent working in {s}.\n\nYou act by calling the `run` tool with JavaScript. Each call runs in a fresh sandbox: no variables survive between calls, so write anything you need later to a file. The script can affect the outside world only through these functions:\n\n```js\n{s}```\n\nWriting scripts:\n- Top-level `await` works. Each Step is a full model round trip, usually 10 s or more; one Run can {s}\n- Tool calls started without awaiting each one (e.g. Promise.all) run concurrently, up to {d} at a time; commands chained inside one bash call (&&, ;) run one after another.\n- Long Runs auto-background while awaiting tools; scripts and captured output stay intact. Background Run/bash/agent results arrive automatically as messages. Continue useful work meanwhile; never check or wait for them with ps, cat/tail logs, sleep, empty Runs or timeout reruns. Do not read their redirected logs before completion. If no independent work remains, end the model response immediately with a brief text reply and no run/tool call (not even console.log); Session waits locally, delivers the result and continues the Turn. After edit/write changes, rerun the same command/cwd directly: older Run bash stops with {superseded_by}, not failure. Do not wait for the stale result.\n- Default to doing the task yourself. Unless the user requests delegation, delegate only independent read-only investigations that can run in parallel with useful parent work and whose results can be discarded. Keep serial edits, builds, tests and reviews in the main loop. Waiting on a foreground agent is serial; background delegation does not help if you must wait for it to proceed.\n- The last expression and console.log output share {s} per Run, truncated by console call and final result with markers; tool results inside JS remain complete. Locate with grep, then read needed line ranges. Large multi-file output can exceed this display budget: batch reads or print only needed snippets.\n{s}- A run script's syntax or runtime error means the script needs correction. Fix it and continue the task; do not end the Turn just because a script failed.\n{s}\nWhen the task is done, answer the user directly without calling the tool."
+const SYSTEM_TEMPLATE = "You are naeb, a coding agent working in {s}.\n\nYou act by calling the `run` tool with JavaScript. Each call runs in a fresh sandbox: no variables survive between calls, so write anything you need later to a file. The script can affect the outside world only through these functions:\n\n```js\n{s}```\n\nWriting scripts:\n- Top-level `await` works. Each Step is a full model round trip; one Run can read several files and make independent edits, returning only what you need.\n- Tool calls started without awaiting each one (e.g. Promise.all) run concurrently, up to {d} at a time; commands chained inside one bash call (&&, ;) run one after another.\n- Long Runs auto-background while awaiting tools; scripts and captured output stay intact. Continue useful work; no ps, cat/tail logs, sleep, empty Runs or timeout reruns to check/wait. Do not read their redirected logs before completion.{s}\n- Default to doing the task yourself. Unless the user requests delegation, delegate only independent read-only investigations that can run in parallel with useful parent work and whose results can be discarded. Keep serial edits, builds, tests and reviews in the main loop. Waiting on a foreground agent is serial; background delegation does not help if you must wait for it to proceed.\n- The last expression and console.log output share {s} per Run, truncated by console call and final result with markers; tool results inside JS remain complete. Locate with grep, then read needed line ranges. Large multi-file output can exceed this display budget: batch reads or print only needed snippets.\n{s}- A run script's syntax or runtime error means the script needs correction. Fix it and continue the task; do not end the Turn just because a script failed.\n{s}\nWhen the task is done, answer the user directly without calling the tool."
 
 // A prompt line that compensates for current models. Each id is registered
 // in docs/compromises.md; NAEB_PATCHES_OFF=<id,...|all> drops them.
@@ -131,14 +135,6 @@ system_sha(base: string) -> string {
     return string.substring(hex, 0, 12)
 }
 
-// What one Run can do, by validation variant (upstream validationRunText).
-validation_run_text(variant: int) -> string {
-    if variant == tuning.VALIDATION_SINGLE {
-        return "read several files, make all independent edits, then build and test, returning only what you need (such as failures)."
-    }
-    return "read several files and make all independent edits, returning only what you need."
-}
-
 // The prompt bullet on validating, by validation variant, newline included.
 validation_rule_text(variant: int) -> string {
     if variant == tuning.VALIDATION_SINGLE {
@@ -150,48 +146,23 @@ validation_rule_text(variant: int) -> string {
     return ""
 }
 
-// Each pair rewrites "end the response and the Session waits" for
-// `tools.wait`; a missing phrase is a test failure (tuning_prompt_test).
-tool_delivery_from() -> string[] {
-    out = make([]string, 0)
-    out.push("Background Run/bash/agent results arrive automatically as messages.")
-    out.push("If no independent work remains, end the model response immediately with a brief text reply and no run/tool call (not even console.log); Session waits locally, delivers the result and continues the Turn.")
-    out.push("arrive automatically as messages; never sleep")
-    out.push("Idle:reply to wait.")
-    out.push("No independent work: brief reply without tools; Session waits.")
-    out.push("No independent work:brief reply without tools; Session waits.")
-    out.push("With no independent work, reply without tools to wait locally.")
-    return out
-}
-tool_delivery_to() -> string[] {
-    out = make([]string, 0)
-    out.push("Background Run/bash/agent results arrive appended to the output of your next Run.")
-    out.push("If no independent work remains, call `await tools.wait()` (optionally after other work in the same Run); it returns the results when the tasks finish. Do not end the model response to wait.")
-    out.push("arrive appended to the output of your next Run; never sleep")
-    out.push("Idle: await tools.wait().")
-    out.push("No independent work: await tools.wait().")
-    out.push("No independent work: await tools.wait().")
-    out.push("With no independent work, await tools.wait().")
-    return out
+// The delivery sentence of the background guidance, by mode (upstream
+// backgroundDelivery).
+background_delivery(mode: int) -> string {
+    if mode == tuning.BG_USER { return "Results arrive automatically as messages." }
+    if mode == tuning.BG_TOOL { return "Results are appended to a later Run's output." }
+    return "Results are appended to a later Run's output while you work; if you reply without tools, Session delivers them as messages."
 }
 
-// `text` with every wait-by-replying sentence rewritten for `tools.wait`.
-tool_delivery(text: string) -> string {
-    current = text
-    from = tool_delivery_from()
-    to = tool_delivery_to()
-    for i in 0..from.len {
-        current = string.replace_all(current, from[i], to[i])
-    }
-    return current
+// What to do with no independent work left (upstream backgroundWait).
+background_wait(mode: int) -> string {
+    if mode == tuning.BG_TOOL { return "If no independent work remains, call `await tools.wait()`." }
+    return "If no independent work remains, reply briefly without tools; Session waits locally and continues the Turn."
 }
 
-// The system prompt: `tools_docs` is tools.docs(host); run_output_bytes the
-// configured display budget; model picks the profile for the patches;
-// `validation` is the tuning variant and `wait_enabled` says the Session
-// exposes tools.wait (tool delivery).
-render_system(cwd: string, tools_docs: string, run_output_bytes: long, patches_off: string, model: string, validation: int, wait_enabled: bool) -> string {
-    lines = patch_lines(patches_off, profile.for_model(model))
+// The five slots' text, in the order of the template's "{s}" markers
+// (upstream's RenderInputs): the budget is "N KiB" for a multiple of 1024.
+render_(cwd: string, tools_docs: string, run_output_bytes: long, background: string, validation: string, patch_text: string) -> string {
     budget = "${run_output_bytes} bytes"
     if run_output_bytes % 1024 == 0 { budget = "${run_output_bytes / 1024} KiB" }
     tpl = string.replace_all(SYSTEM_TEMPLATE, "{d}", "${sandbox.TOOL_CONCURRENCY}")
@@ -202,18 +173,31 @@ render_system(cwd: string, tools_docs: string, run_output_bytes: long, patches_o
     strbuilder.append(b, string.array_get(parts, 1))
     strbuilder.append(b, tools_docs)
     strbuilder.append(b, string.array_get(parts, 2))
-    strbuilder.append(b, validation_run_text(validation))
+    strbuilder.append(b, background)
     strbuilder.append(b, string.array_get(parts, 3))
     strbuilder.append(b, budget)
     strbuilder.append(b, string.array_get(parts, 4))
-    strbuilder.append(b, validation_rule_text(validation))
+    strbuilder.append(b, validation)
     strbuilder.append(b, string.array_get(parts, 5))
-    strbuilder.append(b, lines)
+    strbuilder.append(b, patch_text)
     strbuilder.append(b, string.array_get(parts, 6))
     string.string_array_free(parts)
-    rendered = strbuilder.finish(b)
-    if wait_enabled { return tool_delivery(rendered) }
-    return rendered
+    return strbuilder.finish(b)
+}
+
+// The shared baseline (upstream renderCommon): `tools_docs` is
+// tools.common_docs(); no background guidance, validation rule or patch.
+render_common(cwd: string, tools_docs: string) -> string {
+    return render_(cwd, tools_docs, output.MAX_BYTES as long, "", "", "")
+}
+
+// The system prompt: `tools_docs` is tools.docs(host); run_output_bytes the
+// configured display budget; `profile_` picks the patches; `validation` is
+// the tuning variant and `mode` the tuning.BG_* background mode of the Session.
+render_system(cwd: string, tools_docs: string, run_output_bytes: long, patches_off: string, profile_: int, validation: int, mode: int) -> string {
+    lines = patch_lines(patches_off, profile_)
+    background = " ${background_delivery(mode)} ${background_wait(mode)}"
+    return render_(cwd, tools_docs, run_output_bytes, background, validation_rule_text(validation), lines)
 }
 
 // `user_text`, prefixed with the Turn's Step-budget fact when the system

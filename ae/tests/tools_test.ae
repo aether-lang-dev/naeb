@@ -178,13 +178,6 @@ main() {
             spec.assert_str_eq(timed.text, "Error: run timed out", "timed out")
             fs.remove_tree(d)
         }
-        spec.it("bash documentation example keeps test output captured byte for byte") callback {
-            ex = example_(tools.all_docs(), "  // cwd; merged stderr")
-            spec.assert_true(string.length(ex) > 0, "found an example")
-            r = sandbox.eval(ex, sandbox.limits(), echo_host_("[\"bash\"]"), null) as *sandbox.Outcome
-            spec.assert_eq(r.ok, 1, "ok: ${r.text}")
-            spec.assert_str_eq(r.text, "{\"command\":\"sh checks.sh\"}", "args")
-        }
         spec.it("a fenced table adds tools.fence and fence_denied; its example reaches the host byte for byte") callback {
             d = tmp_()
             plain = new_tools_(d)

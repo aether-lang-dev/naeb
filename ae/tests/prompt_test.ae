@@ -38,7 +38,7 @@ host_docs_() -> string {
 }
 
 render_(model: string) -> string {
-    return prompt.render_system("/work", host_docs_(), 16384 as long, "", model, tuning.VALIDATION_SINGLE, false)
+    return prompt.render_system("/work", host_docs_(), 16384 as long, "", profile.for_model(model), tuning.VALIDATION_SINGLE, tuning.BG_USER)
 }
 
 string_at_(l: ptr, i: int) -> string {
@@ -88,36 +88,71 @@ pick_(m: ptr, order: int[], n: int) -> ptr {
 main() {
     fw = spec.init()
     spec.describe(fw, "session.prompt") {
-        spec.it("tool delivery rewrites every wait-by-ending-the-response sentence") callback {
-            docs = "${tools.all_docs()}  async wait(ids) {},\n"
-            user = prompt.render_system("/work", docs, 16384 as long, "", "deepseek-flash", tuning.VALIDATION_SINGLE, false)
-            from = prompt.tool_delivery_from()
-            for i in 0..from.len {
-                spec.assert_true(has_(user, from[i]), "user prompt has: ${from[i]}")
-            }
-            spec.assert_false(has_(user, "tools.wait"), "no tools.wait without tool delivery")
-            tool = prompt.render_system("/work", docs, 16384 as long, "", "deepseek-flash", tuning.VALIDATION_SINGLE, true)
-            for i in 0..from.len {
-                spec.assert_false(has_(tool, from[i]), "tool prompt lacks: ${from[i]}")
-            }
-            spec.assert_false(has_(tool, "Session waits"), "Session waits")
-            spec.assert_false(has_(tool, "reply without tools"), "reply without tools")
-            spec.assert_true(has_(tool, "async wait(ids)"), "wait documented")
-        }
         spec.it("validation variants preserve delivery and remove only validation guidance") callback {
             docs = "${tools.all_docs()}  async wait(ids) {},\n"
             variants = [tuning.VALIDATION_SINGLE, tuning.VALIDATION_EXISTING_ONLY, tuning.VALIDATION_NONE]
             for d in 0..2 {
                 for vi in 0..3 {
                     v = variants[vi]
-                    system = prompt.render_system("/work", docs, 16384 as long, "", "deepseek-flash", v, d == 1)
-                    spec.assert_eq(has_(system, "then build and test"), v == tuning.VALIDATION_SINGLE, "build and test ${v}")
+                    mode = tuning.BG_USER
+                    if d == 1 { mode = tuning.BG_TOOL }
+                    system = prompt.render_system("/work", docs, 16384 as long, "", profile.DEFAULT, v, mode)
+                    spec.assert_false(has_(system, "Full checks"), "no Full checks line")
                     spec.assert_eq(has_(system, "known regression tests, expected results/fixtures"), v == tuning.VALIDATION_SINGLE, "regression ${v}")
                     spec.assert_eq(has_(system, "do not write new test scripts or install toolchains"), v == tuning.VALIDATION_EXISTING_ONLY, "existing-only ${v}")
                     spec.assert_true(has_(system, "async wait(ids)"), "docs kept")
                     spec.assert_true(has_(system, "Fix it and continue the task"), "script rule kept")
                     spec.assert_false(has_(system, "{s}"), "no marker left")
                 }
+            }
+        }
+        spec.it("background prompt matches the host tool table and delivery") callback {
+            modes = [tuning.BG_USER, tuning.BG_TOOL, tuning.BG_TOOL_WITHOUT_WAIT]
+            for i in 0..3 {
+                mode = modes[i]
+                docs = tools.docs(tools.new("/unused"))
+                if mode == tuning.BG_TOOL { docs = "${docs}  async wait(ids) {},\n" }
+                text = prompt.render_system("/work", docs, 16384 as long, "", profile.DEEPSEEK, tuning.VALIDATION_NONE, mode)
+                spec.assert_true(has_(text, prompt.background_delivery(mode)), "delivery ${mode}")
+                spec.assert_true(has_(text, prompt.background_wait(mode)), "wait ${mode}")
+                spec.assert_eq(has_(text, "async wait(ids)"), mode == tuning.BG_TOOL, "wait tool ${mode}")
+                spec.assert_eq(has_(text, "await tools.wait()"), mode == tuning.BG_TOOL, "tools.wait guidance ${mode}")
+                spec.assert_true(has_(text, "before completion. Results"), "guidance joins the Long Runs bullet")
+                spec.assert_true(has_(text, "\n- Default to doing the task yourself"), "next bullet on its own line")
+                spec.assert_false(has_(text, ".- Default"), "no glued bullet")
+            }
+        }
+        spec.it("common footprint uses shared text without selected policy or endpoint tools") callback {
+            text = prompt.render_common("/work", tools.common_docs())
+            for part in ["async read", "async llm", "Long Runs auto-background"] {
+                spec.assert_true(has_(text, part), "has ${part}")
+            }
+            for part in ["async search", "async mcp", "async wait", "; current:", "{{llm_"] {
+                spec.assert_false(has_(text, part), "lacks ${part}")
+            }
+            modes = [tuning.BG_USER, tuning.BG_TOOL, tuning.BG_TOOL_WITHOUT_WAIT]
+            for i in 0..3 {
+                spec.assert_false(has_(text, prompt.background_delivery(modes[i])), "no delivery ${i}")
+                spec.assert_false(has_(text, prompt.background_wait(modes[i])), "no wait ${i}")
+            }
+            vs = [tuning.VALIDATION_SINGLE, tuning.VALIDATION_EXISTING_ONLY]
+            for i in 0..2 {
+                spec.assert_false(has_(text, prompt.validation_rule_text(vs[i])), "no validation ${i}")
+            }
+            ps = prompt.patches()
+            for i in 0..list.list_size(ps) {
+                p = list.list_get_raw(ps, i) as *prompt.Patch
+                spec.assert_false(has_(text, p.text), "no patch ${p.id}")
+            }
+        }
+        spec.it("system prompt omits only the disabled patch") callback {
+            enabled = render_("claude-sonnet-5-5")
+            system = prompt.render_system("/work", host_docs_(), 16384 as long, "no-shell-search", profile.CLAUDE, tuning.VALIDATION_SINGLE, tuning.BG_USER)
+            ps = prompt.patches()
+            for i in 0..list.list_size(ps) {
+                p = list.list_get_raw(ps, i) as *prompt.Patch
+                spec.assert_true(has_(enabled, p.text), "enabled has ${p.id}")
+                spec.assert_eq(has_(system, p.text), p.id != "no-shell-search", "only ${p.id}")
             }
         }
         spec.it("system prompt documents every tool in JavaScript") callback {
@@ -133,20 +168,19 @@ main() {
             spec.assert_true(has_(prompt_text, "backticks, \${ or backslashes"), "json-escape patch")
             spec.assert_true(has_(prompt_text, "last expression and console.log output share 16 KiB per Run"), "budget")
             spec.assert_true(has_(prompt_text, "tool results inside JS remain complete"), "complete results")
-            spec.assert_true(has_(prompt_text, "failures).\n- Tool calls started without awaiting each one (e.g. Promise.all) run concurrently, up to 8 at a time;"), "concurrency line")
-            parts = ["Background Run/bash/agent results arrive automatically as messages", "ps, cat/tail logs, sleep, empty Runs or timeout reruns", "Do not read their redirected logs before completion", "Session waits locally, delivers the result and continues the Turn", "independent read-only investigations", "Keep serial edits, builds, tests and reviews in the main loop"]
+            spec.assert_true(has_(prompt_text, "returning only what you need.\n- Tool calls started without awaiting each one (e.g. Promise.all) run concurrently, up to 8 at a time;"), "concurrency line")
+            parts = ["Results arrive automatically as messages", "ps, cat/tail logs, sleep, empty Runs or timeout reruns", "Do not read their redirected logs before completion", "Session waits locally and continues the Turn", "independent read-only investigations", "Keep serial edits, builds, tests and reviews in the main loop"]
             i = 0
             while i < 6 {
                 spec.assert_true(has_(prompt_text, parts[i]), "contains ${parts[i]}")
                 i = i + 1
             }
-            spec.assert_true(has_(prompt_text, "{superseded_by}"), "format escape rendered")
             spec.assert_false(has_(prompt_text, "{s}"), "no marker left")
             spec.assert_false(has_(prompt_text, "{d}"), "no marker left")
             spec.assert_true(has_(prompt_text, "You are naeb, a coding agent working in /work.\n"), "cwd")
             // Upstream-complete documentation: every tool is checked against
             // tools.all_docs().
-            full = prompt.render_system("/work", tools.all_docs(), 16384 as long, "", "gpt-6.1-sol", tuning.VALIDATION_SINGLE, false)
+            full = prompt.render_system("/work", tools.all_docs(), 16384 as long, "", profile.CODEX, tuning.VALIDATION_SINGLE, tuning.BG_USER)
             spec.assert_true(has_(full, "1800000 (30 min)"), "bash timeout")
             spec.assert_true(has_(full, "resume:a1 after completion; busy:wait, don't retry/replace"), "agent resume")
             names = tools.tool_names()
@@ -160,10 +194,10 @@ main() {
             }
         }
         spec.it("system prompt renders configured Run display budget") callback {
-            system = prompt.render_system("/work", host_docs_(), 32768 as long, "", "m", tuning.VALIDATION_SINGLE, false)
+            system = prompt.render_system("/work", host_docs_(), 32768 as long, "", profile.DEFAULT, tuning.VALIDATION_SINGLE, tuning.BG_USER)
             spec.assert_true(has_(system, "share 32 KiB per Run"), "KiB")
             spec.assert_true(has_(system, "known regression tests, expected results/fixtures and formatting"), "validation line")
-            odd = prompt.render_system("/work", host_docs_(), 1000 as long, "", "m", tuning.VALIDATION_SINGLE, false)
+            odd = prompt.render_system("/work", host_docs_(), 1000 as long, "", profile.DEFAULT, tuning.VALIDATION_SINGLE, tuning.BG_USER)
             spec.assert_true(has_(odd, "share 1000 bytes per Run"), "bytes when not a KiB multiple")
         }
         spec.it("system prompt never mentions run effort") callback {
@@ -306,6 +340,16 @@ main() {
         }
         spec.it("a custom provider resolves by its model") callback {
             spec.assert_eq(profile.for_model("deepseek-flash"), profile.DEEPSEEK, "deepseek")
+        }
+        spec.it("recognized family and fallback profile are separate") callback {
+            spec.assert_eq(profile.family_for_model("proxy/codex-mini"), profile.FAMILY_GPT, "codex-mini")
+            spec.assert_eq(profile.family_for_model("google/GEMINI-3-flash"), profile.FAMILY_GEMINI, "gemini")
+            spec.assert_eq(profile.family_for_model("custom/model"), profile.FAMILY_UNKNOWN, "unknown")
+            spec.assert_eq(profile.family_for_model("codexample"), profile.FAMILY_UNKNOWN, "codexample is not codex")
+            spec.assert_eq(profile.family_for_model("codex"), profile.FAMILY_GPT, "bare codex")
+            spec.assert_eq(profile.for_family(profile.FAMILY_GEMINI), profile.DEFAULT, "gemini routes to default")
+            spec.assert_eq(profile.for_family(profile.FAMILY_UNKNOWN), profile.DEFAULT, "unknown routes to default")
+            spec.assert_str_eq(profile.family_name(profile.FAMILY_GEMINI), "gemini", "family label")
         }
         spec.it("the full set holds every profile") callback {
             p = 0

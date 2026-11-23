@@ -2,16 +2,25 @@
 // than the provider (upstream src/session/profile.zig, ADR 0025), so a custom
 // endpoint serving `deepseek-flash` gets DEEPSEEK.
 //
-// A profile is an int; a Set (upstream std.EnumSet(Profile)) is a bit mask.
+// A family (what the name says) is routed to a profile (what the Session
+// does); GEMINI and UNKNOWN both fall back to DEFAULT. A profile is an int;
+// a Set (upstream std.EnumSet(Profile)) is a bit mask.
 
 import std.string
 
-exports(CODEX, DEEPSEEK, CLAUDE, DEFAULT, ALL, for_model, bit, set_contains, set_of, set_without, name)
+exports(CODEX, DEEPSEEK, CLAUDE, DEFAULT, ALL, FAMILY_GPT, FAMILY_DEEPSEEK, FAMILY_CLAUDE, FAMILY_GEMINI, FAMILY_UNKNOWN,
+        family_for_model, for_family, family_name, for_model, bit, set_contains, set_of, set_without, name)
 
 const CODEX = 0
 const DEEPSEEK = 1
 const CLAUDE = 2
 const DEFAULT = 3
+const FAMILY_GPT = 0
+const FAMILY_DEEPSEEK = 1
+const FAMILY_CLAUDE = 2
+const FAMILY_GEMINI = 3
+const FAMILY_UNKNOWN = 4
+
 const ALL = 15          // every profile (upstream Profile.all)
 
 // The Set holding just `profile`.
@@ -42,8 +51,18 @@ starts_fold_(text: string, prefix: string) -> int {
     return string.starts_with(lower_(text), prefix)
 }
 
-// The profile for a model name; a leading "vendor/" is ignored.
-for_model(model: string) -> int {
+family_name(family: int) -> string {
+    match family {
+        0 -> { return "gpt" }
+        1 -> { return "deepseek" }
+        2 -> { return "claude" }
+        3 -> { return "gemini" }
+        _ -> { return "unknown" }
+    }
+}
+
+// The model family a name belongs to; a leading "vendor/" is ignored.
+family_for_model(model: string) -> int {
     n = string.length(model)
     start = 0
     i = n - 1
@@ -55,8 +74,24 @@ for_model(model: string) -> int {
         i = i - 1
     }
     short = string.substring(model, start, n)
-    if starts_fold_(short, "gpt-") == 1 || starts_fold_(short, "codex") == 1 { return CODEX }
-    if starts_fold_(short, "deepseek-") == 1 { return DEEPSEEK }
-    if starts_fold_(short, "claude-") == 1 { return CLAUDE }
-    return DEFAULT
+    if starts_fold_(short, "gpt-") == 1 || starts_fold_(short, "codex-") == 1 || lower_(short) == "codex" { return FAMILY_GPT }
+    if starts_fold_(short, "deepseek-") == 1 { return FAMILY_DEEPSEEK }
+    if starts_fold_(short, "claude-") == 1 { return FAMILY_CLAUDE }
+    if starts_fold_(short, "gemini-") == 1 { return FAMILY_GEMINI }
+    return FAMILY_UNKNOWN
+}
+
+// The profile a family is routed to: Gemini and unrecognized models share DEFAULT.
+for_family(family: int) -> int {
+    match family {
+        0 -> { return CODEX }
+        1 -> { return DEEPSEEK }
+        2 -> { return CLAUDE }
+        _ -> { return DEFAULT }
+    }
+}
+
+// The profile for a model name.
+for_model(model: string) -> int {
+    return for_family(family_for_model(model))
 }
