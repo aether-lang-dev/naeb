@@ -1,7 +1,6 @@
 name: CI
 
 on:
-  push:
   pull_request:
   workflow_dispatch:
 
@@ -13,39 +12,52 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  list:
+  plan:
     timeout-minutes: 5
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.tests.outputs.matrix }}
+      mode: ${{ steps.classify.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
+      - name: Test development and CI tooling
+        run: |
+          python3 tests/test_release_metadata.py
+          python3 tests/test_dev_install.py
+      - name: Classify release metadata
+        id: classify
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mode=full
+          if [[ $EVENT == pull_request ]]; then
+            mode=$(python3 scripts/ci_release_metadata.py "$BASE" "$HEAD" "$GITHUB_SHA")
+          fi
+          echo "Validation mode: $mode"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+  list:
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.mode != 'metadata' }}
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    outputs:
+      linux: ${{ steps.tests.outputs.linux }}
+      macos: ${{ steps.tests.outputs.macos }}
     steps:
       - uses: actions/checkout@v4
       - id: tests
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import json, os, pathlib, re
-          tests = list(dict.fromkeys(re.findall(r'tests/test_\w+\.py', pathlib.Path('AGENTS.md').read_text())))
-          assert tests, 'No e2e tests found in AGENTS.md'
-          # These tests inspect /proc directly or share the agent process-liveness fixtures.
-          linux_only = {'session', 'agent', 'agent_reuse', 'agent_fork', 'background_agent',
-                        'background_bash', 'background_run', 'limits'}
-          # Debug PTY latency limits (50/150 ms) are calibrated for Linux, not shared macOS runners.
-          linux_only.add('tui_stream')
-          matrix = [{'os': 'ubuntu-latest', 'test': test, 'name': pathlib.Path(test).stem} for test in tests]
-          portable = [test for test in tests if pathlib.Path(test).stem.removeprefix('test_') not in linux_only]
-          matrix += [{'os': 'macos-latest', 'test': ' '.join(portable[i::4]), 'name': f'group-{i}'} for i in range(4)]
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('matrix=' + json.dumps({'include': matrix}) + '\n')
-          PY
+        run: python3 scripts/ci_matrix.py >> "$GITHUB_OUTPUT"
 
-  build:
+  build-linux:
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.mode != 'metadata' }}
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
@@ -55,10 +67,29 @@ jobs:
       - run: zig build -Dcpu=baseline
       - uses: actions/upload-artifact@v4
         with:
-          name: nib-${{ matrix.os }}
+          name: nib-ubuntu-latest
+          path: zig-out/bin/nib
+
+  build-macos:
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.mode != 'metadata' }}
+    timeout-minutes: 15
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+          use-cache: true
+      - run: zig build -Dcpu=baseline
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nib-macos-latest
           path: zig-out/bin/nib
 
   unit:
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.mode != 'metadata' }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -72,39 +103,49 @@ jobs:
           version: 0.17.0
           use-cache: true
       - run: zig build test --summary all
+      - run: zig build test-bench-scheduler -Doptimize=ReleaseFast --summary all
+      - run: python3 tests/test_bench_scheduler.py
 
-  e2e:
-    timeout-minutes: 8
-    needs: [list, build]
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.list.outputs.matrix) }}
-    runs-on: ${{ matrix.os }}
+  e2e-linux:
+    needs: [list, build-linux]
+    uses: ./.github/workflows/e2e.yml
+    with:
+      os: ubuntu-latest
+      matrix: ${{ needs.list.outputs.linux }}
+
+  e2e-macos:
+    needs: [list, build-macos]
+    uses: ./.github/workflows/e2e.yml
+    with:
+      os: macos-latest
+      matrix: ${{ needs.list.outputs.macos }}
+
+  gate:
+    name: CI gate
+    needs: [plan, list, build-linux, build-macos, unit, e2e-linux, e2e-macos]
+    if: ${{ always() }}
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: nib-${{ matrix.os }}
-          path: zig-out/bin
-      - run: chmod +x zig-out/bin/nib
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - name: Run mock e2e test
+      - name: Require the selected validation to pass
         shell: bash
         env:
-          TEST: ${{ matrix.test }}
-          LANG: en_US.UTF-8
+          PLAN: ${{ needs.plan.result }}
+          MODE: ${{ needs.plan.outputs.mode }}
+          LIST: ${{ needs.list.result }}
+          BUILD_LINUX: ${{ needs.build-linux.result }}
+          BUILD_MACOS: ${{ needs.build-macos.result }}
+          UNIT: ${{ needs.unit.result }}
+          E2E_LINUX: ${{ needs.e2e-linux.result }}
+          E2E_MACOS: ${{ needs.e2e-macos.result }}
         run: |
-          mkdir -p e2e-logs
-          failed=0
-          for test in $TEST; do
-            python3 -u "$test" 2>&1 | tee "e2e-logs/$(basename "$test").log" || failed=1
+          echo "Plan=$PLAN mode=$MODE list=$LIST build-linux=$BUILD_LINUX build-macos=$BUILD_MACOS unit=$UNIT e2e-linux=$E2E_LINUX e2e-macos=$E2E_MACOS"
+          [[ $PLAN == success ]]
+          case $MODE in
+            metadata) expected=skipped ;;
+            full) expected=success ;;
+            *) exit 1 ;;
+          esac
+          for result in "$LIST" "$BUILD_LINUX" "$BUILD_MACOS" "$UNIT" "$E2E_LINUX" "$E2E_MACOS"; do
+            [[ $result == "$expected" ]] || exit 1
           done
-          exit "$failed"
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: e2e-${{ matrix.os }}-${{ matrix.name }}
-          path: e2e-logs/*.log
-          if-no-files-found: ignore

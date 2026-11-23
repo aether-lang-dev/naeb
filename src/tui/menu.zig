@@ -22,14 +22,14 @@ pub const Menu = struct {
     pinned: []commands.Candidate = &.{},
     pin_arena: std.heap.ArenaAllocator,
     gpa: std.mem.Allocator,
-    /// `@` completions: set while the cursor ends an `@` mention.
+    /// Completion source at the cursor.
     mention: enum { none, file, skill } = .none,
     index: ?*paths.Index = null,
     wake: ?paths.Index.Wake = null,
-    /// Owns the strings of `file_buf`; reset when the matches are recomputed.
-    file_arena: std.heap.ArenaAllocator,
+    /// Owns completion strings and skill rows until the next match pass.
+    mention_arena: std.heap.ArenaAllocator,
+    mention_rows: []commands.Candidate = &.{},
     file_buf: [paths.max_hits]commands.Candidate = undefined,
-    file_len: usize = 0,
     file_query: [256]u8 = undefined,
     file_query_len: usize = 0,
     file_generation: u64 = 0,
@@ -40,7 +40,7 @@ pub const Menu = struct {
     skill_list: []const @import("../session/skills.zig").Skill = &.{},
 
     pub fn init(gpa: std.mem.Allocator) Menu {
-        return .{ .arena = .init(gpa), .gpa = gpa, .file_arena = .init(gpa), .pin_arena = .init(gpa), .skill_arena = .init(gpa) };
+        return .{ .arena = .init(gpa), .gpa = gpa, .mention_arena = .init(gpa), .pin_arena = .init(gpa), .skill_arena = .init(gpa) };
     }
 
     pub fn deinit(m: *Menu) void {
@@ -48,7 +48,7 @@ pub const Menu = struct {
             ix.deinit();
             m.gpa.destroy(ix);
         }
-        m.file_arena.deinit();
+        m.mention_arena.deinit();
         m.skill_arena.deinit();
         m.pin_arena.deinit();
         m.arena.deinit();
@@ -92,7 +92,7 @@ pub const Menu = struct {
             slash = slash[0..n];
         }
         if (slash.len > 0 or m.mention == .none) return slash;
-        return m.file_buf[0..m.file_len];
+        return m.mention_rows;
     }
 
     /// Follows the editor's `@` mention: starts or refreshes the path listing and ranks it.
@@ -101,7 +101,7 @@ pub const Menu = struct {
             if (e.skillMention()) |skill| return m.syncSkills(@constCast(session), skill.query);
             m.mention = .none;
             m.file_fresh = false;
-            m.file_len = 0;
+            m.mention_rows = &.{};
             return;
         };
         if (m.index == null) {
@@ -120,7 +120,6 @@ pub const Menu = struct {
         ix.withEntries(Rank{ .m = m, .query = query, .same = same, .generation = &ix.generation }, Rank.run);
     }
 
-    /// Lists discovered skills whose names start with `query`; they reuse the `@` rows.
     fn syncSkills(m: *Menu, session: *Session, query: []const u8) void {
         if (m.mention != .skill) {
             m.mention = .skill;
@@ -128,18 +127,17 @@ pub const Menu = struct {
             m.skill_list = session.discoverSkills(m.skill_arena.allocator()) catch &.{};
         }
         m.file_fresh = false;
-        _ = m.file_arena.reset(.retain_capacity);
-        const a = m.file_arena.allocator();
-        m.file_len = 0;
+        _ = m.mention_arena.reset(.retain_capacity);
+        const a = m.mention_arena.allocator();
+        var rows: std.ArrayList(commands.Candidate) = .empty;
         for (m.skill_list) |skill| {
-            if (m.file_len == m.file_buf.len) break;
             if (query.len > skill.name.len or !std.ascii.eqlIgnoreCase(skill.name[0..query.len], query)) continue;
             const value = std.fmt.allocPrint(a, "${s} ", .{skill.name}) catch break;
             const line = std.mem.sliceTo(skill.description, '\n');
-            m.file_buf[m.file_len] = .{ .command = .help, .value = value, .label = skill.name, .detail = line, .is_path = true };
-            m.file_len += 1;
+            rows.append(a, .{ .command = .help, .value = value, .label = skill.name, .detail = line, .is_path = true }) catch break;
         }
-        if (m.sel >= m.file_len) m.sel = 0;
+        m.mention_rows = rows.items;
+        if (m.sel >= rows.items.len) m.sel = 0;
     }
 
     const Rank = struct {
@@ -155,18 +153,19 @@ pub const Menu = struct {
             m.file_fresh = true;
             @memcpy(m.file_query[0..r.query.len], r.query);
             m.file_query_len = r.query.len;
-            _ = m.file_arena.reset(.retain_capacity);
-            const a = m.file_arena.allocator();
+            _ = m.mention_arena.reset(.retain_capacity);
+            const a = m.mention_arena.allocator();
             var hits: [paths.max_hits]paths.Hit = undefined;
-            m.file_len = 0;
+            var len: usize = 0;
             for (paths.top(entries, r.query, &hits)) |h| {
                 const entry = entries[h.index];
                 const value = paths.insertion(a, entry.path, entry.dir) catch break;
                 const label = if (entry.dir) std.fmt.allocPrint(a, "{s}/", .{entry.path}) catch break else entry.path;
-                m.file_buf[m.file_len] = .{ .command = .help, .value = value, .label = label, .detail = "", .is_path = true };
-                m.file_len += 1;
+                m.file_buf[len] = .{ .command = .help, .value = value, .label = label, .detail = "", .is_path = true };
+                len += 1;
             }
-            if (m.sel >= m.file_len) m.sel = 0;
+            m.mention_rows = m.file_buf[0..len];
+            if (m.sel >= len) m.sel = 0;
         }
     };
 
@@ -197,11 +196,18 @@ pub const Menu = struct {
         if (std.mem.startsWith(u8, input, "/model ")) {
             _ = m.arena.reset(.retain_capacity);
             const a = m.arena.allocator();
-            const entries = try @import("../config.zig").modelEntries(a, io, session.options.home, session.cfg);
+            var empty_env: std.process.Environ.Map = .init(a);
+            const env = session.options.environ orelse &empty_env;
+            const entries = try @import("../config.zig").modelEntries(a, io, env, session.options.home, session.cfg);
             const choices = try a.alloc(commands.Choice, entries.len);
             for (entries, choices) |entry, *choice| {
-                const active = std.mem.eql(u8, entry.model, session.cfg.model);
-                choice.* = .{ .value = entry.model, .label = entry.model, .detail = if (active) "current" else "" };
+                const active = std.mem.eql(u8, entry.provider, session.cfg.name()) and std.mem.eql(u8, entry.model, session.cfg.model);
+                choice.* = .{
+                    .value = try std.fmt.allocPrint(a, "{s}/{s}", .{ entry.provider, entry.model }),
+                    .label = entry.model,
+                    .service = entry.provider,
+                    .detail = if (active) "current" else "",
+                };
             }
             m.models = choices;
             return;
@@ -289,6 +295,34 @@ test "selection wraps, closing hides the list and editing reopens it" {
     try testing.expectEqualStrings("/copy", m.selected("/c").?.label);
 }
 
+test "model menu qualifies choices and marks only the active service model" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "config.toml", .data = "[providers.local]\nprotocol = \"responses\"\nbase_url = \"http://localhost\"\nmodel = \"gpt-6.1-sol\"\ncontext_window = 1000\n" });
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    var env: std.process.Environ.Map = .init(testing.allocator);
+    defer env.deinit();
+    try env.put("HOME", root);
+    try env.put("CODEX_HOME", root);
+    var session: Session = undefined;
+    session.options = .{ .home = root, .user_home = root, .environ = &env };
+    session.cfg = .{ .provider = .openai, .base_url = "", .api_key = "", .model = "gpt-6.1-sol" };
+    var m: Menu = .init(testing.allocator);
+    defer m.deinit();
+    try m.load(testing.io, "/model ", &session);
+    const rows = m.items("/model gpt-6.1-sol");
+    try testing.expectEqual(@as(usize, 2), rows.len);
+    try testing.expectEqualStrings("openai/gpt-6.1-sol", rows[0].value.?);
+    try testing.expectEqualStrings("gpt-6.1-sol", rows[0].label);
+    try testing.expectEqualStrings("openai", rows[0].service.?);
+    try testing.expectEqualStrings("current", rows[0].detail);
+    try testing.expectEqualStrings("local/gpt-6.1-sol", rows[1].value.?);
+    try testing.expectEqualStrings("gpt-6.1-sol", rows[1].label);
+    try testing.expectEqualStrings("local", rows[1].service.?);
+    try testing.expectEqualStrings("", rows[1].detail);
+}
+
 test "reflection is hidden unless enabled" {
     var m: Menu = .init(testing.allocator);
     defer m.deinit();
@@ -307,6 +341,7 @@ test "moving straight from an @ mention to a $ mention loads skills" {
     var session: Session = undefined;
     session.io = testing.io;
     session.options = .{ .home = root, .user_home = root };
+    session.cfg = .{ .base_url = "", .api_key = "", .model = "mock" };
     var m: Menu = .init(testing.allocator);
     defer m.deinit();
     m.mention = .file;

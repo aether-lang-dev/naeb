@@ -31,7 +31,7 @@ class WebSearch(unittest.TestCase):
         home = Path(tmp.name)
         env = {k: v for k, v in os.environ.items() if not k.startswith(("NAEB_", "OPENAI_", "ANTHROPIC_", "DEEPSEEK_", "XAI_", "CODEX_"))}
         env.update(HOME=tmp.name, NAEB_HOME=str(home / "nib"), NAEB_PROVIDER=provider, NAEB_BASE_URL=mock.url,
-                   NAEB_CODEX_TRANSPORT="sse", NAEB_CODEX_RUN_TOOL="function")
+                   NAEB_RECORD="on", NAEB_CODEX_TRANSPORT="sse", NAEB_CODEX_RUN_TOOL="function")
         if key_env:
             env[key_env] = mock.key
         else:

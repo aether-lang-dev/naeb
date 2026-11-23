@@ -11,10 +11,12 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 
 from mock_agent import reply
 from test_agent import alive
+from test_agent_reuse import system
 from test_interjections import Terminal
 from test_llm import wait_for
 
@@ -85,6 +87,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
             elif mode == "cancel":
                 self.server.followup.set()
                 self.server.release.wait(10)
+        elif case == "repair":
+            if index == 0:
+                code = {"base": "1:0", "edits": [
+                    {"old_text": "await tools.sleep(200); throw new Error('late-failure🙂')", "new_text": "'repaired'"}]}
+        elif case in ("fold-failure", "wait-failure"):
+            if index == 0:
+                code = "await tools.sleep(200); throw new Error('late-failure🙂')"
+            elif index == 1:
+                if case == "fold-failure":
+                    time.sleep(.5)
+                    code = "'independent-result'"
+                else:
+                    code = "await tools.wait(['r1'])"
+        elif case == "done":
+            pass
+        elif case == "wait-unavailable":
+            if index == 0:
+                code = "({exposed: 'wait' in tools, type: typeof tools.wait})"
         elif case == "resume":
             code = "await tools.sleep(150); 'resumed-result'" if index == 0 else None
         elif index == 0:
@@ -97,7 +117,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 code = "await tools.bash(" + json.dumps({"command": "echo $$ > worker.pid; sleep 30", "timeout_ms": 500}) + ")"
             elif case == "recovery":
                 code = "await tools.write({path:'changed.txt',content:'partial work'}); await tools.bash({command:'echo $$ > worker.pid; sleep 30'})"
-            elif case in ("cancel", "crash", "stop"):
+            elif case in ("cancel", "crash", "stop", "wait-cancel"):
                 command = "echo $$ > worker.pid; sleep 30; echo should-not-finish"
                 code = "const r=await tools.bash(" + json.dumps({"command": command}) + "); if(r.exit_code!==null) throw new Error('stop did not kill command'); r"
             elif case == "limit":
@@ -110,6 +130,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 code = "await tools.sleep(400); await tools.write({path:'first.txt',content:'first'}); 'first-result'"
             elif case == "slots":
                 code = "await tools.sleep(2000); 'slot-result'"
+            elif case in ("fold", "wait-tool", "wait-ids"):
+                code = "await tools.bash(" + json.dumps({"command": "sleep .2; printf bash-result"}) + ")"
             else:
                 command = "sleep .45; printf bash-result"
                 code = ("console.log('before-yield'); const r=await tools.bash(" + json.dumps({"command": command}) + "); "
@@ -128,6 +150,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             code = "await tools.sleep(180); await tools.write({path:'second.txt',content:'second'}); 'second-result'"
         elif case == "slots" and index < 9:
             code = "await tools.sleep(2000); 'slot-result'"
+        elif case == "fold" and index == 1:
+            time.sleep(.6)
+            code = "await tools.write({path:'independent.txt',content:'done while waiting'}); 'independent-result'"
+        elif case == "wait-cancel" and index == 1:
+            code = "await tools.wait()"
+        elif case == "wait-tool" and index == 1:
+            code = "await tools.wait()"
+        elif case == "wait-ids" and index == 1:
+            code = "const none = await tools.wait(['r9']); const r = await tools.wait(['r1']); console.log(JSON.stringify({none, ids: r.results.map(x => x.id)}))"
         elif case == "overlap" and index == 1:
             code = "await tools.write({path:'independent.txt',content:'done while waiting'}); 'independent-result'"
         if index > 0 and case not in ("cancel", "crash", "resume"):
@@ -147,7 +178,7 @@ class BackgroundRunTests(unittest.TestCase):
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.env = dict(os.environ, NAEB_HOME=str(self.home), NAEB_PROVIDER="chat_completions",
-                        NAEB_API_KEY="mock", NAEB_MODEL="mock",
+                        NAEB_API_KEY="mock", NAEB_RECORD="on", NAEB_MODEL="mock",
                         NAEB_BASE_URL=f"http://127.0.0.1:{self.server.server_port}")
 
     def tearDown(self):
@@ -164,13 +195,23 @@ class BackgroundRunTests(unittest.TestCase):
         return subprocess.Popen([str(BIN), "ask", "--json", "initial", *args], cwd=self.cwd,
                                 env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-    def finish(self, process, ok=True):
+    def finish(self, process, ok=True, torn=False):
         stdout, stderr = process.communicate(timeout=15)
         self.assertEqual(process.returncode == 0, ok, stdout + stderr)
         self.assertEqual(stderr, "")
         events = [json.loads(line) for line in stdout.splitlines()]
         session = events[0]["start"]["session_id"]
-        rows = [json.loads(line) for line in (self.home / "sessions" / (session + ".jsonl")).read_text().splitlines() if line]
+        rows = []
+        for line in (self.home / "sessions" / (session + ".jsonl")).read_text().splitlines():
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                if not torn:
+                    raise
+        if torn:
+            self.assertTrue(any(r.get("repair") for r in rows))
         return events, rows, session
 
     def results(self, rows):
@@ -260,6 +301,7 @@ class BackgroundRunTests(unittest.TestCase):
                 self.assertEqual(len(self.server.requests), 4 if case == "stop-reason" else 3)
 
     def assert_overlap(self):
+        self.env["NAEB_RECORD"] = "on"
         events, rows, session = self.finish(self.launch())
         results = self.results(rows)
         self.assertEqual(len(results), 1)
@@ -279,9 +321,10 @@ class BackgroundRunTests(unittest.TestCase):
         self.assertEqual(completion["tool_bytes"], sum(c["result_bytes"] for c in completion["calls"]))
         runs = [e["run_end"] for e in events if "run_end" in e]
         self.assertIn("continuing in background as r1", runs[0]["output"])
-        self.assertIn("captured output is preserved and will arrive automatically as a message", runs[0]["output"])
-        self.assertIn("no ps, cat/tail logs, sleep, empty Runs or timeout reruns to check/wait", runs[0]["output"])
-        self.assertIn("Do not read its redirected logs before completion", runs[0]["output"])
+        self.assertIn("Captured output is preserved", runs[0]["output"])
+        self.assertIn("Results arrive automatically as messages", runs[0]["output"])
+        self.assertIn("reply briefly without tools", runs[0]["output"])
+        self.assertNotIn("tools.wait()", runs[0]["output"])
         self.assertNotIn("before-yield", runs[0]["output"])
         self.assertEqual(runs[0]["changes"], [])
         self.assertEqual([c["path"] for c in runs[1]["changes"]], ["independent.txt"])
@@ -343,6 +386,198 @@ class BackgroundRunTests(unittest.TestCase):
         self.assertEqual([c["name"] for c in self.results(rows)[0]["background_run"]["calls"]], ["bash"])
         self.assertNotIn("stdout-before", next(e["run_end"]["output"] for e in events if "run_end" in e))
         self.assertNotIn("waiting", messages[-2])
+
+    def finished_records(self, rows):
+        return [d["event"] for r in rows for d in r.get("deliveries", [])
+                if d["event"]["state"] == "finished"]
+
+    def test_user_delivery_inserts_a_user_message(self):
+        self.server.case = "fold"
+        self.env["NAEB_TUNE"] = "delivery=user"
+        _, rows, _ = self.finish(self.launch())
+        final = self.server.requests[-1]["messages"]
+        self.assertEqual(len([m for m in final if m["role"] == "user"]), 2)
+        self.assertNotIn("bash-result", final[-2]["content"])
+        self.assertIn("bash-result", final[-1]["content"])
+        self.assertEqual(len(self.results(rows)), 1)
+
+    def test_tool_delivery_folds_results_into_the_next_tool_message(self):
+        self.server.case = "fold"
+        self.env["NAEB_TUNE"] = "delivery=tool"
+        events, rows, _ = self.finish(self.launch())
+        for request in self.server.requests:
+            self.assertEqual(len([m for m in request["messages"] if m["role"] == "user"]), 1)
+        content = self.server.requests[-1]["messages"][-1]["content"]
+        self.assertEqual(self.server.requests[-1]["messages"][-1]["role"], "tool")
+        self.assertLess(content.index("independent-result"), content.index("[background run r1 finished]"))
+        self.assertIn("bash-result", content)
+        self.assertEqual(self.results(rows), [])
+        self.assertEqual([r["id"] for r in self.finished_records(rows)], ["r1"])
+        finished = [e["background"] for e in events if e.get("background", {}).get("state") == "finished"]
+        self.assertEqual([e["id"] for e in finished], ["r1"])
+        registration = next(e["run_end"]["output"] for e in events if "run_end" in e)
+        self.assertIn("appended to a later Run's output", registration)
+        self.assertIn("await tools.wait()", registration)
+        self.assertNotIn("reply briefly without tools", registration)
+        self.assertEqual(events[-1]["end"]["text"], "done")
+
+    def test_tool_delivery_wait_returns_results_once_and_is_not_backgrounded(self):
+        self.server.case = "wait-tool"
+        self.env["NAEB_TUNE"] = "delivery=tool"
+        events, rows, _ = self.finish(self.launch())
+        prompt = system(self.server.requests[0])
+        self.assertIn("async wait(", prompt)
+        self.assertIn("call `await tools.wait()`", prompt)
+        final = self.server.requests[-1]["messages"]
+        self.assertEqual([m["content"] for m in final if m["role"] == "user"][1:], [])
+        self.assertEqual(final[-1]["role"], "tool")
+        self.assertIn('"results":[{"id":"r1","kind":"run"', final[-1]["content"])
+        self.assertEqual("".join(m["content"] for m in final[1:] if m["role"] != "assistant").count("bash-result"), 1)
+        runs = [e["run_end"] for e in events if "run_end" in e]
+        self.assertEqual(len(runs), 2)
+        self.assertNotIn("continuing in background", runs[1]["output"])
+        self.assertIsNone(runs[1].get("background_id"))
+        self.assertEqual([e["background"]["state"] for e in events if e.get("background", {}).get("kind") == "run"], ["started", "finished"])
+        self.assertEqual([r["id"] for r in self.finished_records(rows)], ["r1"])
+        self.assertEqual(self.results(rows), [])
+        waited = next(r for r in rows if r.get("deliveries"))
+        self.assertEqual(waited["deliveries"][0]["via"], "wait")
+        self.assertEqual(waited["output_bytes"], len(final[-1]["content"].encode()))
+        self.assertEqual(rows[-1]["output_bytes"], 0)
+
+    def failing_tool_delivery(self, case):
+        self.server.case = case
+        self.server.requests.clear()
+        self.env["NAEB_TUNE"] = "delivery=tool"
+        _, rows, session = self.finish(self.launch())
+        received = self.server.requests[-1]["messages"][-1]
+        self.assertEqual(received["role"], "tool")
+        self.assertIn("Source: 1:0", received["content"])
+        path = self.home / "sessions" / f"{session}.jsonl"
+        return rows, session, path
+
+    def test_failed_tool_delivery_can_rerun(self):
+        for case in ("fold-failure", "wait-failure"):
+            with self.subTest(case=case):
+                rows, session, path = self.failing_tool_delivery(case)
+                delivery_step = next(i for i, r in enumerate(rows) if any(
+                    m["role"] == "tool" and "Source: 1:0" in m["content"] for m in r["messages"]))
+                path.write_bytes(b"".join(path.read_bytes().splitlines(keepends=True)[:delivery_step + 1]))
+                self.server.case = "repair"
+                self.server.requests.clear()
+                self.finish(self.launch("--resume", session))
+                output = self.server.requests[-1]["messages"][-1]["content"]
+                self.assertIn("repaired", output)
+
+    def test_folded_runs_replay_their_own_output(self):
+        _, session, _ = self.failing_tool_delivery("fold-failure")
+        result = subprocess.run([str(BIN), "replay", session, "--all", "--json"], cwd=self.cwd,
+                                env=self.env, capture_output=True, text=True, timeout=5)
+        report = json.loads(result.stdout)
+        self.assertEqual((report["matched"], report["divergences"], report["undetermined"]),
+                         (2, 0, 0), report)
+
+    def test_legacy_folded_run_completion_is_readable(self):
+        rows, session, path = self.failing_tool_delivery("fold-failure")
+        legacy = []
+        for row in rows:
+            deliveries = row.pop("deliveries", [])
+            for result in row.get("run_results", []):
+                result.pop("output", None)
+            for delivery in deliveries:
+                completion = delivery["event"]["completion"]
+                completion.pop("source_reference")
+                launch = next(r["source"] for r in legacy if r.get("source", {}).get("step") == 1)
+                legacy.append({"source": dict(launch, failed=True), "messages": [], "from": 0})
+            legacy.append(row)
+            legacy += [{"background": d["event"], "messages": [], "from": 0} for d in deliveries]
+        path.write_text("".join(json.dumps(row) + "\n" for row in legacy))
+        result = subprocess.run([str(BIN), "replay", session, "--all", "--json"], cwd=self.cwd,
+                                env=self.env, capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)["matched"], 2)
+        self.server.case = "repair"
+        self.server.requests.clear()
+        self.finish(self.launch("--resume", session))
+        self.assertIn("repaired", self.server.requests[-1]["messages"][-1]["content"])
+
+    def test_resume_after_fold_commit(self):
+        rows, session, path = self.failing_tool_delivery("fold-failure")
+        lines = path.read_bytes().splitlines(keepends=True)
+        folded_index, folded = next((i, r) for i, r in enumerate(rows)
+                                    if any(m["role"] == "tool" and "[background run r1 finished]" in m["content"]
+                                           for m in r["messages"]))
+        tool = next(m for m in folded["messages"] if m["role"] == "tool")
+        delivered_bytes = len(tool["content"].split("\n\n[background", 1)[1].encode()) + len("[background")
+        end = folded_index + 1
+        for tail in (b"", lines[end][:32], lines[end].rstrip(b"\n")):
+            with self.subTest(torn_bytes=len(tail)):
+                path.write_bytes(b"".join(lines[:end]) + tail)
+                self.server.case = "done"
+                self.server.requests.clear()
+                events, resumed, _ = self.finish(self.launch("--resume", session), torn=bool(tail))
+                content = "\n".join(m.get("content") or "" for m in self.server.requests[0]["messages"][1:])
+                self.assertEqual(content.count("Source: 1:0"), 1)
+                self.assertNotIn("lost: process ended", content)
+                self.assertFalse([e["background"] for e in events if e.get("background", {}).get("id") == "r1"])
+                self.assertEqual([r["output_bytes"] for r in resumed[end:] if "model_ms" in r], [delivered_bytes])
+                self.assertEqual([d["event"]["id"] for r in resumed for d in r.get("deliveries", [])], ["r1"])
+                self.server.requests.clear()
+                _, again, _ = self.finish(self.launch("--resume", session), torn=bool(tail))
+                self.assertEqual(again[-1]["output_bytes"], 0)
+
+    def test_tool_delivery_wait_by_id_reports_tasks_that_are_not_pending(self):
+        self.server.case = "wait-ids"
+        self.env["NAEB_TUNE"] = "delivery=tool"
+        events, rows, _ = self.finish(self.launch())
+        output = [e["run_end"]["output"] for e in events if "run_end" in e][1]
+        self.assertIn('"none":{"ok":true,"results":[],"not_pending":["r9"]}', output)
+        self.assertIn('"ids":["r1"]', output)
+
+    def test_tool_delivery_wait_is_canceled_with_the_turn(self):
+        self.server.case = "wait-cancel"
+        self.env["NAEB_TUNE"] = "delivery=tool"
+        process = self.launch()
+        self.addCleanup(process.wait, timeout=5)
+        self.addCleanup(process.kill)
+        wait_for(lambda: len(self.server.requests) == 2 and (self.cwd / "worker.pid").exists())
+        time.sleep(.5)
+        self.assertIsNone(process.poll())
+        pid = int((self.cwd / "worker.pid").read_text())
+        process.send_signal(signal.SIGINT)
+        process.communicate(timeout=10)
+        wait_for(lambda: not alive(pid))
+
+    def test_user_delivery_has_no_wait_tool(self):
+        self.server.case = "wait-unavailable"
+        self.env["NAEB_TUNE"] = "delivery=user"
+        events, _, _ = self.finish(self.launch())
+        prompt = system(self.server.requests[0])
+        self.assertNotIn("async wait(", prompt)
+        self.assertNotIn("tools.wait(", prompt)
+        self.assertIn("reply briefly without tools", prompt)
+        run, = [e["run_end"] for e in events if "run_end" in e]
+        self.assertTrue(run["ok"], run)
+        self.assertEqual(json.loads(run["output"].removeprefix("result: ")),
+                         {"exposed": False, "type": "undefined"})
+
+    def test_tool_delivery_falls_back_to_a_user_message_when_the_model_waits_by_replying(self):
+        self.server.case = "wait"
+        self.env["NAEB_TUNE"] = "delivery=tool"
+        process = self.launch()
+        try:
+            self.assertTrue(self.server.followup.wait(5))
+            wait_for(lambda: len(self.server.requests) == 2)
+            time.sleep(.2)
+            self.assertEqual(len(self.server.requests), 2)
+        finally:
+            self.server.release.set()
+        events, rows, _ = self.finish(process)
+        messages = self.server.requests[-1]["messages"]
+        self.assertEqual((messages[-2]["role"], messages[-2]["content"]), ("assistant", "Waiting."))
+        self.assertEqual(messages[-1]["role"], "user")
+        self.assertIn("wait-result", messages[-1]["content"])
+        self.assertEqual(len(self.results(rows)), 1)
 
     def test_completed_resume_does_not_redeliver_results(self):
         _, _, session = self.finish(self.launch())

@@ -1,6 +1,32 @@
 # Data
 
-## Resource usage
+## Current nib resource usage
+
+| Release | Installed size | Idle RSS | Total RSS of 10 idle instances |
+| --- | ---: | ---: | ---: |
+| nib 0.19.0 (Linux x86-64, static) | 6.7 MB | 4.6 MB | 46.2 MB |
+
+The installed size is for the extracted, stripped binary from the checksum-verified release archive. Idle RSS is the median of five trials with clean, signed-out TUIs in 140×40 PTYs, with no model requests. The ten-instance measurement sums each trial's RSS from Linux `/proc/<pid>/smaps_rollup`; shared resident pages can be counted in more than one process. Values use decimal MB. The README memory chart uses this nib measurement and retains the historical values for the other agents below.
+
+## Current prompt footprint
+
+The **shared prompt in nib 0.19.0 is 1,493 tokens**. It includes the common system instructions and JavaScript tool API, but not selected strategy variants, patches, endpoint-only tool text, or outer request-tool definitions. It is a measure of shared text, not a request total.
+
+| Example | Family → Profile | System | Request tool definitions | Total fixed input |
+| --- | --- | ---: | ---: | ---: |
+| Codex / GPT-6.2 Sol | GPT → `codex` | 1,827 | 212 | 2,039 |
+| Anthropic / Claude Sonnet 5.5 | Claude → `claude` | 1,784 | 201 | 1,985 |
+| DeepSeek / DeepSeek Flash | DeepSeek → `deepseek` | 1,804 | 203 | 2,007 |
+| Custom Chat Completions / Gemini fixture | Gemini → `default` | 1,687 | 203 | 1,890 |
+| Custom Chat Completions / unknown-model fixture | Unknown → `default` | 1,679 | 203 | 1,882 |
+
+These are offline `o200k_base` estimates (not billed usage). The fixtures use cwd `/work`, default limits, no project or global instructions, no history, and no enabled extensions. The tool definitions are taken from the actual protocol encoders. The two custom fixtures exercise routing without implying native service support. The chart below shows nib’s shared-only count alongside the other agents’ historical full counts. The chart does not compare full request overhead on an equal basis.
+
+```sh
+zig build prompt-footprint | uv run --no-project --with tiktoken==0.14.0 python scripts/prompt_footprint.py
+```
+
+## Historical resource usage
 
 | Agent | Version | Installed size | Idle RSS | Total RSS of 10 idle instances | Fixed prompt per request, ≈tokens |
 | --- | --- | ---: | ---: | ---: | ---: |
@@ -14,14 +40,14 @@
 
 *Measured locally in November 2026, idle TUI in a 140×40 terminal, no model requests; fixed prompts include system and tool definitions. nib re-measured at 0.9.0 under the same conditions (0.5.0 reproduces 3.8 MB / 38 MB there).*
 
-### Fixed prompt per request
+## Prompt sizes as reported
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/bench-prompt-dark.svg">
-  <img src="assets/bench-prompt-light.svg" alt="Fixed prompt tokens per request, ascending: pi clean 1,282; nib 2,264; pi with everyday extensions 2,417; dsh 6,236; prime-agent 8,891; Codex CLI 10,260; Claude Code 11,275." width="880">
+  <img src="assets/bench-prompt-light.svg" alt="Prompt tokens: nib 0.19.0 shared only 1,493. Historical full counts for other agents: pi clean 1,282; pi with everyday extensions 2,417; dsh 6,236; prime-agent 8,891; Codex CLI 10,260; Claude Code 11,275." width="880">
 </picture>
 
-*November 2026, system + tool definitions, in tokens.*
+*nib 0.19.0 shows only its shared prompt and common tool API, excluding model profiles and request tool definitions. Other agents retain their November 2026 full fixed-prompt counts.*
 
 ## Comparison with Codex CLI
 

@@ -190,13 +190,16 @@ pub fn run(init: std.process.Init, session: *Session) !void {
     var frames: Frames = .{};
     while (true) {
         const event = try loop.nextEvent();
-        const refresh = event.refresh();
+        const buffering_paste = app.pasting and event == .key_press;
         const old_hover = app.hovered;
+        const old_hover_row = app.hovered_row;
         const old_link = app.link;
         const motion = event == .mouse and event.mouse.type == .motion and !app.selection.active;
-        if (!motion and event.flushesVisible()) app.transcript.flushVisible();
+        if (!buffering_paste and !motion and event.flushesVisible()) app.transcript.flushVisible();
         if (!try app.handle(event)) break;
-        if (motion and old_hover == app.hovered and std.meta.eql(old_link, app.link)) continue;
+        if (buffering_paste) continue;
+        if (motion and old_hover == app.hovered and old_hover_row == app.hovered_row and std.meta.eql(old_link, app.link)) continue;
+        const refresh = event.refresh();
         const frame_start = std.Io.Clock.Timestamp.now(io, .awake);
         if (frames.due(frame_start, if (refresh != .immediate and app.transcript.hasBacklog()) .content else refresh)) {
             app.transcript.advanceVisible(frame_start);
@@ -231,6 +234,7 @@ pub const App = struct {
     hover_bg: vaxis.Color = .default,
     terminal_bg: ?[3]u8 = null,
     hovered: ?usize = null,
+    hovered_row: ?u16 = null,
     /// Underlined file path under the pointer; only when `open` is configured.
     link: ?Link = null,
     files: open.Files = .{},
@@ -271,6 +275,7 @@ pub const App = struct {
     // turn_end precedes done/failed; append only after their terminal content.
     pending_bill: ?TurnSummary = null,
     last_summary: ?TurnSummary = null,
+    last_turn_runs: usize = 0,
     turn_runs: usize = 0,
     flow: provider_flow.Flow = .{ .gpa = undefined },
     prediction: prediction.State = .{},
@@ -312,7 +317,7 @@ pub const App = struct {
     pub fn refreshCredentials(app: *App) void {
         var arena: std.heap.ArenaAllocator = .init(app.gpa);
         defer arena.deinit();
-        app.signed_out = !config.credentialed(arena.allocator(), app.io, app.cfg);
+        app.signed_out = !@import("auth.zig").current(arena.allocator(), app.io, app.cfg).available();
     }
 
     pub fn credentialed(app: *App) bool {
@@ -356,12 +361,16 @@ pub const App = struct {
             .mouse => |m| {
                 if (m.type == .motion and !app.selection.active) {
                     app.hovered = null;
+                    app.hovered_row = null;
                     app.link = null;
                     if (app.selection.dragged) return true;
                     if (app.body) |body| {
                         if (m.col >= body.window.x_off and m.col < body.window.x_off + body.window.width and m.row >= 0 and m.row < body.window.height) {
                             if (@import("tui/selection/history.zig").position(body, app.transcript.entries.items, @intCast(m.col), @intCast(m.row))) |p| {
-                                if (p.row < app.transcript.entries.items[p.entry].toggleRows(body.window)) app.hovered = p.entry;
+                                if (app.transcript.entries.items[p.entry].control(body.window, p.row)) |control_hit| {
+                                    app.hovered = p.entry;
+                                    app.hovered_row = control_hit.first;
+                                }
                                 var text: [open_buf_len]u8 = undefined;
                                 if (app.hitAt(p.entry, p.row, m.col, m.row, &text)) |hit| app.link = .{ .row = @intCast(m.row), .x0 = hit.found.x0, .x1 = hit.found.x1 };
                             }
@@ -615,13 +624,13 @@ pub const App = struct {
         } else if (isNewline(k, app.pasting)) {
             try input.insert(gpa, "\n");
         } else if (k.matches(vaxis.Key.enter, .{})) {
-            if (input.text().len > 0 and commands.parse(input.text()) == null and !app.credentialed()) {
+            if (input.text().len > 0 and (commands.parse(input.text()) == null or app.session.isPluginCommand(input.text())) and !app.credentialed()) {
                 try providers.openMenu(app);
             } else if (input.imageCount() > 0 and !app.cfg.vision()) {
                 app.notice = std.fmt.bufPrint(&app.notice_buf, "{s} has no image input · remove the [Image] blocks", .{app.cfg.model}) catch null;
             } else if (input.imageCount() > 0 and app.turn != null) {
                 app.notice = "Turn running · images send with the next message";
-            } else if (app.turn == null or commands.parse(input.text()) == null or commands.allowedWhileBusy(input.text())) submitted = try input.take(gpa) else app.notice = "Turn running · retry command when it ends";
+            } else if (app.turn == null or (commands.parse(input.text()) == null or app.session.isPluginCommand(input.text())) or commands.allowedWhileBusy(input.text())) submitted = try input.take(gpa) else app.notice = "Turn running · retry command when it ends";
         } else {
             _ = try input.key(gpa, k);
         }
@@ -683,13 +692,13 @@ pub const App = struct {
         app.scroll = .{};
         app.menu.forgetSessions();
         if (line.len == 0) return gpa.free(line);
-        if (commands.parse(line)) |parsed| {
+        if (!app.session.isPluginCommand(line)) if (commands.parse(line)) |parsed| {
             defer gpa.free(line);
             return switch (parsed) {
                 .unknown => |name| app.report(.err, "unknown command /{s} · /help lists commands", .{name}),
                 .known => |c| app.command(c.command, c.arg, line),
             };
-        }
+        };
         if (!app.credentialed()) {
             gpa.free(line);
             return app.transcript.add(gpa, .err, "No provider · /provider to sign in");
@@ -758,9 +767,10 @@ pub const App = struct {
     fn appendBill(app: *App) !void {
         const summary = app.pending_bill orelse return;
         var text: bill.Text = .{};
-        const footer = text.format(summary, app.turn_runs, std.math.maxInt(u16));
+        const footer = text.format(summary, std.math.maxInt(u16));
         if (footer.len > 0) try app.transcript.add(app.gpa, .bill, footer);
         app.last_summary = summary;
+        app.last_turn_runs = app.turn_runs;
         app.pending_bill = null;
     }
 
@@ -913,12 +923,16 @@ pub const App = struct {
             app.title_loaded = true;
         }
         const project = app.title_project orelse return "";
-        return title.compose(&app.title_buf, project, app.title_branch, app.cfg.model, app.cfg.effectiveEffort());
+        return title.compose(&app.title_buf, project, app.title_branch, app.cfg.model, app.cfg.effectiveEffort(), app.cfg.codexServiceTier() != null);
     }
 
     fn clickEntry(app: *App, entry: usize, row: u16) void {
         const frame = app.body orelse return;
-        if (entry < app.transcript.entries.items.len and row < app.transcript.entries.items[entry].toggleRows(frame.window)) app.toggleEntry(entry);
+        if (entry >= app.transcript.entries.items.len) return;
+        const e = &app.transcript.entries.items[entry];
+        const control_hit = e.control(frame.window, row) orelse return;
+        e.toggleControl(control_hit);
+        app.scroll.toggled(frame.top, control_hit.action == null and app.transcript.latestDetails() == entry);
     }
 
     pub fn toggleSimple(app: *App) !void {
@@ -966,6 +980,7 @@ pub const App = struct {
             .user_bg = app.user_bg,
             .code_bg = app.code_bg,
             .hovered = app.hovered,
+            .hovered_row = app.hovered_row,
             .hover_bg = app.hover_bg,
             .usage = app.usage,
             .steps = app.steps,
@@ -1699,6 +1714,7 @@ fn clickApp(app: *App, vx: *vaxis.Vaxis, top: @import("tui/viewport.zig").Anchor
     app.notice = null;
     app.cfg = .{ .base_url = "", .api_key = "", .model = "mock" };
     app.link = null;
+    app.hovered_row = null;
     app.files = .{};
     app.files_revision = 0;
     app.project = null;
@@ -1827,7 +1843,7 @@ test "hover changes only between toggleable entries and summary clicks exclude d
     try std.testing.expect(app.transcript.entries.items[0].open);
     app.clickEntry(0, rows);
     try std.testing.expect(app.transcript.entries.items[0].open);
-    _ = try app.handle(.{ .mouse = .{ .col = 3, .row = 7, .type = .motion, .button = .none, .mods = .{} } });
+    _ = try app.handle(.{ .mouse = .{ .col = 3, .row = 8, .type = .motion, .button = .none, .mods = .{} } });
     try std.testing.expectEqual(@as(?usize, null), app.hovered);
 }
 
@@ -1908,4 +1924,96 @@ test "file paths are links only when open is configured; a click runs the comman
     _ = try app.handle(mouseEvent(6, 0, .press));
     _ = try app.handle(mouseEvent(6, 0, .release));
     try std.testing.expectEqualStrings("Could not run open-tool", app.notice.?);
+}
+
+test "scrolled Run layout drives wrapped heading hover and click but leaves bodies selectable" {
+    const t = std.testing;
+    const Frame = struct {
+        const color: vaxis.Color = .{ .rgb = .{ 18, 18, 18 } };
+
+        fn draw(app: *App) void {
+            var input: Editor = .{};
+            app.body = view.drawFrame(app.vx.window(), app.transcript.entries.items, &input, &app.scroll, &.{}, 0, .{
+                .cfg = app.cfg,
+                .hovered = app.hovered,
+                .hovered_row = app.hovered_row,
+                .hover_bg = color,
+            }, &app.status_text);
+        }
+
+        fn click(app: *App, row: i16) !void {
+            _ = try app.handle(mouseEvent(7, row, .press));
+            _ = try app.handle(mouseEvent(7, row, .release));
+        }
+    };
+    for ([_]u16{ 60, 120, 160 }, [_]u16{ 3, 2, 1 }) |width, heading_rows| {
+        var vx: vaxis.Vaxis = undefined;
+        vx.screen = try vaxis.Screen.init(t.allocator, .{ .cols = width, .rows = 24, .x_pixel = 0, .y_pixel = 0 });
+        defer vx.screen.deinit(t.allocator);
+        var app: App = undefined;
+        app.gpa = t.allocator;
+        app.io = t.io;
+        app.flow = .{ .gpa = t.allocator };
+        const top = @import("tui/viewport.zig").Anchor{ .row = 3 + heading_rows - 1 };
+        clickApp(&app, &vx, top, top);
+        app.hovered = null;
+        app.status_text = .{};
+        defer app.transcript.deinit(t.allocator);
+        try app.transcript.startRun(t.allocator, "script-body");
+        try app.transcript.endRun(t.allocator, true, "result-body", 1, try .init(t.allocator, &.{
+            .{ .path = "src/part-界-part-界-part-界-part-界-part-界-part-界-part-界-part-界-part-界-part-界-part-界-part-界-part-界-part-界-part-界-part-界-last-file.zig", .added = 1, .removed = 0, .diff = "+first-body\n" },
+            .{ .path = "b.zig", .added = 1, .removed = 0, .diff = "+second-body\n" },
+        }));
+        const later: [30][6]u8 = @splat("later\n".*);
+        try app.transcript.add(t.allocator, .info, std.mem.asBytes(&later));
+        const e = &app.transcript.entries.items[0];
+        e.open = true;
+
+        Frame.draw(&app);
+        try t.expectEqual(top, app.body.?.top);
+        _ = try app.handle(mouseEvent(7, 0, .motion));
+        try t.expectEqual(@as(?usize, 0), app.hovered);
+        try t.expectEqual(@as(?u16, 3), app.hovered_row);
+        Frame.draw(&app);
+        try t.expectEqualDeep(Frame.color, vx.screen.readCell(width - 2, 0).?.style.bg);
+        try t.expectEqualDeep(vaxis.Color.default, vx.screen.readCell(width - 2, 1).?.style.bg);
+        var heading: std.ArrayList(u8) = .empty;
+        defer heading.deinit(t.allocator);
+        try @import("tui/selection/history.zig").appendRow(&heading, t.allocator, &vx.screen, 0, 0, width - 1);
+        try t.expect(std.mem.indexOf(u8, heading.items, "last-file.zig") != null);
+        try Frame.click(&app, 0);
+        try t.expect(e.open and e.changes.files[0].open.?);
+        try t.expect(e.changes.files[1].open == null);
+
+        Frame.draw(&app);
+        _ = try app.handle(mouseEvent(7, 1, .motion));
+        try t.expect(app.hovered == null);
+        _ = try app.handle(mouseEvent(7, 1, .press));
+        _ = try app.handle(mouseEvent(17, 1, .drag));
+        try t.expect(app.selection.dragged);
+        const copied = try app.selection.textInHistory(t.allocator, &vx.screen, app.body, app.transcript.entries.items);
+        defer t.allocator.free(copied);
+        try t.expectEqualStrings("+first-body", copied);
+        app.selection.clear();
+        try Frame.click(&app, 1);
+        try t.expect(e.changes.files[0].open.?);
+        try Frame.click(&app, 3); // Details
+        Frame.draw(&app);
+        try Frame.click(&app, 4); // Result
+        Frame.draw(&app);
+        try Frame.click(&app, 6); // Script, now after the Result body
+        try t.expect(e.details.open.? and e.details.result_open.? and e.details.script_open);
+
+        app.scroll.top = .{};
+        Frame.draw(&app);
+        try Frame.click(&app, 0);
+        try t.expect(!e.open);
+        app.cfg.simple = true;
+        Frame.draw(&app);
+        try Frame.click(&app, 0);
+        Frame.draw(&app);
+        try t.expect(e.open and e.changes.files[0].open.?);
+        try t.expect(e.details.open.? and e.details.result_open.? and e.details.script_open);
+        try t.expectEqualStrings("s", vx.screen.readCell(7, top.row + 7).?.char.grapheme);
+    }
 }

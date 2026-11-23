@@ -6,6 +6,7 @@ const scheduler = @import("sandbox/scheduler.zig");
 const native = @import("sandbox/native.zig");
 const State = scheduler.State;
 pub const RunTiming = run_timing.Run;
+pub const benchmark = @import("sandbox/benchmark.zig");
 pub const tool_concurrency = 8;
 pub const max_stopped_bytes = 4096;
 
@@ -37,6 +38,7 @@ pub const Limits = struct {
     stack_bytes: usize = 1024 * 1024,
     timeout_ms: i64 = 5 * 60 * 1000,
     max_log_bytes: usize = 64 * 1024,
+    max_full_log_bytes: usize = 16 * 1024 * 1024,
 };
 
 pub const ToolResult = union(enum) {
@@ -62,6 +64,7 @@ pub const Host = struct {
     record: ?*Recorder = null,
     waiting: ?*std.atomic.Value(bool) = null,
     virtual: ?*Virtual = null,
+    benchmark_probe: if (benchmark.enabled) ?*benchmark.Probe else void = if (benchmark.enabled) null else {},
 };
 
 pub const LogEntry = console.Entry;
@@ -79,6 +82,8 @@ pub const Outcome = struct {
     log_head_bytes: usize = 0,
     log_tail_start: usize = 0,
     log_truncated: bool = false,
+    full_logs: []const u8 = "",
+    full_logs_truncated: bool = false,
     tool_bytes: u64 = 0,
     stopped: []const u8 = "",
 
@@ -88,6 +93,7 @@ pub const Outcome = struct {
         gpa.free(o.text);
         gpa.free(o.logs);
         gpa.free(o.log_entries);
+        gpa.free(o.full_logs);
         gpa.free(o.stopped);
     }
 };
@@ -129,7 +135,7 @@ pub fn eval(
         .gpa = gpa,
         .io = io,
         .host = host,
-        .logs = .{ .limit = limits.max_log_bytes },
+        .logs = .{ .limit = limits.max_log_bytes, .full_limit = limits.max_full_log_bytes },
         .js_remaining_ns = std.Io.Duration.fromMilliseconds(limits.timeout_ms).toNanoseconds(),
         .cancel = cancel,
     };
@@ -195,8 +201,8 @@ pub fn eval(
         }
     }
     errdefer gpa.free(text);
-    if (!ok and std.mem.startsWith(u8, text, "SyntaxError:")) {
-        const annotated = try syntaxContext(gpa, text, code);
+    if (!ok) {
+        const annotated = try sourceContext(gpa, text, code);
         gpa.free(text);
         text = annotated;
     }
@@ -222,12 +228,14 @@ pub fn eval(
         .log_head_bytes = captured.head_bytes,
         .log_tail_start = captured.tail_start,
         .log_truncated = st.logs.bytes > limits.max_log_bytes,
+        .full_logs = captured.full,
+        .full_logs_truncated = captured.full_truncated,
     };
 }
 
 const testing = std.testing;
 
-fn syntaxContext(a: std.mem.Allocator, message: []const u8, code: []const u8) ![]u8 {
+fn sourceContext(a: std.mem.Allocator, message: []const u8, code: []const u8) ![]u8 {
     const marker = "<run>:";
     const start = std.mem.indexOf(u8, message, marker) orelse return a.dupe(u8, message);
     var location = std.mem.tokenizeAny(u8, message[start + marker.len ..], ":\r\n )");
@@ -256,11 +264,35 @@ test "syntax errors include original source location and a bounded UTF-8 line" {
     const code = try testing.allocator.alloc(u8, 900);
     defer testing.allocator.free(code);
     for (0..300) |i| @memcpy(code[i * 3 ..][0..3], "你");
-    const message = "SyntaxError: bad\n    at <run>:1:500";
-    const bounded = try syntaxContext(testing.allocator, message, code);
+    const message = "TypeError: bad\n    at <eval> (<run>:1:500)";
+    const bounded = try sourceContext(testing.allocator, message, code);
     defer testing.allocator.free(bounded);
-    try testing.expect(bounded.len < 300);
+    try testing.expect(std.mem.startsWith(u8, bounded, message));
+    try testing.expect(bounded.len <= message.len + "\nsource line 1: …".len + 200 + "…".len);
     try testing.expect(std.unicode.utf8ValidateSlice(bounded));
+}
+
+test "runtime errors retain async stack and include source context" {
+    const code = "await Promise.resolve();\nconst value = null;\nvalue.missing();";
+    const r = try run(code, .{}, null);
+    defer r.deinit(testing.allocator);
+    try testing.expect(!r.ok);
+    try testing.expect(std.mem.startsWith(u8, r.text, "TypeError:"));
+    try testing.expect(std.mem.indexOf(u8, r.text, "<eval> (<run>:3:") != null);
+    try testing.expect(std.mem.endsWith(u8, r.text, "source line 3: value.missing();"));
+}
+
+test "source context preserves errors without a usable source line" {
+    for ([_][]const u8{
+        "TypeError: bad",
+        "TypeError: bad\n    at <eval> (<run>:invalid:2)",
+        "TypeError: bad\n    at <eval> (<run>:0:2)",
+        "TypeError: bad\n    at <eval> (<run>:99:2)",
+    }) |message| {
+        const result = try sourceContext(testing.allocator, message, "const x = 1;");
+        defer testing.allocator.free(result);
+        try testing.expectEqualStrings(message, result);
+    }
 }
 
 test {
@@ -296,6 +328,14 @@ test "errors are reported, sync and async" {
     defer b.deinit(testing.allocator);
     try testing.expect(!b.ok);
     try testing.expect(std.mem.startsWith(u8, b.text, "Error: later"));
+}
+
+test "production sandbox excludes benchmark acknowledgement bridge and probe storage" {
+    if (comptime benchmark.enabled) return;
+    try testing.expectEqual(0, @sizeOf(@FieldType(Host, "benchmark_probe")));
+    const r = try run("typeof __benchReceived", .{}, null);
+    defer r.deinit(testing.allocator);
+    try testing.expectEqualStrings("\"undefined\"", r.text);
 }
 
 test "sandbox has no host capabilities" {
@@ -796,4 +836,31 @@ test "eval exit records all creations even on top-level errors" {
         try testing.expectEqual(case.incomplete, recorder.incomplete);
         try testing.expectEqual(case.delivered, recorder.seq);
     }
+}
+
+test "recording allocation failure does not change native result delivered to JS" {
+    const Echo = struct {
+        fn call(_: *anyopaque, gpa: std.mem.Allocator, _: []const u8, args: []const u8) ToolResult {
+            return .{ .ok = gpa.dupe(u8, args) catch unreachable };
+        }
+    };
+    var context: u8 = 0;
+    var failing = testing.FailingAllocator.init(testing.allocator, .{});
+    var recorder = Recorder.init(failing.allocator(), testing.io, "unused-record-test-path", true);
+    defer recorder.deinit();
+    recorder.begin(1, 0);
+    failing.fail_index = failing.alloc_index;
+    failing.resize_fail_index = failing.resize_index;
+    const result = try run("const r=await tools.echo({text:'中'.repeat(400000)}); [r.text.length,r.text.slice(-1)]", .{}, .{
+        .ctx = &context,
+        .names = &.{"echo"},
+        .call = Echo.call,
+        .record = &recorder,
+    });
+    defer result.deinit(testing.allocator);
+    try testing.expect(result.ok);
+    try testing.expectEqualStrings("[400000,\"中\"]", result.text);
+    try testing.expect(!recorder.enabled and recorder.warned);
+    try testing.expectEqual(@as(usize, 0), recorder.seq);
+    try testing.expectEqual(@as(usize, 0), recorder.buffer.items.len);
 }

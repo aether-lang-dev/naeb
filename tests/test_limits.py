@@ -49,7 +49,7 @@ class LlmLimits(unittest.TestCase):
         starts = self.starts()
         self.assertEqual(len(starts), 3, self.observed())
         run_end = next(event["run_end"] for event in events if "run_end" in event)
-        self.assertEqual(run_end["tool_summary"], {"counts": [{"name": "llm", "count": 3}], "omitted": 0, "files": []})
+        self.assertEqual(run_end["tool_summary"], {"counts": [{"name": "llm", "count": 3}], "omitted": 0, "failures": 0, "files": []})
         self.assertEqual(max(e["active"] for e in starts), 2, self.observed())
         session = events[0]["start"]["session_id"]
         system = records(Path(self.env["NAEB_HOME"]) / "sessions" / (session + ".jsonl"))[0]["messages"][0]["content"]
@@ -122,7 +122,11 @@ class AgentLimits(unittest.TestCase):
         self.assertNotIn("This Turn may use at most", system)
         for request in records(self.requests):
             body = request["body"]
-            sent_system = body["instructions"] if self.provider == "codex" else body["messages"][0]["content"]
+            if self.provider == "codex":
+                items = body.get("input", [])
+                sent_system = items[0]["content"] if items and items[0].get("role") == "developer" else body["instructions"]
+            else:
+                sent_system = body["messages"][0]["content"]
             self.assertNotIn("This Turn may use at most", sent_system)
         runs = [e["run_end"]["output"] for e in events if "run_end" in e]
         self.assertEqual(len(runs), 59)
@@ -134,7 +138,11 @@ class AgentLimits(unittest.TestCase):
         self.assertIn(instruction, system)
         for request in records(self.requests):
             body = request["body"]
-            sent_system = body["instructions"] if self.provider == "codex" else body["messages"][0]["content"]
+            if self.provider == "codex":
+                items = body.get("input", [])
+                sent_system = items[0]["content"] if items and items[0].get("role") == "developer" else body["instructions"]
+            else:
+                sent_system = body["messages"][0]["content"]
             self.assertIn(instruction, sent_system)
         self.assertNotIn("Steps left in this Turn]", outputs[0])
         self.assertTrue(outputs[1].endswith("[3 Steps left in this Turn]"))
@@ -156,6 +164,7 @@ class AgentLimits(unittest.TestCase):
         self.assert_five_step_countdown(events, outputs)
 
     def test_configured_run_output_budget(self):
+        self.env["NAEB_RECORD"] = "on"
         (self.cwd / "budget.txt").write_text("x" * 50000)
         self.env["NAEB_RUN_OUTPUT_BYTES"] = "32768"
         events, outputs = self.limited_turn("limits-budget", 1)

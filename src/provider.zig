@@ -43,6 +43,7 @@ pub fn withSmallModel(cfg: Config) ?Config {
     small.model = smallModel(cfg.provider) orelse return null;
     small.thinking = null;
     small.reasoning_effort = null;
+    small.codex_fast = false;
     return small;
 }
 
@@ -63,7 +64,7 @@ pub const Definition = struct {
 pub const definitions = [_]Definition{
     .{ .id = "codex", .models = &codex.models, .name = "Codex", .protocol = .responses, .base_url = "https://chatgpt.com/backend-api", .api_key_env = &.{}, .default_model = codex.default_model },
     .{ .id = "chat_completions", .vision = false, .name = "Chat Completions", .protocol = .chat_completions, .base_url = "https://api.deepseek.com", .api_key_env = &.{ "NIB_API_KEY", "DEEPSEEK_API_KEY" }, .default_model = chat.default_model },
-    .{ .id = "openai", .custom_run = true, .name = "OpenAI", .protocol = .responses, .base_url = "https://api.openai.com/v1", .api_key_env = &.{"OPENAI_API_KEY"}, .default_model = "gpt-6.1-sol", .models = &.{ .{ .id = "gpt-6.1-sol", .context_window = 1050000 }, .{ .id = "gpt-6.1-terra", .context_window = 1050000 } } },
+    .{ .id = "openai", .custom_run = true, .name = "OpenAI", .protocol = .responses, .base_url = "https://api.openai.com/v1", .api_key_env = &.{"OPENAI_API_KEY"}, .default_model = "gpt-6.2-sol", .models = &.{ .{ .id = "gpt-6.2-sol", .context_window = 1050000, .can_disable_reasoning = false }, .{ .id = "gpt-6.2-astra", .context_window = 1050000, .can_disable_reasoning = false }, .{ .id = "gpt-6.1-sol", .context_window = 1050000 }, .{ .id = "gpt-6.1-terra", .context_window = 1050000 } } },
     .{ .id = "anthropic", .name = "Anthropic", .protocol = .anthropic_messages, .base_url = "https://api.anthropic.com", .api_key_env = &.{"ANTHROPIC_API_KEY"}, .default_model = "claude-sonnet-5-5", .models = &.{ .{ .id = "claude-opus-5-5", .context_window = 1000000 }, .{ .id = "claude-sonnet-5-5", .context_window = 1000000 }, .{ .id = "claude-haiku-5-5", .context_window = 1000000 }, .{ .id = "claude-fable-5-1", .context_window = 1000000 } } },
     .{ .id = "deepseek", .vision = false, .name = "DeepSeek", .protocol = .chat_completions, .base_url = "https://api.deepseek.com", .api_key_env = &.{"DEEPSEEK_API_KEY"}, .default_model = "deepseek-flash", .models = &.{ .{ .id = "deepseek-flash", .context_window = 1000000 }, .{ .id = "deepseek-v4-pro", .context_window = 1000000 } } },
     .{ .id = "xai", .name = "xAI", .protocol = .responses, .base_url = "https://api.x.ai/v1", .api_key_env = &.{"XAI_API_KEY"}, .default_model = "grok-4.7", .models = &.{ .{ .id = "grok-4.7", .context_window = 500000 }, .{ .id = "grok-4.6", .context_window = 500000 } } },
@@ -100,6 +101,9 @@ pub const Config = struct {
     open: ?[]const u8 = null,
     sandbox: Sandbox = .{},
     hooks: Hooks = .{},
+    enabled_plugins: []const []const u8 = &.{},
+    plugin_skills: []const @import("session/skills.zig").Skill = &.{},
+    plugins_loaded: bool = false,
     enabled_skills: []const []const u8 = &.{},
     mcp_servers: []const @import("mcp/config.zig").Server = &.{},
     limits: Limits = .{},
@@ -107,6 +111,7 @@ pub const Config = struct {
     custom_provider: ?[]const u8 = null,
     custom_protocol: Protocol = .chat_completions,
     custom_vision: ?bool = null,
+    custom_max_output: ?u32 = null,
     api_key_env: ?[]const u8 = null,
     key_source: KeySource = .none,
     /// Where nib's own `auth.json` lives; null in tests that never sign in.
@@ -114,6 +119,7 @@ pub const Config = struct {
     /// Test hook for the ChatGPT OAuth issuer (NIB_AUTH_ISSUER).
     auth_issuer: ?[]const u8 = null,
     codex_transport: Transport = .websocket,
+    codex_fast: bool = false,
     codex_run_tool: enum { custom, function } = .custom,
     reasoning_summary: enum { off, auto } = .off,
     codex_home: ?[]const u8 = null,
@@ -137,6 +143,11 @@ pub const Config = struct {
         return if (cfg.provider == .custom) cfg.custom_protocol else definition(cfg.provider).protocol;
     }
 
+    /// Responses services get no limit: that encoder turns `max_tokens` into a summary-length prompt.
+    pub fn sessionMaxTokens(cfg: Config) ?u32 {
+        return if (cfg.protocol() == .responses) null else cfg.custom_max_output;
+    }
+
     /// Whether the model accepts image input; custom providers declare it, defaulting to the protocol.
     pub fn vision(cfg: Config) bool {
         if (cfg.provider == .custom) return cfg.custom_vision orelse (cfg.custom_protocol != .chat_completions);
@@ -145,6 +156,18 @@ pub const Config = struct {
             if (model.vision) |value| return value;
         };
         return entry.vision;
+    }
+
+    pub fn supportsCodexFast(cfg: Config) bool {
+        if (cfg.provider != .codex) return false;
+        // Codex CLI 0.170.0 catalog: GPT models advertising the priority tier.
+        const models = .{ "gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5" };
+        inline for (models) |model| if (std.mem.eql(u8, cfg.model, model)) return true;
+        return false;
+    }
+
+    pub fn codexServiceTier(cfg: Config) ?[]const u8 {
+        return if (cfg.codex_fast and cfg.supportsCodexFast()) "priority" else null;
     }
 
     pub fn customRun(cfg: Config) bool {
@@ -186,12 +209,12 @@ pub const Config = struct {
         return if (cfg.key_source == .store) "the key stored by nib (run nib login)" else cfg.api_key_env orelse "API key";
     }
 
-    pub fn missingKey(cfg: Config) bool {
-        return cfg.provider != .codex and cfg.api_key.len == 0 and (cfg.provider != .custom or cfg.api_key_env != null);
+    pub fn checkSession(cfg: Config, id: Id) !void {
+        if (cfg.provider != id) return error.SessionProviderMismatch;
     }
 
-    pub fn checkSession(cfg: Config, id: Id, model: ?[]const u8) !void {
-        if (cfg.provider != id) return error.SessionProviderMismatch;
+    pub fn checkFork(cfg: Config, id: Id, model: ?[]const u8) !void {
+        try cfg.checkSession(id);
         if (cfg.protocol() != .chat_completions) if (model) |original| {
             if (!std.mem.eql(u8, original, cfg.model)) return error.SessionModelMismatch;
         };
@@ -211,6 +234,19 @@ pub const Reasoning = struct {
     provider: Id,
     data: []const u8,
     includes_output: bool = false,
+    /// Null in legacy records; an empty model means the origin is unknown.
+    model: ?[]const u8 = null,
+
+    pub fn tracksModel(r: Reasoning) bool {
+        return r.provider == .custom or definition(r.provider).protocol != .chat_completions;
+    }
+
+    pub fn compatible(r: Reasoning, cfg: Config) bool {
+        if (r.provider != cfg.provider) return false;
+        if (cfg.protocol() == .chat_completions) return true;
+        const model = r.model orelse return false;
+        return model.len != 0 and std.mem.eql(u8, model, cfg.model);
+    }
 };
 
 pub const StepEffort = struct {
@@ -218,6 +254,7 @@ pub const StepEffort = struct {
 };
 
 pub const Message = struct {
+    executed_source: ?[]const u8 = null,
     role: []const u8,
     content: ?[]const u8 = null,
     tool_calls: ?[]const ToolCall = null,
@@ -322,7 +359,7 @@ pub fn stream(
     monitor.request_duration.raw = .fromSeconds(@intCast(cfg.limits.request_timeout_s));
     var observed_sink = sink;
     observed_sink.monitor = &monitor;
-    return switch (cfg.protocol()) {
+    var reply = switch (cfg.protocol()) {
         .chat_completions => cancelable.run(client.io, cancel, monitor.started.addDuration(monitor.request_duration), chat.stream, .{ gpa, out, client, cfg, messages, tools_json, max_tokens, observed_sink, cancel, detail, &monitor }),
         .responses => cancelable.run(client.io, cancel, monitor.started.addDuration(monitor.request_duration), codex.stream, .{ gpa, out, client, cfg, cache_key, messages, tools_json, max_tokens, observed_sink, cancel, detail, &monitor }),
         .anthropic_messages => cancelable.run(client.io, cancel, monitor.started.addDuration(monitor.request_duration), @import("provider/anthropic.zig").stream, .{ gpa, out, client, cfg, messages, tools_json, max_tokens, observed_sink, cancel, detail, &monitor }),
@@ -338,6 +375,10 @@ pub fn stream(
         }
         return monitor.failure(gpa, detail, err);
     };
+    if (reply.reasoning) |*reasoning| {
+        if (reasoning.tracksModel()) reasoning.model = try out.dupe(u8, cfg.model);
+    }
+    return reply;
 }
 
 test "explicit effort overrides thinking and stores stable names" {
@@ -372,6 +413,31 @@ test "provider definitions cover every identity exactly once" {
         try std.testing.expectEqual(@as(usize, 1), count);
         try std.testing.expect(definition(id).base_url.len > 0);
         try std.testing.expect(definition(id).default_model.len > 0);
+    }
+}
+
+test "GPT-6.2 catalogs and reasoning across services" {
+    const t = std.testing;
+    try t.expectEqualStrings("gpt-6.2-sol", definition(.openai).default_model);
+    for ([_]Id{ .codex, .openai }) |id| {
+        for ([_][]const u8{ "gpt-6.2-sol", "gpt-6.2-astra" }) |name| {
+            var cfg: Config = .{ .provider = id, .base_url = "", .api_key = "", .model = name };
+            var found = false;
+            for (definition(id).models) |model| {
+                if (!std.mem.eql(u8, model.id, name)) continue;
+                found = true;
+                try t.expect(!model.can_disable_reasoning);
+                try t.expectEqual(@as(u32, 128000), model.max_output);
+                if (id == .openai) try t.expectEqual(@as(u64, 1050000), model.context_window);
+            }
+            try t.expect(found);
+            try t.expect(cfg.vision());
+            try t.expectEqualStrings("server default", cfg.effectiveEffort());
+            try cfg.setEffort("off");
+            try t.expectEqualStrings("low", cfg.effectiveEffort());
+            try cfg.setEffort("high");
+            try t.expectEqualStrings("high", cfg.effectiveEffort());
+        }
     }
 }
 

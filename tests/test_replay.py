@@ -55,7 +55,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if codes:
             delta["tool_calls"] = [
                 {"index": n, "id": f"run-{len(self.server.requests)}-{n}", "type": "function",
-                 "function": {"name": "run", "arguments": json.dumps({"code": code})}}
+                 "function": {"name": "rerun" if isinstance(code, dict) else "run", "arguments": json.dumps(code if isinstance(code, dict) else {"code": code})}}
                 for n, code in enumerate(codes)]
         events = [{"choices": [{"delta": delta}]},
                   {"choices": [{"delta": {}, "finish_reason": "tool_calls" if codes else "stop"}],
@@ -90,7 +90,7 @@ class ReplayTests(unittest.TestCase):
                     if not key.startswith(("NAEB_", "DEEPSEEK_", "OPENAI_", "CODEX_"))}
         self.env.update(NAEB_HOME=str(self.home), HOME=str(self.tmp), TERM="xterm-256color",
                         NAEB_PROVIDER="chat_completions", NAEB_API_KEY="local-mock-only",
-                        NAEB_MODEL="mock-replay", NAEB_BASE_URL=f"http://127.0.0.1:{self.mock.server_port}")
+                        NAEB_RECORD="on", NAEB_MODEL="mock-replay", NAEB_BASE_URL=f"http://127.0.0.1:{self.mock.server_port}")
 
     def command(self, *args, env=None, check=True):
         result = subprocess.run([str(BIN), *args], cwd=self.cwd, env=env or self.env,
@@ -123,6 +123,68 @@ class ReplayTests(unittest.TestCase):
             'console.log(await tools.read({path: "sample.txt"}));',
             'console.log(await tools.bash({command: "printf side > side-effect; printf bash-output"}));',
         ])
+
+    def test_patch_rerun_resume_validation_and_replay(self):
+        code = 'console.log(await tools.bash({command: "echo effect >> effects"})); throw new Error("bad");'
+        session = self.ask([code])
+        def repair(base, old, new):
+            return {"base": base, "edits": [{"old_text": old, "new_text": new}]}
+        self.ask([repair("1:0", '"bad"', '"again"')], resume=session)
+        self.ask([repair("3:0", 'throw new Error("again")', 'console.log("fixed")')], resume=session)
+        self.assertEqual((self.cwd / "effects").read_text().splitlines(), ["effect"] * 3)
+        report = self.replay(session, "--all")
+        self.assertEqual(report["divergences"], 0, report)
+        self.assertEqual(report["matched"], 3, report)
+        for args in [repair("5:0", "fixed", "wrong"), repair("99:0", "x", "y"),
+                     repair("1:0", "", "x"), repair("1:0", "missing", "x"),
+                     repair("1:0", ";", "x"), {"base": "1:0", "edits": []},
+                     {"base": "1:0", "edits": [{"old_text": '"bad"', "new_text": '"changed"'},
+                                                   {"old_text": "absent", "new_text": "x"}]}]:
+            self.ask([args], resume=session)
+        self.assertEqual((self.cwd / "effects").read_text().splitlines(), ["effect"] * 3)
+        records = jsonl(self.home / "sessions" / f"{session}.jsonl")
+        sources = [r["source"] for r in records if "source" in r]
+        self.assertEqual(sources[0]["code"], code)
+        calls = [c for r in records for m in r["messages"] for c in m.get("tool_calls", [])]
+        reruns = [c for c in calls if c["function"]["name"] == "rerun"]
+        self.assertEqual(json.loads(reruns[0]["function"]["arguments"]), repair("1:0", '"bad"', '"again"'))
+        self.assertTrue(all("executed_source" not in m for request in self.mock.requests for m in request["messages"]))
+        foreign = self.ask([repair("1:0", '"bad"', '"foreign"')])
+        foreign_records = jsonl(self.home / "sessions" / f"{foreign}.jsonl")
+        self.assertFalse(any("source" in r for r in foreign_records))
+        self.assertTrue(any(s.get("base") == "3:0" and 'console.log("fixed")' in s["code"] for s in sources))
+
+    def test_patch_rerun_with_hook_records(self):
+        (self.home / "config.toml").write_text('[hooks]\nafter_edit = ["true"]\nturn_end = ["true"]\n')
+        code = 'await tools.write({path: "edited", content: "before"}); throw new Error("hook repair")'
+        session = self.ask([code])
+        self.ask([{"base": "1:0", "edits": [{"old_text": 'throw new Error("hook repair")',
+                                              "new_text": 'await tools.write({path: "edited", content: "after"})'}]}],
+                 resume=session)
+        self.assertEqual((self.cwd / "edited").read_text(), "after")
+        report = self.replay(session, "--all")
+        self.assertEqual(report["matched"], 2, report)
+        self.assertEqual(report["divergences"], 0, report)
+
+    def test_pending_source_rejected_then_background_failure_repaired(self):
+        (self.home / "config.toml").write_text("[limits]\nrun_background_after_ms = 50\n")
+        code = 'await tools.sleep(300); throw new Error("background failure")'
+        repair = {"base": "1:0", "edits": [{"old_text": 'throw new Error("background failure")',
+                                             "new_text": 'console.log("repaired")'}]}
+        self.mock.reply(codes=[code, repair])
+        self.mock.reply()
+        self.mock.reply()
+        result = self.command("ask", "--json", "background repair")
+        events = [json.loads(line) for line in result.stdout.splitlines()]
+        session = events[0]["start"]["session_id"]
+        records = jsonl(self.home / "sessions" / f"{session}.jsonl")
+        outputs = [m.get("content", "") for r in records for m in r["messages"] if m["role"] == "tool"]
+        self.assertTrue(any("base" in output and "error:" in output for output in outputs), outputs)
+        repair["edits"].append({"old_text": "await tools.sleep(300); ", "new_text": ""})
+        self.ask([repair], resume=session)
+        report = self.replay(session, "--all")
+        self.assertEqual(report["matched"], 2, report)
+        self.assertEqual(report["divergences"], 0, report)
 
     def test_all_and_session_global_step_indices_without_side_effects(self):
         session = self.record_files()
@@ -316,14 +378,141 @@ class ReplayTests(unittest.TestCase):
         self.assertTrue(report["incomplete"], report)
         self.assertIsNone(report["match"])
 
-    def test_record_off_creates_no_calls_file(self):
-        self.env["NAEB_RECORD"] = "off"
-        (self.cwd / "sample.txt").write_text("off probe")
-        session = self.ask(['console.log(await tools.read({path: "sample.txt"}));'])
+    def set_recording(self, value):
+        if value is None:
+            self.env.pop("NAEB_RECORD", None)
+        else:
+            self.env["NAEB_RECORD"] = value
+
+    def test_recording_environment_and_main_log_metrics(self):
+        (self.cwd / "sample.txt").write_text("recording probe")
+        baseline = None
+        for value in (None, "on", "off", "", "1", "0", "false", "OFF"):
+            with self.subTest(value=value):
+                self.set_recording(value)
+                session = self.ask(['console.log(await tools.read({path: "sample.txt"}));'])
+                enabled = value is not None and value != "off"
+                self.assertEqual(self.calls_path(session).exists(), enabled)
+                rows = jsonl(self.home / "sessions" / f"{session}.jsonl")
+                steps = [r for r in rows if "model_ms" in r]
+                self.assertEqual(len(steps), 2)
+                step = steps[0]
+                self.assertGreater(step["tool_bytes"], 0)
+                self.assertGreaterEqual(step["run_ms"], 0)
+                self.assertEqual(step["tool_bytes"], sum(c["result_bytes"] for c in step["calls"]))
+                self.assertEqual(step["output_bytes"], sum(r["output_bytes"] for r in step["run_results"]))
+                metrics = (step["tool_bytes"], step["output_bytes"],
+                           [m["content"] for m in step["messages"] if m["role"] == "tool"])
+                if baseline is None:
+                    baseline = metrics
+                self.assertEqual(metrics, baseline)
+                if enabled:
+                    self.assertTrue(self.replay(session, "--run", "1:0")["match"])
+                else:
+                    self.assertIn("No replay recording",
+                                  self.command("replay", session, "--all", check=False).stderr)
+
+    def test_resume_uses_current_environment_and_preserves_existing_sidecar(self):
+        code = 'console.log(await tools.read({path: "sample.txt"}));'
+        (self.cwd / "sample.txt").write_text("resume probe")
+        session = self.ask([code])
+        path = self.calls_path(session)
+        recorded = path.read_bytes()
+        # A partial, uncommitted tail would be repaired if restore were entered.
+        path.write_bytes(recorded + b'{"step":999,"partial":')
+        path.chmod(0o640)
+        before = path.stat()
+        for value in (None, "off"):
+            with self.subTest(value=value):
+                self.set_recording(value)
+                if value is None:
+                    self.mock.reply(codes=[code])
+                    self.mock.reply()
+                    events = [json.loads(line) for line in self.command(
+                        "ask", "--json", "--continue", "continue probe").stdout.splitlines()]
+                    self.assertEqual(events[0]["start"]["session_id"], session)
+                else:
+                    self.assertEqual(self.ask([code], resume=session), session)
+                self.assertEqual(path.read_bytes(), recorded + b'{"step":999,"partial":')
+                after = path.stat()
+                self.assertEqual((after.st_mtime_ns, after.st_size, stat.S_IMODE(after.st_mode)),
+                                 (before.st_mtime_ns, before.st_size, stat.S_IMODE(before.st_mode)))
+                rows = jsonl(self.home / "sessions" / f"{session}.jsonl")
+                self.assertEqual(sum("model_ms" in r for r in rows), 4 if value is None else 6)
+
+    def test_enable_on_resume_records_only_new_runs_and_replay_ignores_switch(self):
+        self.set_recording(None)
+        session = self.ask(['console.log("unrecorded");'])
         self.assertFalse(self.calls_path(session).exists())
-        self.assertTrue((self.home / "sessions" / f"{session}.jsonl").exists())
-        self.assertIn("No replay recording",
-                      self.command("replay", session, "--all", check=False).stderr)
+        self.set_recording("on")
+        self.ask(['console.log("recorded");'], resume=session)
+        for value in (None, "off"):
+            self.set_recording(value)
+            self.assertTrue(self.replay(session, "--run", "3:0")["match"])
+            self.assertIn("No replay recording", self.command(
+                "replay", session, "--run", "1:0", check=False).stderr)
+            self.assertEqual(self.replay(session, "--all")["total"], 1)
+
+    def test_disabled_recording_inherits_into_new_and_resumed_children(self):
+        for value in (None, "off"):
+            with self.subTest(value=value):
+                self.set_recording(value)
+                args = json.dumps({"prompt": "child probe", "fork": value is None})
+                self.mock.reply(codes=[f"console.log(await tools.agent({args}));"])
+                self.mock.reply(codes=['console.log("child first");'])
+                self.mock.reply(text="child finished")
+                self.mock.reply(text="parent finished")
+                events = [json.loads(line) for line in self.command("ask", "--json", "parent").stdout.splitlines()]
+                parent = events[0]["start"]["session_id"]
+                self.mock.reply(codes=['console.log(await tools.agent({prompt: "child again", resume: "a1"}));'])
+                self.mock.reply(codes=['console.log("child resumed");'])
+                self.mock.reply(text="child finished")
+                self.mock.reply(text="parent finished")
+                self.command("ask", "--json", "--resume", parent, "resume parent")
+                main = jsonl(self.home / "sessions" / f"{parent}.jsonl")
+                agent = next(c for r in main for c in r.get("calls", []) if c["name"] == "agent")
+                self.assertTrue(agent["ok"], agent)
+                children = [p for p in (self.home / "sessions").glob("*.jsonl")
+                            if not p.name.endswith(".calls.jsonl")
+                            and jsonl(p)[0].get("parent_session_id") == parent]
+                self.assertEqual(len(children), 1)
+                child = jsonl(children[0])
+                self.assertEqual(sum("model_ms" in r for r in child), 4)
+                self.assertIn("child resumed", children[0].read_text())
+                self.assertFalse(list((self.home / "sessions").glob("*.calls.jsonl")))
+
+    def test_child_resume_recording_follows_current_environment(self):
+        self.mock.reply(codes=['console.log(await tools.agent({prompt: "child probe"}));'])
+        self.mock.reply(codes=['console.log("child recorded");'])
+        self.mock.reply(text="child finished")
+        self.mock.reply(text="parent finished")
+        events = [json.loads(line) for line in self.command("ask", "--json", "parent").stdout.splitlines()]
+        parent = events[0]["start"]["session_id"]
+        saved = {p: (p.read_bytes(), p.stat().st_mtime_ns)
+                 for p in (self.home / "sessions").glob("*.calls.jsonl")}
+        self.assertEqual(len(saved), 2)
+        child_path = next(p for p in saved if p != self.calls_path(parent))
+        child = child_path.name.removesuffix(".calls.jsonl")
+        for value in (None, "off", "on"):
+            with self.subTest(value=value):
+                self.set_recording(value)
+                self.mock.reply(codes=['console.log(await tools.agent({prompt: "resume child", resume: "a1"}));'])
+                self.mock.reply(codes=['console.log("child resumed");'])
+                self.mock.reply(text="child finished")
+                self.mock.reply(text="parent finished")
+                self.command("ask", "--json", "--resume", parent, "resume parent")
+                self.assertEqual(set((self.home / "sessions").glob("*.calls.jsonl")), set(saved))
+                for path, (data, mtime) in saved.items():
+                    if value == "on":
+                        self.assertNotEqual(path.read_bytes(), data)
+                    else:
+                        self.assertEqual(path.read_bytes(), data)
+                        self.assertEqual(path.stat().st_mtime_ns, mtime)
+        rows = jsonl(self.home / "sessions" / f"{child}.jsonl")
+        self.assertEqual(sum("model_ms" in r for r in rows), 8)
+        self.assertEqual([(r["step"], r["run"]) for r in jsonl(child_path) if "meta" in r],
+                         [(1, 0), (7, 0)])
+        self.assertEqual(self.replay(child, "--all")["matched"], 2)
 
     def test_parent_and_child_have_separate_recordings(self):
         (self.cwd / "child.txt").write_text("child local result")
@@ -527,6 +716,31 @@ class ReplayTests(unittest.TestCase):
             plain = self.command("replay", session, "--all")
             self.assertIn(f"end={end}", plain.stdout)
 
+    def test_large_result_is_complete_in_js_but_recording_and_replay_stay_bounded(self):
+        payload = "x" * (1024 * 1024 + 64)
+        (self.cwd / "large.txt").write_text(payload)
+        session = self.ask([
+            'for(let i=0;i<2;i++) {'
+            'const r=await tools.read({path:"large.txt"});'
+            f'if(r.text.length!=={len(payload)}) throw new Error("short result");'
+            'await tools.write({path:"copy.txt",content:r.text}); }'
+        ])
+        self.assertEqual((self.cwd / "copy.txt").read_text(), payload)
+        calls = [r for r in jsonl(self.calls_path(session)) if r.get("name") == "read"]
+        self.assertEqual(len(calls), 2)
+        raw = json.dumps({"text": payload, "next_offset": None}, separators=(",", ":"))
+        digest = hashlib.sha256(raw.encode()).hexdigest()
+        for call in calls:
+            self.assertTrue(call["truncated"])
+            self.assertEqual(call["sha256"], digest)
+        self.assertEqual(len(calls[0]["result"].encode()), 1024 * 1024)
+        self.assertEqual(calls[1]["result"], {"same_as": digest})
+        (self.cwd / "copy.txt").write_text("unchanged by replay")
+        report = self.replay(session, "--run", "1:0")
+        self.assertTrue(report["incomplete"], report)
+        self.assertIsNone(report["match"], report)
+        self.assertEqual((self.cwd / "copy.txt").read_text(), "unchanged by replay")
+
     def test_reject_text_is_not_deduplicated(self):
         session = self.ask([
             'for(let i=0;i<2;i++){try{await tools.read({path:"missing"});}'
@@ -569,7 +783,7 @@ class ReplayTests(unittest.TestCase):
             self.assertTrue(current.startswith(committed))
             additions = [json.loads(line) for line in current[len(committed):].splitlines()]
             self.assertTrue(additions)
-            self.assertTrue(all(r.get("bash") and not r["messages"] for r in additions))
+            self.assertTrue(all((r.get("bash") or r.get("source")) and not r["messages"] for r in additions))
         finally:
             os.killpg(proc.pid, signal.SIGKILL)
             proc.communicate(timeout=10)

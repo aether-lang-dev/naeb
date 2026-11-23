@@ -9,7 +9,7 @@ const provider = @import("../provider.zig");
 const auth = @import("../auth.zig");
 const providers = @import("providers.zig");
 
-pub const Command = enum { simple, help, new, @"resume", compact, undo, provider, model, effort, copy, reflect, js, tasks, stop, status, skills, mcp };
+pub const Command = enum { simple, help, new, @"resume", compact, undo, provider, model, effort, fast, copy, reflect, js, tasks, stop, status, skills, mcp, plugins };
 
 pub const Choices = enum { none, models, efforts, sessions, tasks, services };
 
@@ -29,6 +29,7 @@ pub const Spec = struct {
 pub const specs = std.enums.EnumArray(Command, Spec).init(.{
     .simple = .{ .group = .view, .help = "toggle " ++ mode.name ++ " mode", .while_busy = true },
     .mcp = .{ .group = .view, .args = "[on|off <id>]", .help = "list or enable MCP servers for new sessions" },
+    .plugins = .{ .group = .view, .args = "[on|off <name>]", .help = "list or enable plugins for new sessions" },
     .skills = .{ .group = .view, .args = "[on|off <name>]", .help = "list or enable skills for new sessions" },
     .status = .{ .group = .view, .help = "timing and cache details", .while_busy = true },
     .tasks = .{ .group = .view, .help = "background tasks", .while_busy = true },
@@ -37,10 +38,11 @@ pub const specs = std.enums.EnumArray(Command, Spec).init(.{
     .new = .{ .help = "new session" },
     .@"resume" = .{ .args = "<id>", .help = "resume a session", .choices = .sessions, .needs_arg = true },
     .undo = .{ .help = "undo last edited Turn; edit/write only", .while_busy = true },
-    .compact = .{ .help = "compact earlier history" },
+    .compact = .{ .args = "[focus]", .help = "compact earlier history" },
     .provider = .{ .args = "[service]", .help = "sign in and switch service", .choices = .services, .needs_arg = true },
-    .model = .{ .args = "<model>", .help = "switch model of this service", .choices = .models, .needs_arg = true },
+    .model = .{ .args = "<model>", .help = "switch model and service", .choices = .models, .needs_arg = true },
     .effort = .{ .group = .send, .args = "[level]", .help = "reasoning effort", .choices = .efforts },
+    .fast = .{ .group = .send, .help = "toggle Codex Fast mode" },
     .copy = .{ .group = .view, .help = "copy last answer", .while_busy = true },
     .reflect = .{ .args = "[focus]", .help = "publish issue drafts" },
     .js = .{ .group = .send, .args = "<code>", .help = "run JavaScript", .needs_arg = true },
@@ -86,6 +88,7 @@ pub const Choice = struct {
     value: []const u8,
     label: []const u8,
     detail: []const u8,
+    service: ?[]const u8 = null,
 };
 
 pub const Candidate = struct {
@@ -94,6 +97,7 @@ pub const Candidate = struct {
     value: ?[]const u8 = null,
     label: []const u8,
     detail: []const u8,
+    service: ?[]const u8 = null,
     /// An `@` file completion: `value` is the text that replaces the mention.
     is_path: bool = false,
 
@@ -158,8 +162,9 @@ pub fn candidates(input: []const u8, sessions: []const Choice, tasks: []const Ch
     };
     for (choices) |choice| {
         if (n == out.len) break;
-        if (!std.mem.startsWith(u8, choice.value, arg)) continue;
-        out[n] = .{ .command = command, .value = choice.value, .label = choice.label, .detail = choice.detail };
+        const model = if (command == .model) choice.value[(if (std.mem.indexOfScalar(u8, choice.value, '/')) |slash| slash + 1 else 0)..] else "";
+        if (!std.mem.startsWith(u8, choice.value, arg) and !(command == .model and std.mem.startsWith(u8, model, arg))) continue;
+        out[n] = .{ .command = command, .value = choice.value, .label = choice.label, .detail = choice.detail, .service = choice.service };
         n += 1;
     }
     return out[0..n];
@@ -203,10 +208,17 @@ fn modelSelection(app: *App, arg: []const u8) !config.ModelSelection {
     const second = words.next();
     if (second != null) return config.parseModel(arg);
     if (std.mem.indexOfScalar(u8, first, '/')) |slash| {
+        for (provider.definitions) |entry| {
+            if (std.mem.eql(u8, first[0..slash], entry.id)) return config.parseModel(arg);
+        }
         var arena: std.heap.ArenaAllocator = .init(app.gpa);
         defer arena.deinit();
-        const list = auth.services(arena.allocator(), app.io, app.environ, app.session.options.home) catch &.{};
-        if (slash > 0 and slash + 1 < first.len and auth.find(list, first[0..slash]) != null) return config.parseModel(arg);
+        if (slash > 0 and slash + 1 < first.len) {
+            const list = config.customProviders(arena.allocator(), app.io, app.session.options.home) catch &.{};
+            for (list) |item| {
+                if (std.mem.eql(u8, item.id, first[0..slash])) return config.parseModel(arg);
+            }
+        }
     }
     return .{ .provider = app.cfg.name(), .model = first };
 }
@@ -240,9 +252,10 @@ pub fn select(app: *App, selection: config.ModelSelection, note: ?[]const u8) !v
     app.context = session.context_tokens;
     app.refreshCredentials();
     const override = if (app.environ.get("NIB_PROVIDER") != null and app.environ.get("NIB_MODEL") != null) " · NIB_PROVIDER/NIB_MODEL override at startup" else if (app.environ.get("NIB_PROVIDER") != null) " · NIB_PROVIDER overrides at startup" else if (app.environ.get("NIB_MODEL") != null) " · NIB_MODEL overrides at startup" else "";
+    const fast = if (fresh and !app.signed_out and cfg.codexServiceTier() != null) " · Fast" else "";
     if (note) |text| {
-        try app.report(.info, "{s}{s}{s}", .{ text, if (fresh) " · new session" else "", override });
-    } else try app.report(.info, "{s} · {s}{s}{s}", .{ cfg.name(), cfg.model, if (fresh) " · new session" else "", override });
+        try app.report(.info, "{s}{s}{s}{s}", .{ text, if (fresh) " · new session" else "", fast, override });
+    } else try app.report(.info, "{s} · {s}{s}{s}{s}", .{ cfg.name(), cfg.model, if (fresh) " · new session" else "", fast, override });
 }
 
 pub fn execute(app: *App, c: Command, arg: []const u8, line: []const u8) !void {
@@ -252,6 +265,7 @@ pub fn execute(app: *App, c: Command, arg: []const u8, line: []const u8) !void {
     switch (c) {
         .simple => try app.toggleSimple(),
         .status => {
+            if (app.cfg.codexServiceTier() != null) try app.report(.info, "Fast requested", .{});
             const skills = session.log.skills;
             var suffix: std.ArrayList(u8) = .empty;
             defer suffix.deinit(gpa);
@@ -264,7 +278,28 @@ pub fn execute(app: *App, c: Command, arg: []const u8, line: []const u8) !void {
             var credential_arena: std.heap.ArenaAllocator = .init(gpa);
             defer credential_arena.deinit();
             const arena_a = credential_arena.allocator();
-            try app.report(.info, "Provider {s} · {s} · {s} · effort {s} · context {d}%\n{s}", .{ app.cfg.name(), app.cfg.model, auth.describe(arena_a, app.io, app.cfg), app.cfg.effectiveEffort(), app.context * 100 / @max(app.cfg.context_window, 1), if (app.last_summary) |summary| text.details(summary) else "No completed turn yet." });
+            const resume_line = if (session.log.resume_adaptation.notice(app.cfg.model)) |profile|
+                try std.fmt.allocPrint(arena_a, "{s} · retained session Profile: {s}\n", .{ app.cfg.model, profile })
+            else
+                "";
+            try app.report(.info, "Provider {s} · {s} · {s} · effort {s} · context {d}%\n{s}{s}", .{ app.cfg.name(), app.cfg.model, auth.describe(arena_a, app.io, app.cfg), app.cfg.effectiveEffort(), app.context * 100 / @max(app.cfg.context_window, 1), resume_line, if (app.last_summary) |summary| text.details(summary, app.last_turn_runs) else "No completed turn yet." });
+        },
+        .plugins => {
+            var arena: std.heap.ArenaAllocator = .init(gpa);
+            defer arena.deinit();
+            const a = arena.allocator();
+            const plugin = @import("../plugin.zig");
+            if (arg.len == 0) return app.report(.info, "{s}", .{try plugin.list(a, app.io, session.options.home)});
+            var words = std.mem.tokenizeAny(u8, arg, " \t");
+            const action = words.next().?;
+            const name = words.next() orelse return app.report(.err, "usage: /plugins [on|off <name>]", .{});
+            if (words.next() != null or (!std.mem.eql(u8, action, "on") and !std.mem.eql(u8, action, "off"))) return app.report(.err, "usage: /plugins [on|off <name>]", .{});
+            const package = plugin.setEnabled(a, app.io, session.options.home, name, std.mem.eql(u8, action, "on")) catch |err| return app.report(.err, "{s}: {s}", .{ name, @errorName(err) });
+            var text: std.ArrayList(u8) = .empty;
+            try text.print(a, "{s} · {s}\n", .{ name, action });
+            for (package.unsupported) |item| try text.print(a, "Unsupported: {s}\n", .{item});
+            try text.appendSlice(a, "Applies to new sessions.");
+            return app.report(.info, "{s}", .{text.items});
         },
         .mcp => {
             var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -396,7 +431,8 @@ pub fn execute(app: *App, c: Command, arg: []const u8, line: []const u8) !void {
             app.steps = 0;
             app.last_summary = null;
             app.context = session.context_tokens;
-            try app.report(.info, "{s} session {s}", .{ if (c == .new) "new" else "resumed", session.id[0..8] });
+            const fast = if (c == .new and !app.signed_out and app.cfg.codexServiceTier() != null) " · Fast" else "";
+            try app.report(.info, "{s} session {s}{s}", .{ if (c == .new) "new" else "resumed", session.id[0..8], fast });
         },
         .copy => {
             const answer = app.transcript.lastAnswer() orelse return app.transcript.add(gpa, .err, "no answer to copy yet");
@@ -408,6 +444,17 @@ pub fn execute(app: *App, c: Command, arg: []const u8, line: []const u8) !void {
             if (arg.len == 0) return app.transcript.add(gpa, .err, "usage: /model <model> · type /model and a space to pick one");
             const selection = modelSelection(app, arg) catch return app.transcript.add(gpa, .err, "usage: /model <model>");
             try select(app, selection, null);
+        },
+        .fast => {
+            if (arg.len != 0) return app.report(.err, "usage: /fast", .{});
+            if (!app.cfg.supportsCodexFast()) return app.report(.err, "Fast mode is not available for this provider and model", .{});
+            const enabled = !app.cfg.codex_fast;
+            config.saveCodexFast(gpa, app.io, session.options.home, enabled) catch |err|
+                return app.report(.err, "could not save Fast mode: {s}", .{@errorName(err)});
+            app.cfg.codex_fast = enabled;
+            session.cfg.codex_fast = enabled;
+            session.tools.cfg = session.cfg;
+            try app.report(.info, "{s}", .{if (enabled) "Fast requested · may use more credits" else "Standard mode"});
         },
         .effort => {
             if (arg.len > 0) {
@@ -444,7 +491,7 @@ pub fn execute(app: *App, c: Command, arg: []const u8, line: []const u8) !void {
         },
         .compact => {
             app.dropPrediction();
-            app.turn = try Turn.spawn(gpa, session, app.loop, try gpa.dupe(u8, line), true);
+            app.turn = try Turn.spawn(gpa, session, app.loop, try gpa.dupe(u8, arg), true);
             app.live_steps = 0;
             app.turn_runs = 0;
             app.activity = .start(app.io, .compacting);
@@ -539,17 +586,27 @@ test "help groups commands and states the real issue destination or disabled sta
     try testing.expect(std.mem.indexOf(u8, off, "owner/repo") == null);
 }
 
+test "qualified model choices recognize all built-in services" {
+    var app: App = undefined;
+    const selection = try modelSelection(&app, "chat_completions/org/model");
+    try testing.expectEqualStrings("chat_completions", selection.provider);
+    try testing.expectEqualStrings("org/model", selection.model.?);
+}
+
 test "model choices filter and complete without running the bare command" {
     var buf: [32]Candidate = undefined;
-    const models = [_]Choice{ .{ .value = "gpt-6.1-sol", .label = "gpt-6.1-sol", .detail = "current" }, .{ .value = "gpt-6.1-terra", .label = "gpt-6.1-terra", .detail = "" } };
+    const models = [_]Choice{ .{ .value = "openai/gpt-6.1-sol", .label = "openai · gpt-6.1-sol", .detail = "current" }, .{ .value = "openai/gpt-6.1-terra", .label = "gpt-6.1-terra", .detail = "openai" }, .{ .value = "local/gpt-6.1-sol", .label = "gpt-6.1-sol", .detail = "local" } };
     try testing.expect(!allowedWhileBusy("/model gpt-6.1-sol"));
     try testing.expect(!candidates("/model", &.{}, &.{}, &models, &.{}, &buf)[0].runs());
     const selected = candidates("/model gpt-6.1-s", &.{}, &.{}, &models, &.{}, &buf);
-    try testing.expectEqual(@as(usize, 1), selected.len);
+    try testing.expectEqual(@as(usize, 2), selected.len);
     try testing.expectEqualStrings("current", selected[0].detail);
     const line = try selected[0].line(testing.allocator);
     defer testing.allocator.free(line);
-    try testing.expectEqualStrings("/model gpt-6.1-sol", line);
+    try testing.expectEqualStrings("/model openai/gpt-6.1-sol", line);
+    const qualified = candidates("/model local/gpt-6.1-s", &.{}, &.{}, &models, &.{}, &buf);
+    try testing.expectEqual(@as(usize, 1), qualified.len);
+    try testing.expectEqualStrings("local/gpt-6.1-sol", qualified[0].value.?);
 }
 
 test "service choices complete /provider and run on Enter" {

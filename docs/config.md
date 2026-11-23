@@ -7,11 +7,13 @@
   AGENTS.md       Global instructions
   config.toml     Optional nonsecret runtime configuration
   auth.json       Credentials stored by /provider and naeb login (mode 0600)
-  sessions/       <32-character-lowercase-hex-ID>.jsonl main logs and matching .calls.jsonl recordings
+  sessions/       <32-character-lowercase-hex-ID>.jsonl main logs; optional matching .calls.jsonl recordings
   reflections.md  Completed /reflect answers and issue publication results
 ```
 
 No XDG configuration/data reads, old-file searches, or automatic migration. Users move retained instructions/Sessions themselves. `NAEB_HOME` does not change the Codex CLI login naeb may import: `$CODEX_HOME/auth.json`, default ~/.codex/auth.json.
+
+`stats.sqlite3` is an optional metrics index created only by `scripts/stats_db.py`; see [SQLite metrics index](stats-sqlite.md).
 
 ## `auth.json`
 
@@ -31,9 +33,10 @@ ui = "normal" # normal (default) or simple
 open = "zed {path}:{line}" # optional: command run when a file path is clicked
 
 [codex]
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 base_url = "https://chatgpt.com/backend-api"
 context_window = 500000
+fast = false # opt in to the priority tier on supported Codex GPT models
 reasoning_summary = "off" # auto enables readable reasoning summaries
 run_tool = "custom" # function falls back to JSON code
 transport = "websocket" # Session falls back to SSE after handshake/protocol failure; sse forces HTTP
@@ -59,7 +62,7 @@ run_output_bytes = 16384
 hallmark = true # All disabled by default; enable individually by name
 ```
 
-Only the selected provider section applies; switching need not rewrite others. Without environment/file settings the service is codex (`gpt-6.1-sol`, window 500000 tokens) when signed in; otherwise startup uses the first credentialed service without saving it ([providers.md](providers.md#signing-in-and-choosing)). Codex windows depend on model; unknown models require `context_window` or NAEB_CONTEXT_WINDOW. Models/resume/credentials: [codex.md](codex.md), [ADR 0011](adr/0011-provider-wire-protocols.md).
+Only the selected provider section applies; switching need not rewrite others. Without environment/file settings the service is codex (`gpt-6.2-sol`, window 500000 tokens) when signed in; otherwise startup uses the first credentialed service without saving it ([providers.md](providers.md#signing-in-and-choosing)). Codex windows depend on model; unknown models require `context_window` or NAEB_CONTEXT_WINDOW. Models/resume/credentials: [codex.md](codex.md), [ADR 0011](adr/0011-provider-wire-protocols.md).
 
 Built-ins: codex (default), openai, anthropic, deepseek, xai. Legacy chat_completions is a DeepSeek-compatible entry retaining independent Session identity. Tables/windows/authentication/effort/custom examples: [providers.md](providers.md).
 
@@ -67,7 +70,7 @@ Built-ins: codex (default), openai, anthropic, deepseek, xai. Legacy chat_comple
 provider = "openai"
 
 [openai]
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 
 # For your OpenAI-compatible endpoint, set top-level provider to mysite
 [providers.mysite]
@@ -78,9 +81,9 @@ context_window = 128000
 api_key_env = "MYSITE_API_KEY"
 ```
 
-openai uses `OPENAI_API_KEY`; mysite uses MYSITE_API_KEY. Never write key contents to files. Custom protocol/base_url/model/context_window are required; omit api_key_env for unauthenticated local services. Optional `vision = true|false` declares image input support ([providers.md](providers.md)). `NAEB_PROVIDER`=mysite overrides the top-level choice.
+openai uses `OPENAI_API_KEY`; mysite uses MYSITE_API_KEY. Never write key contents to files. Custom protocol/base_url/model/context_window are required; omit api_key_env for unauthenticated local services. Optional `vision = true|false` declares image input support and optional `max_output = <integer>` sets the output token limit ([providers.md](providers.md)). `NAEB_PROVIDER`=mysite overrides the top-level choice.
 
-Dependency-free TOML subset: blank lines, # comments, single-line double-quoted strings (escapes `\"`, `\\`, `\n`), signed decimal integers with underscore grouping, true/false. Only [skills]/[mcp] name keys and a custom provider's `vision` accept booleans; other keys use strings/positive integers and reject booleans by type. Accept only top-level provider/effort; model/base_url/context_window in built-in same-name sections; [codex] additionally transport = "sse"|"websocket", reasoning_summary = "off"|"auto", run_tool = "custom"|"function"; the [limits] keys below; [skills] switches; [sandbox] `mode`/`writable`; [hooks] `after_edit`/`turn_end`; and `[providers.<id>]` protocol/base_url/model/context_window/api_key_env/vision (boolean). Arrays only as single-line lists of strings, for `[sandbox].writable`, hook commands, and `[mcp.<id>]` args/env. MCP server definitions accept command/args/env or url/header_env; `[mcp]` holds opt-in switches. No general nested tables, multiline strings, or full TOML. Unknown/duplicate keys/sections and malformed syntax report path/line rather than silently ignoring.
+Dependency-free TOML subset: blank lines, # comments, single-line double-quoted strings (escapes `\"`, `\\`, `\n`), signed decimal integers with underscore grouping, true/false. Only [skills]/[mcp] name keys and a custom provider's `vision` accept booleans; other keys use strings/positive integers and reject booleans by type. Accept only top-level provider/effort; model/base_url/context_window in built-in same-name sections; [codex] additionally transport = "sse"|"websocket", reasoning_summary = "off"|"auto", run_tool = "custom"|"function"; the [limits] keys below; [skills] and [plugins] switches; [sandbox] `mode`/`writable`; [hooks] `after_edit`/`turn_end`; and `[providers.<id>]` protocol/base_url/model/context_window/api_key_env/vision (boolean)/max_output (positive integer). Arrays only as single-line lists of strings, for `[sandbox].writable`, hook commands, and `[mcp.<id>]` args/env. MCP server definitions accept command/args/env or url/header_env; `[mcp]` holds opt-in switches. No general nested tables, multiline strings, or full TOML. Unknown/duplicate keys/sections and malformed syntax report path/line rather than silently ignoring.
 
 ## [skills]
 
@@ -159,7 +162,7 @@ Children inherit effective provider/model/limits through anonymous stdin, skippi
 
 | Variable | Meaning |
 |---|---|
-| `NAEB_RECORD` | Recording defaults on; only off disables, without deleting calls files; [replay.md](replay.md) |
+| `NAEB_RECORD` | Tool sidecars default off; on enables, off disables; explicit legacy values retained; [replay.md](replay.md) |
 | `NAEB_HOME` | User directory, default ~/.naeb (holds `auth.json`); the Codex CLI login location is unchanged |
 | `NAEB_AUTH_ISSUER` / `NAEB_AUTH_PORT` / `NAEB_AUTH_NO_BROWSER` | Tests only: OAuth issuer URL (default `https://auth.openai.com`), callback port (default 1455), and skip the browser to force the device-code flow |
 | `NAEB_PROVIDER` | codex / openai / anthropic / deepseek / xai / chat_completions or configured custom id |
@@ -177,11 +180,18 @@ Children inherit effective provider/model/limits through anonymous stdin, skippi
 | `NAEB_API_KEY` / `DEEPSEEK_API_KEY` | Legacy chat_completions prefers `NAEB_API_KEY`; deepseek uses `DEEPSEEK_API_KEY` or a stored key |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `XAI_API_KEY` | Corresponding built-in keys; outrank `auth.json` |
 | `NAEB_PATCHES_OFF` | Disable prompt patches: all or comma-separated ids; [compromises.md](compromises.md) |
+| `NAEB_TUNE` | Experiment override of model-family [tuning](adr/0026-tuning.md) variants, `<tuning>=<variant>[,...]` (`delivery=user`/`tool`, `validation=single`/`existing-only`/`none`); invalid values fail at startup |
 | `NAEB_ISSUE_REPO` | Enables `/reflect` and issue publication to owner/name; unset or off disables it; [reflect.md](reflect.md) |
 
 ## Tool-result recording
 
-Recording defaults on. `NAEB_RECORD=off` disables subsequent recording without deleting sidecars. Other values behave like unset/on; no TOML key. Write `$NAEB_HOME/sessions/<session_id>.calls.jsonl`, created mode 0600, independently of main logs/resume. It may contain complete files, output, and secrets beyond display budgets; inspect/delete prior data separately. Sidecars are neither automatically sent to providers nor enumerated by /reflect.
+Tool sidecar recording defaults **off** when `NAEB_RECORD` is unset. Set `NAEB_RECORD=on` before running naeb to record full tool arguments/actual returns; `NAEB_RECORD=off` disables it. For compatibility, every other explicitly set value (including an empty string, `1`, `0`, `false`, and `OFF`) still enables recording, as before. Values are case-sensitive; prefer `on`/`off`. Only the unset default changed; there is no TOML key or CLI recording flag.
+
+The current process environment decides at Session initialization, including resume/continue; the main log and existing sidecars do not override it. Child agents inherit that environment and use the same policy for new, forked, and resumed Sessions, with separate sidecars. When disabled, naeb does not create a Recorder, open/restore existing sidecars, or perform recording hashes, encoding, or sync. It does not delete or rewrite existing recordings. The explicit `naeb replay` command can still read prior recordings regardless of this switch.
+
+When enabled, write `$NAEB_HOME/sessions/<session_id>.calls.jsonl`, created mode 0600, independently of main logs/resume. It may contain complete files, output, and secrets beyond display budgets; inspect/delete prior data separately. Sidecars are neither automatically sent to providers nor enumerated by /reflect. Main Session logs, conversation recovery, background task state, and existing timing/byte-count/product-analysis metrics remain enabled regardless of `NAEB_RECORD`; SQLite remains a separate offline analysis layer.
+
+Tool returns that were not recorded at execution time cannot be fully replayed later. Enabling recording on resume records subsequent Runs only; it cannot reconstruct earlier tool returns from the main log.
 
 Offline commands, JSONL, SHA-256 deduplication, per-item 1 MiB truncation, privacy/capability boundaries: [replay.md](replay.md).
 
@@ -221,6 +231,10 @@ Commands run sequentially through `/bin/sh -c` in the project directory, using b
 `turn_end` runs only for root Sessions in the TUI and `naeb ask`, after completion, failure, or cancellation. It receives `NAEB_EVENT=turn_end` and `NAEB_TURN_STATUS=completed|failed|cancelled`. A background thread discards output and never sends failures to the model; the TUI shows `hook turn_end · exit N`. The whole turn-end sequence shares a 30-second deadline, so ask waits at most that deadline before exiting. Session shutdown joins outstanding hook threads. Offline replay never executes hooks.
 
 Session logs record the event, expanded command, exit code (124 for timeout), and duration in milliseconds, without command output. `/status` shows configured hook counts only when nonempty.
+
+## Plugins
+
+`naeb plugin install <path-or-git-url>` installs a package without enabling it. `[plugins] <name> = true` enables its supported components together for new Sessions; false or absence disables them, including explicit invocation. `/plugins` lists packages and compatibility limitations; `/plugins on <name>` and `/plugins off <name>` persist the switches. See [Plugins](plugins.md) for supported package files, installation, trust and retained Session snapshots. No marketplace or automatic updates.
 
 ## MCP servers
 

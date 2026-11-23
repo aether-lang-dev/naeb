@@ -13,13 +13,13 @@ Built-in rows include id, display name, protocol, base_url, api_key_env list, de
 
 | id | Display name | protocol | base_url | Credentials | Default model |
 | --- | --- | --- | --- | --- | --- |
-| codex | Codex | responses | https://chatgpt.com/backend-api | CODEX_HOME/auth.json | gpt-6.1-sol |
-| openai | OpenAI | responses | https://api.openai.com/v1 | OPENAI_API_KEY | gpt-6.1-sol |
+| codex | Codex | responses | https://chatgpt.com/backend-api | CODEX_HOME/auth.json | gpt-6.2-sol |
+| openai | OpenAI | responses | https://api.openai.com/v1 | OPENAI_API_KEY | gpt-6.2-sol |
 | anthropic | Anthropic | `anthropic_messages` | https://api.anthropic.com | ANTHROPIC_API_KEY | claude-sonnet-5-5 |
 | deepseek | DeepSeek | `chat_completions` | https://api.deepseek.com | DEEPSEEK_API_KEY | deepseek-flash |
 | xai | xAI | responses | https://api.x.ai/v1 | XAI_API_KEY | grok-4.7 |
 
-Model snapshot: user-provided models.dev api.json, fetched 2026-11-06. Anthropic defaults to claude-sonnet-5-5, listing claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5, claude-fable-5-1, all window 1000000/output 128000. OpenAI API defaults to gpt-6.1-sol, listing gpt-6.1-sol/terra, both window 1050000/output 128000. xAI defaults to grok-4.7, listing grok-4.7/4.6, both window 500000. Codex lists/windows unchanged; DeepSeek deepseek-flash/deepseek-v4-pro windows 1000000. Reasoning compatibility comes from pi catalog/families/anthropic.ts.
+Model snapshot: user-provided models.dev api.json, fetched 2026-11-06. Anthropic defaults to claude-sonnet-5-5, listing claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5, claude-fable-5-1, all window 1000000/output 128000. OpenAI API now defaults to gpt-6.2-sol, adding gpt-6.2-sol/astra from the official model docs, both window 1050000/output 128000; gpt-6.1-sol/terra remain listed. xAI defaults to grok-4.7, listing grok-4.7/4.6, both window 500000. Codex now defaults to gpt-6.2-sol (500000), also listing gpt-6.2-astra (272000), per upstream pi's backend catalog; both use minimum low reasoning when disabled. DeepSeek deepseek-flash/deepseek-v4-pro windows 1000000. Reasoning compatibility comes from pi catalog/families/anthropic.ts.
 
 ## Configuration and identity
 
@@ -38,7 +38,7 @@ context_window = 128000
 api_key_env = "MYSITE_API_KEY"
 ```
 
-Legacy `provider = "chat_completions"`, `[chat_completions]`, and NIB_API_KEY precedence over DEEPSEEK_API_KEY remain unchanged as a separate compatibility identity using DeepSeek defaults. Old codex/chat_completions logs stay resumable; never automatically relabel old identities as deepseek. Cross-service-id resume rejects even with matching protocols. Log/compare custom ids too. Models carrying encrypted/signed continuation require model consistency on resume.
+Legacy `provider = "chat_completions"`, `[chat_completions]`, and NIB_API_KEY precedence over DEEPSEEK_API_KEY remain unchanged as a separate compatibility identity using DeepSeek defaults. Old codex/chat_completions logs stay resumable; never automatically relabel old identities as deepseek. Cross-service-id resume rejects even with matching protocols. Log/compare custom ids too. On resume, encrypted or signed continuation data is replayed only for its original model.
 
 Effective configuration reaches children through existing anonymous stdin pipes: provider id, protocol, nonsecret fields, secret environment names; each process reads environment keys independently. No credentials in argv, config files, or logs. tools.llm/summaries reuse effective configuration.
 

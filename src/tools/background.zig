@@ -129,7 +129,28 @@ pub const Background = struct {
             };
             const prefix = try std.fmt.allocPrint(gpa, "[background {s} {s} finished]\n", .{ @tagName(job.kind), job.id });
             defer gpa.free(prefix);
-            const formatted = try output.formatMessage(gpa, prefix, json, if (t.cfg) |cfg| cfg.limits.run_output_bytes else output.max_bytes);
+            const outputs_dir = try t.outputsDir(gpa);
+            defer if (outputs_dir) |dir| gpa.free(dir);
+            const raw_full: ?[]u8 = switch (job.kind) {
+                .bash => if (parsed.value.object.get("output")) |out_val| switch (out_val) {
+                    .string => |text| blk: {
+                        const code = if (parsed.value.object.get("exit_code")) |c| switch (c) {
+                            .integer => |n| n,
+                            else => @as(i64, -1),
+                        } else @as(i64, -1);
+                        break :blk try std.fmt.allocPrint(gpa, "exit_code: {d}\n\n{s}", .{ code, text });
+                    },
+                    else => null,
+                } else null,
+                .agent => if (parsed.value.object.get("text")) |text_val| switch (text_val) {
+                    .string => |text| try gpa.dupe(u8, text),
+                    else => null,
+                } else null,
+                .run => unreachable,
+            };
+            defer if (raw_full) |raw| gpa.free(raw);
+            const save: ?output.Save = if (outputs_dir) |dir| .{ .io = t.io, .dir = dir } else null;
+            const formatted = try output.formatMessageSaved(gpa, prefix, json, if (t.cfg) |cfg| cfg.limits.run_output_bytes else output.max_bytes, save, raw_full);
             defer gpa.free(formatted);
             if (job.kind == .agent) {
                 t.agent_sessions.mutex.lockUncancelable(t.io);
@@ -241,6 +262,24 @@ pub const Background = struct {
         return false;
     }
 
+    /// IDs of undelivered non-detached tasks, except the Run with scope id `own_run`; memory comes from `a`.
+    pub fn pendingIds(bg: *Background, a: std.mem.Allocator, io: std.Io, own_run: ?usize) ![]const []const u8 {
+        bg.mutex.lockUncancelable(io);
+        defer bg.mutex.unlock(io);
+        var ids: std.ArrayList([]const u8) = .empty;
+        for (bg.runs.items) |job| if (!job.delivered and job.scope.id != own_run) try ids.append(a, try a.dupe(u8, job.id));
+        for (bg.jobs.items) |job| if (!job.detached and !job.delivered) try ids.append(a, try a.dupe(u8, job.id));
+        return ids.items;
+    }
+
+    pub fn outstanding(bg: *Background, io: std.Io, id: []const u8) bool {
+        bg.mutex.lockUncancelable(io);
+        defer bg.mutex.unlock(io);
+        for (bg.runs.items) |job| if (!job.delivered and std.mem.eql(u8, job.id, id)) return true;
+        for (bg.jobs.items) |job| if (!job.delivered and std.mem.eql(u8, job.id, id)) return true;
+        return false;
+    }
+
     pub fn pendingNames(bg: *Background, gpa: std.mem.Allocator, io: std.Io) ![]u8 {
         bg.mutex.lockUncancelable(io);
         defer bg.mutex.unlock(io);
@@ -299,7 +338,7 @@ pub const Background = struct {
             };
             const text = try std.fmt.allocPrint(job.gpa, "[background run {s} finished]\n{s}", .{ job.id, completion.output });
             defer job.gpa.free(text);
-            _ = try bg.inbox.?.enqueueCompletion(job.gpa, io, job.id, .run, .finished, completion.ok, text, false, 0, completion, completion.execution);
+            _ = try bg.inbox.?.enqueueCompletion(job.gpa, io, job.id, .run, .finished, completion.ok, text, false, 0, completion, completion.execution, job.scope.id);
             job.collected = true;
             job.releaseExecution();
         }

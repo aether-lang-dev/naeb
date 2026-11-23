@@ -22,9 +22,11 @@ Logged `tool_bytes` counts host→JS UTF-8 results (serialized JSON success, err
 
 Configure `[limits].run_output_bytes` or `NAEB_RUN_OUTPUT_BYTES` (16384–16777216). New system prompts reflect effective settings; resumed Sessions retain original system. Minimum preserves heading/marker room; increases affect neither console capture nor JS results. Locate with grep then read ranges; batch long multi-file bodies or print excerpts.
 
+When a Run or background task message exceeds the display budget (or console capture exceeds 64 KiB), naeb saves the full UTF-8 output (up to 16 MiB) under `$NAEB_HOME/sessions/<session_id>.outputs/<content-hash>.txt` (directory `0700`, file `0600`) and appends `[full output: <path>]` (or `[full output (first 16 MiB): <path>]`) inside the display budget. Untruncated outputs write nothing. Models can inspect omitted sections directly with `tools.read` or `tools.grep` without re-running commands.
+
 ## Capture limits
 
-`src/sandbox/console.zig` shares a 64 KiB body cap across the Run: fixed first 32 KiB plus rolling last 32 KiB. Single huge calls and cumulative overflow share it. UTF-8 trimming removes incomplete characters without extra body budget; JS tool returns remain unchanged.
+`src/sandbox/console.zig` shares a 64 KiB display capture cap across the Run: fixed first 32 KiB plus rolling last 32 KiB, while spilling the full stream up to 16 MiB only once a Run exceeds 64 KiB so truncated Runs can save omitted middle bytes. Single huge calls and cumulative overflow share the display cap. UTF-8 trimming removes incomplete characters without extra body budget; JS tool returns remain unchanged.
 
 Call details are bounded too: retain all up to 64 calls, otherwise first/last 32, merging middle calls into a range with original byte positions. Example for 10000 calls:
 
@@ -39,7 +41,7 @@ Standalone naeb js/TUI `/js` show sandbox head/tail with `[console output trunca
 
 ## Tool data and explicit limits
 
-read returns { text, next_offset }, preserving requested offset/limit lines (default 2000), separate next-page start or null at EOF, file cap 16 MiB. bash `{ exit_code, output }` preserves output, errors above 16 MiB with redirection advice. Explicit bounds: grep text/context ≤500 bytes; grep/glob truncated marks count limits; fetch text ≤1 MiB with { url, status, content_type, text, truncated }, no notices mixed into text, downloads >5 MiB error.
+read returns { text, next_offset }, preserving requested offset/limit lines (default 2000), separate next-page start or null at EOF, file cap 16 MiB + 1 byte (inclusive). bash `{ exit_code, output }` preserves output, errors above 16 MiB with redirection advice. Explicit bounds: grep text/context ≤500 bytes; grep/glob truncated marks count limits; fetch text ≤1 MiB with { url, status, content_type, text, truncated }, no notices mixed into text, downloads >5 MiB error.
 
 Search fields/UTF-8 columns: [ADR 0012](adr/0012-search-and-fetch-tools.md).
 
@@ -56,6 +58,8 @@ Search fields/UTF-8 columns: [ADR 0012](adr/0012-search-and-fetch-tools.md).
 edit/write write complete contents to random same-directory `.naeb-*` files, then atomic same-directory rename, cleaning up on failure. Preserve existing permission bits; follow symlinks to real targets without replacing links. New inodes break hard-link sharing; other links keep old contents. File tools do not fsync: atomic visibility is not power-loss durability. Configuration writes retain fsync.
 
 Sessions track last-observed inode/size/nanosecond mtime by canonical real path, updated by successful read (even one page), edit, write. Overwriting write compares current/observed versions and rejects external changes, requiring reread/new-content-based writes. Unobserved existing files still allow direct write; missing targets are creation. edit reads latest locked content and matches old_text, never replacing from stale Session snapshots; success updates versions.
+
+read scans with a fixed 16 KiB buffer, collecting only requested lines without truncating long lines. Regular files with useful size metadata can stop after the page and lookahead; size-less streams scan to EOF to enforce the same input cap. The existing inclusive implementation boundary is 16 MiB + 1 byte. Size is checked before and after scanning; growth beyond the cap fails with `StreamTooLong`, and an observed inode/size/mtime change during reading fails with `FileChangedDuringRead` without refreshing the Session observation. See [read measurements](read-streaming.md).
 
 read/edit/write share cross-process advisory locks in `$NAEB_HOME/locks/` (default `~/.naeb/locks/`), named by canonical-path SHA-256 hex. Independent naeb processes, children, relative/symlink aliases sharing NAEB_HOME coordinate on one lock. read locks keep returned bytes/versions consistent among participating writers. Persist lock files; release unlocks/closes without unlink to avoid waiting/new writers locking different inodes. Lock waits remain cancelable.
 
@@ -117,7 +121,18 @@ Keep original Sandbox/Promises/arguments/results: const r = await tools.bash(...
 
 Background Runs own cancellation, llm limits, changes, timing, recording buffers; Session agent/background-bash concurrency, ids, observations, usage stay shared. At most 8 automatic Runs independently of 8 background bash; at capacity new Runs wait foreground without failure/background queuing. Each Sandbox still executes ≤8 tools. Backgrounding consumes no extra Step; subsequent model requests consume Steps normally.
 
-On completion use `session/output.zig`’s formatter within budget, inserting user text [background run rN finished] plus full formatted output through Inbox; prefix is an unbudgeted envelope. Notice/final output each display once. Without independent work, models immediately end the Step with a very short tool-free reply, never console.log simulation. Successful empty Runs without output/actual host calls also wait; pure-JS output continues. Retain replies with `waiting:true`, display notices rather than final answers, and wait locally without requests; results trigger next Steps. Applies to ordinary background tasks too, not detached bash. Waiting accepts cancellation/interjections. Step-limit cleanup waits for delivery without more requests. Esc/SIGINT/SIGTERM, Turn failure, Session exit/switch cancel/join Runs/tools, cleaning bash groups; SIGKILL cannot clean up. tools.stop({id:"r1",reason:"Tests failed; inputs need changes"}) can stop another background Run, still delivering cancellation, never itself. No file/shell rollback.
+On completion use `session/output.zig`’s formatter within budget, inserting user text [background run rN finished] plus full formatted output through Inbox; prefix is an unbudgeted envelope. Notice/final output each display once. Without independent work, models immediately end the Step with a very short tool-free reply, never console.log simulation. Successful empty Runs without output/actual host calls also wait; pure-JS output continues. Retain replies with `waiting:true`, display notices rather than final answers, and wait locally without requests; results trigger next Steps. Applies to ordinary background tasks too, not detached bash. Waiting accepts cancellation/interjections. Under `delivery = tool` (DeepSeek) the model waits with `await tools.wait()` instead and these results ride on tool messages; see below. Step-limit cleanup waits for delivery without more requests. Esc/SIGINT/SIGTERM, Turn failure, Session exit/switch cancel/join Runs/tools, cleaning bash groups; SIGKILL cannot clean up. tools.stop({id:"r1",reason:"Tests failed; inputs need changes"}) can stop another background Run, still delivering cancellation, never itself. No file/shell rollback.
+
+### Delivery `tool`
+
+DeepSeek drops all earlier `reasoning_content` whenever a new user message appears, so the DeepSeek Profile uses the `delivery = tool` [tuning](adr/0026-tuning.md) (`NAEB_TUNE=delivery=user|tool`; resolved per Session, logged in the header, never changes mid-Session; `user` is every other family and keeps the behavior above byte for byte).
+
+- Completed background results (same `[background … finished]` text and size limits as the user message) and user messages enqueued mid-Turn (header `[user message]`) are not inserted as user messages. After the Step's Runs finish, queued items are appended, in arrival order after the Run's own output, to the content of that Step's last tool message, so the next request carries them without a new user message. The same Step commit records the original Run output and the background deliveries. Background events and the provider message roles are unchanged.
+- The Turn's first Step is unchanged: interjections queued before the Turn starts are still user messages.
+- `tools.wait(ids?)` is the way to wait with no independent work: it resolves when the named background tasks (default: every pending non-detached task except the calling Run) finished, returning `{ ok:true, results:[{ id, kind, ok, output }], not_pending?:[id] }`. `output` is the result text without its header line; ids that are unknown or already delivered land in `not_pending`. Results returned here are marked delivered and never delivered again; each gets its `background` event, and the delivery is logged with the Run that consumed it (with the Run’s eventual delivery if it had already moved to the background). A Run blocked in `wait` is never auto-backgrounded, and `wait` ends with the Run on cancellation. The tool exists only under `delivery = tool` in root and forked Sessions. Ordinary children can still fold results into later Run output while working and fall back to a tool-free reply to wait.
+- Registration notices and the `Writing scripts` bullet use the same delivery and idle guidance as the Session's selected mode. Tool descriptions give contracts rather than repeating the idle guidance.
+- Fallback: a reply without a tool call (or a Step whose Runs were all empty) while results are pending keeps the `user` behavior: the Session waits locally and inserts a normal user message. An interjection that arrives when the reply has no tool call becomes a normal user message in the same way (or the next Turn).
+- After a resume, a folded result appears inside the tool message it rode on rather than as a separate transcript entry.
 
 All successful edit/write, including pre-background changes, belong to that Run; final events/log `completion.changes` retain operation counts/diffs. Temporary notices claim no changes. TUI background results show output/changes, including resume; child results aggregate them too. Bash changes remain excluded.
 
@@ -134,3 +149,20 @@ A failed configured `after_edit` hook adds `{"hook":{"command":"...","exit_code"
 ## MCP tools
 
 `tools.mcp("server.tool", args)` returns `{ok, content, structured?, error?}`; `tools.mcp_schema("server.tool")` returns its full input JSON Schema. Servers must be enabled in configuration. Server/transport failures return data; malformed arguments reject. Text remains complete inside JS and uses the shared Run display budget. MCP images use the same image store and four-image limit as view; nonvision models get `[image omitted]`. Calls/results are recorded and replayed normally. Wire requests time out after 60 seconds (stdio discovery probe: two seconds); wire messages over 16 MiB fail without truncation. See [MCP tools](mcp.md).
+
+## Repairing failed scripts
+
+The model can call `rerun({base: "12:0", edits: [{old_text: "...", new_text: "..."}]})`.
+A completed script failure includes its Session-scoped source reference: the 1-based
+assistant Step ordinal and 0-based Run index, as in replay. Each edit must have
+nonempty `old_text` matching exactly once; edits apply in order to a copy. Empty,
+missing or ambiguous edits execute nothing. Successful, pending, unknown and foreign
+sources are rejected. Older logs without explicit source/terminal metadata cannot
+provide bases.
+
+This starts a new ordinary Run in a fresh Sandbox, from the beginning. Syntax and
+runtime failures can be repaired; prior effects may repeat. The original source and
+result remain unchanged. A failed repair gets its own reference. Local log metadata
+stores the base, original arguments and full resolved source; model-visible arguments
+stay unchanged. Resume resolves the same references, and offline replay executes the
+recorded source against recorded tool results rather than applying the edits again.

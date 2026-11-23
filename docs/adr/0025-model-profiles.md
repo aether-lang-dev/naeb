@@ -29,6 +29,8 @@ A profile states only where it differs from the default, in three groups:
 
 Wire encoders under `provider/` stay per protocol and do not read profiles.
 
+Family routing now records the recognized family separately from the applied Profile. Gemini is recognized but uses `default`, as do unknown models. The existing `codex` Profile label denotes the GPT family, not the Codex Provider. No per-model routing is needed. See [Model Profiles](../model-profiles.md) for ownership, evolution, and how the selected strategy reaches the runtime and prompt renderer.
+
 ## Evidence rule
 
 Every profile entry follows the existing patch discipline in
@@ -70,11 +72,13 @@ task; a change must be a general behavior. Paid runs are small and approved per 
 5. Audit the base prompt line by line and move Codex-only rules into the Codex profile;
    compare on DeepSeek with and without them.
 6. Deliver background results and interjections without a mid-Turn user message for
-   DeepSeek.
+   DeepSeek. Done as the `delivery = tool` [tuning](0026-tuning.md): results ride on the
+   next tool message and `tools.wait()` replaces ending the response; measured against
+   the `user` variant with `stats.py --group-by tuning`.
 7. Add the uncached-input breakdown (inherent, Turn start, mid-Turn, with causes) to
    `scripts/stats.py`.
 
 ## Not decided
 
-How mid-Turn results are delivered for DeepSeek (folded into the next tool result or
-another carrier) is settled by experiment. Claude's profile waits for data.
+Whether `delivery = tool` beats `user` on cost is settled by experiment. Claude's profile
+waits for data.

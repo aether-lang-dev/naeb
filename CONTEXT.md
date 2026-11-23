@@ -27,7 +27,7 @@ _Avoid_: worker (reserved for tool worker threads), persistent agent
 ## Execution
 
 **Run**:
-One execution of model-written code in a fresh Sandbox. Also the only invocation entry point at the model API level.
+One execution of model-written code in a fresh Sandbox. The model starts a Run with full source through `run`, or exact edits to a failed Run through `rerun`. Both execute from the beginning; prior effects may repeat.
 _Avoid_: eval, cell, code-mode call, PTC call
 
 **Background Run**:
@@ -60,9 +60,16 @@ _Avoid_: backend, API (too broad)
 Model-generated thought summaries and reasoning data needed by subsequent requests. Stored and returned according to the provider; readable content is shown to the user, while encrypted items serve only to continue the session.
 _Avoid_: thinking (synonymous here; use Reasoning consistently)
 
+**Model Family**:
+A model lineage identified from the model name, not the Provider. The Session log separates it from the applied Profile: Gemini and unknown models can both take the default Profile.
+
 **Profile**:
-The model family a Session's behavior is tuned for: codex (gpt-*, codex), deepseek, claude, or default. Resolved from the model name, never the provider, so a custom endpoint serving `deepseek-flash` gets the deepseek Profile. Today it selects which prompt patches apply; context policy and request parameters that differ by family belong here too ([ADR 0025](docs/adr/0025-model-profiles.md)). The resolved name is recorded in the Session log header.
+The strategy overrides applied for a Model Family. The default keeps the shared strategies. Profiles select Tuning defaults and scope prompt patches; they do not change the selected model, Provider capabilities, or tool contracts. See [Model Profiles](docs/model-profiles.md) and [ADR 0025](docs/adr/0025-model-profiles.md).
 _Avoid_: model config, preset
+
+**Tuning**:
+A named model-specific choice with a small set of variants: a prompt slot's text or a runtime value such as how background results and mid-Turn user messages reach the model (`delivery`: `user` or `tool`). A Profile picks a variant for each tuning; `NIB_TUNE` overrides variants for experiments only. Variants are fixed when a Session starts and recorded in its log header ([ADR 0026](docs/adr/0026-tuning.md)). Prompt patches are one kind of tuning.
+_Avoid_: knob, setting, patch (for the general concept)
 
 **Context compaction**:
 Replacing older model context with a summary, preserving system and recent complete Turns or Steps. The Session log appends a replacement record; original records remain in the file, and resume uses the latest replacement.

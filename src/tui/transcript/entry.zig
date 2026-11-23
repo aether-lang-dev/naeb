@@ -11,11 +11,11 @@ const BackgroundKind = @FieldType(@import("../../session/events.zig").Background
 const ToolSummary = @import("../../session/tool_summary.zig").Summary;
 const ChangeText = @import("changes.zig").ChangeText;
 const label = @import("label.zig");
-const intraline = @import("intraline.zig");
+const run_details = @import("run_details.zig");
 const actualToolSummary = label.actualToolSummary;
 
 pub const max_diff_lines = 60;
-pub const max_segments = 16 + 3 * max_diff_lines;
+pub const max_segments = 16;
 
 pub const Kind = enum { user, assistant, run, background, info, err, bill, failure, changes };
 
@@ -35,6 +35,7 @@ pub const Entry = struct {
     text: std.ArrayList(u8) = .empty,
     /// For `.run`: the complete result delivered by Session.
     output: std.ArrayList(u8) = .empty,
+    turn_time: std.ArrayList(u8) = .empty,
     hook_notice: std.ArrayList(u8) = .empty,
     /// For `.run`: see `ChangeText`.
     changes: ChangeText = .{},
@@ -56,7 +57,15 @@ pub const Entry = struct {
     step_effort: ?provider.StepEffort = null,
     /// Collapsible entries share the transcript ctrl+o state.
     open: bool = false,
-    cached: ?struct { width: u16, len: usize, open: bool, rows: u16 } = null,
+    details: run_details.State = .{},
+    cached: ?struct {
+        width: u16,
+        len: usize,
+        open: bool,
+        rows: u16,
+        simple: bool = false,
+        width_method: vaxis.gwidth.Method = .wcwidth,
+    } = null,
 
     const Invocation = struct {
         id: []const u8,
@@ -77,6 +86,7 @@ pub const Entry = struct {
         if (e.tool_summary) |summary| summary.deinit(gpa);
         e.text.deinit(gpa);
         e.output.deinit(gpa);
+        e.turn_time.deinit(gpa);
         e.hook_notice.deinit(gpa);
         e.label.deinit(gpa);
         e.files.deinit(gpa);
@@ -143,6 +153,17 @@ pub const Entry = struct {
         return false;
     }
 
+    pub fn changesOnly(e: *const Entry) bool {
+        if (e.run != .ok or e.hasWarning()) return false;
+        const summary = e.tool_summary orelse return false;
+        if (summary.counts.len == 0 or summary.omitted > 0 or summary.failures == null or summary.failures.? > 0) return false;
+        for (summary.counts) |call| {
+            if (!std.mem.eql(u8, call.name, "edit") and !std.mem.eql(u8, call.name, "write")) return false;
+        }
+        for (summary.files) |file| if (file.failed) return false;
+        return true;
+    }
+
     /// Rows keep their last state; a row is live while its Run runs or its background result is undelivered.
     pub fn isLive(e: *const Entry, p: Progress) bool {
         return e.run == .running or p.background;
@@ -158,6 +179,7 @@ pub const Entry = struct {
 
     pub fn toggleRows(e: *Entry, win: vaxis.Window) u16 {
         if (!e.collapsible()) return 0;
+        if (e.open) return 1;
         const open = e.open;
         e.open = false;
         defer e.open = open;
@@ -166,6 +188,14 @@ pub const Entry = struct {
 
     pub fn print(e: *Entry, win: vaxis.Window, commit: bool) u16 {
         if (e.simple and (e.kind == .bill or e.kind == .changes)) return 0;
+        if (e.kind == .run) {
+            const rows = e.height(win);
+            if (commit) {
+                const prefix_rows = e.printRunPrefix(win, true);
+                if (e.open) _ = run_details.draw(e, win, true, prefix_rows);
+            }
+            return rows;
+        }
         if (e.kind == .changes) return e.printChanges(win, commit);
         if (e.kind == .assistant) {
             if (e.allocator) |a| return e.markdown_cache.draw(a, win, e.displayText(), .{ .tint = e.code_bg }, commit);
@@ -173,40 +203,14 @@ pub const Entry = struct {
         }
         if (e.kind == .user and win.width >= 4) return e.printUser(win, commit);
         if (e.kind == .bill) {
-            _ = win.print(&.{.{ .text = bill.fit(e.text.items, win.width), .style = .{ .dim = true } }}, .{ .wrap = .none, .commit = commit });
+            const time = bill.fit(e.text.items, win.width);
+            _ = win.child(.{ .x_off = win.width -| win.gwidth(time) }).printSegment(.{ .text = time, .style = .{ .dim = true } }, .{ .wrap = .none, .commit = commit });
             return 1;
         }
         var segs: [max_segments]vaxis.Segment = undefined;
         const folded = e.collapsible() and !e.open;
-        const wrap: @FieldType(vaxis.Window.PrintOptions, "wrap") = if (folded) .none else if (e.kind == .run or e.kind == .background or e.kind == .failure) .grapheme else .word;
+        const wrap: @FieldType(vaxis.Window.PrintOptions, "wrap") = if (folded) .none else if (e.kind == .background or e.kind == .failure) .grapheme else .word;
         const shown = segments(e, &segs);
-        if (e.kind == .run) {
-            if (e.simple and !e.open and e.title_files.items.len > 0) {
-                const title_text = e.label.items;
-                const at = @min(e.title_files_at, title_text.len);
-                const title = [_]vaxis.Segment{ shown[0], shown[1], .{ .text = title_text[0..at] }, .{ .text = e.title_files.items }, .{ .text = title_text[at..] } };
-                _ = win.print(&title, .{ .wrap = .none, .commit = commit });
-            } else _ = win.print(shown[0..3], .{ .wrap = .none, .commit = commit });
-            if (e.simple and !e.open and e.run != .running) return 1;
-            if (e.simple and !e.open) return 1 +| e.agent_tree.print(win.child(.{ .y_off = 1 }), commit);
-            var rows: u16 = 1;
-            if (e.changes.summary.len > 0) {
-                const r = win.child(.{ .x_off = 2, .y_off = rows }).printSegment(.{ .text = e.changes.summary, .style = .{ .dim = true } }, .{ .wrap = .word, .commit = commit });
-                rows +|= @max(1, r.row +| @intFromBool(r.col > 0));
-            }
-            if (e.files.items.len > 0) {
-                const r = win.child(.{ .x_off = 2, .y_off = rows }).printSegment(.{ .text = e.files.items, .style = .{ .dim = true } }, .{ .wrap = .word, .commit = commit });
-                rows +|= @max(1, r.row +| @intFromBool(r.col > 0));
-            }
-            if (e.hook_notice.items.len > 0) {
-                _ = win.child(.{ .x_off = 2, .y_off = rows }).printSegment(.{ .text = e.hook_notice.items, .style = .{ .fg = .{ .index = 3 } } }, .{ .wrap = .none, .commit = commit });
-                rows +|= 1;
-            }
-            rows +|= e.agent_tree.print(win.child(.{ .y_off = rows }), commit);
-            if (!e.open) return rows;
-            const details = win.child(.{ .y_off = rows }).print(shown[4..], .{ .wrap = .grapheme, .commit = commit });
-            return rows +| @max(1, details.row +| @intFromBool(details.col > 0));
-        }
         if (folded and e.kind == .user) {
             const suffix_width = vaxis.gwidth.gwidth(e.label.items, win.screen.width_method) + @as(u16, if (e.queued != null) 9 else 0);
             const available = win.width -| suffix_width;
@@ -222,15 +226,82 @@ pub const Entry = struct {
         return if (folded) 1 else @max(1, r.row +| @intFromBool(r.col > 0));
     }
 
+    fn printRunPrefix(e: *Entry, win: vaxis.Window, commit: bool) u16 {
+        var segs: [max_segments]vaxis.Segment = undefined;
+        const shown = e.segments(&segs);
+        if (e.simple and !e.open and e.title_files.items.len > 0) {
+            const title_text = e.label.items;
+            const at = @min(e.title_files_at, title_text.len);
+            const title = [_]vaxis.Segment{ shown[0], shown[1], .{ .text = title_text[0..at] }, .{ .text = e.title_files.items }, .{ .text = title_text[at..] } };
+            _ = win.print(&title, .{ .wrap = .none, .commit = commit });
+        } else _ = win.print(shown, .{ .wrap = .none, .commit = commit });
+        if (e.simple and !e.open and e.run != .running) return 1;
+        if (e.simple and !e.open) return 1 +| e.agent_tree.print(win.child(.{ .y_off = 1 }), commit);
+        var rows: u16 = 1;
+        if (!e.open and e.changes.summary.len > 0) {
+            const r = win.child(.{ .x_off = 2, .y_off = rows }).printSegment(.{ .text = e.changes.summary, .style = .{ .dim = true } }, .{ .wrap = .word, .commit = commit });
+            rows +|= @max(1, r.row +| @intFromBool(r.col > 0));
+        }
+        if (e.files.items.len > 0) {
+            const r = win.child(.{ .x_off = 2, .y_off = rows }).printSegment(.{ .text = e.files.items, .style = .{ .dim = true } }, .{ .wrap = .word, .commit = commit });
+            rows +|= @max(1, r.row +| @intFromBool(r.col > 0));
+        }
+        if (e.hook_notice.items.len > 0) {
+            _ = win.child(.{ .x_off = 2, .y_off = rows }).printSegment(.{ .text = e.hook_notice.items, .style = .{ .fg = .{ .index = 3 } } }, .{ .wrap = .none, .commit = commit });
+            rows +|= 1;
+        }
+        rows +|= e.agent_tree.print(win.child(.{ .y_off = rows }), commit);
+        return rows;
+    }
+
+    pub const Control = struct { first: u16, rows: u16, action: ?run_details.Action = null };
+
+    pub fn control(e: *Entry, win: vaxis.Window, row: u16) ?Control {
+        if (e.kind == .run) {
+            // Viewport layout has already measured the entry at this width.
+            const rows = e.cachedHeight(win) orelse return null;
+            const parent_rows = if (e.open) 1 else rows;
+            if (row < parent_rows) return .{ .first = 0, .rows = parent_rows };
+            if (!e.open or row >= rows) return null;
+            const hit = e.details.hit(e.changes.files, row) orelse return null;
+            return .{ .first = hit.rows.first, .rows = hit.rows.count, .action = hit.action };
+        }
+        const parent_rows = e.toggleRows(win);
+        return if (row < parent_rows) .{ .first = 0, .rows = parent_rows } else null;
+    }
+
+    pub fn toggleControl(e: *Entry, control_hit: Control) void {
+        if (control_hit.action) |action| e.details.toggle(e, action) else e.open = !e.open;
+        e.cached = null;
+    }
+
     /// `label` is the summary line, `text` one row per file while open.
     fn printChanges(e: *const Entry, win: vaxis.Window, commit: bool) u16 {
         const dim: vaxis.Style = .{ .dim = true };
         _ = win.print(&.{.{ .text = e.label.items, .style = dim }}, .{ .wrap = .none, .commit = commit });
-        if (!e.open) return 1;
         var rows: u16 = 1;
+        const time = bill.fit(e.turn_time.items, win.width);
+        if (time.len > 0) {
+            const fits = @as(u32, win.gwidth(e.label.items)) + win.gwidth(time) + 2 <= win.width;
+            _ = win.child(.{ .x_off = win.width - win.gwidth(time), .y_off = if (fits) 0 else 1, .height = 1 }).printSegment(.{ .text = time, .style = dim }, .{ .wrap = .none, .commit = commit });
+            if (!fits) rows += 1;
+        }
+        if (!e.open) return rows;
         var lines = std.mem.splitScalar(u8, e.text.items, '\n');
         while (lines.next()) |line| : (rows +|= 1) {
-            _ = win.child(.{ .y_off = rows }).printSegment(.{ .text = line, .style = dim }, .{ .wrap = .none, .commit = commit });
+            const added_at = std.mem.lastIndexOf(u8, line, " +");
+            const removed_at = std.mem.lastIndexOf(u8, line, " −");
+            const counts_at = @min(added_at orelse line.len, removed_at orelse line.len);
+            const path_end = std.mem.trimEnd(u8, line[0..counts_at], " ").len;
+            const leaf = if (std.mem.lastIndexOfScalar(u8, line[0..path_end], '/')) |at| at + 1 else 0;
+            const removed_start = if (removed_at) |at| at + 1 else line.len;
+            _ = win.child(.{ .y_off = rows }).print(&.{
+                .{ .text = line[0..leaf], .style = dim },
+                .{ .text = line[leaf..path_end] },
+                .{ .text = line[path_end..counts_at], .style = dim },
+                .{ .text = line[counts_at..removed_start], .style = .{ .fg = .{ .index = 2 } } },
+                .{ .text = line[removed_start..], .style = .{ .fg = .{ .index = 1 } } },
+            }, .{ .wrap = .none, .commit = commit });
         }
         return rows;
     }
@@ -273,15 +344,35 @@ pub const Entry = struct {
         return e.height(win) +| e.gap;
     }
 
+    fn layoutLen(e: *const Entry) usize {
+        return e.displayText().len + e.output.items.len + e.changes.diff.len;
+    }
+
+    fn cachedHeight(e: *const Entry, win: vaxis.Window) ?u16 {
+        const c = e.cached orelse return null;
+        if (c.width != win.width or c.len != e.layoutLen() or c.open != e.open) return null;
+        if (e.kind == .run) {
+            if (c.simple != e.simple or c.width_method != win.screen.width_method) return null;
+        } else if (e.simple) return null;
+        return c.rows;
+    }
+
     pub fn height(e: *Entry, win: vaxis.Window) u16 {
-        const len = e.displayText().len + e.output.items.len + e.changes.diff.len;
-        if (if (e.simple) null else e.cached) |c| {
-            if (c.width == win.width and c.len == len and c.open == e.open) return c.rows;
-        }
+        if (e.cachedHeight(win)) |rows| return rows;
         var measure = win;
         measure.height = std.math.maxInt(u16);
-        const rows = e.print(measure, false);
-        e.cached = .{ .width = win.width, .len = len, .open = e.open, .rows = rows };
+        const rows = if (e.kind == .run) blk: {
+            const prefix_rows = e.printRunPrefix(measure, false);
+            break :blk if (e.open) run_details.draw(e, measure, false, prefix_rows) else prefix_rows;
+        } else e.print(measure, false);
+        e.cached = .{
+            .width = win.width,
+            .len = e.layoutLen(),
+            .open = e.open,
+            .rows = rows,
+            .simple = e.simple,
+            .width_method = win.screen.width_method,
+        };
         return rows;
     }
 
@@ -308,44 +399,7 @@ pub const Entry = struct {
                 segs[0] = if (e.run == .failed) .{ .text = "✗ ", .style = .{ .fg = .{ .index = 1 } } } else if (e.run == .warning or e.run == .lost or e.run == .timed_out or e.run == .canceled or e.hasWarning()) .{ .text = "! ", .style = .{ .fg = .{ .index = 3 } } } else .{ .text = "  ", .style = dim };
                 segs[1] = .{ .text = "", .style = dim };
                 segs[2] = .{ .text = e.label.items };
-                if (!e.open) return segs[0..3];
-                segs[3] = .{ .text = "\n" };
-                segs[4] = .{ .text = "Changes\n", .style = .{ .bold = true, .dim = true } };
-                segs[5] = .{ .text = e.changes.preview, .style = dim };
-                var n: usize = 6;
-                const diff = e.changes.diff;
-                if (diff.len == 0) {
-                    segs[n] = .{ .text = "No file changes\n", .style = dim };
-                    n += 1;
-                }
-                var lines: intraline.Lines = .{ .text = diff };
-                while (n + 3 <= segs.len - 5) {
-                    const item = lines.next() orelse break;
-                    const line = item.line;
-                    const style: vaxis.Style = switch (line[0]) {
-                        '+' => .{ .fg = .{ .index = 2 } },
-                        '-' => .{ .fg = .{ .index = 1 } },
-                        ' ' => dim,
-                        else => .{ .bold = true, .dim = true },
-                    };
-                    if (item.emphasis) |r| {
-                        var strong = style;
-                        strong.bold = true;
-                        segs[n] = .{ .text = line[0..r.start], .style = style };
-                        segs[n + 1] = .{ .text = line[r.start..r.end], .style = strong };
-                        segs[n + 2] = .{ .text = line[r.end..], .style = style };
-                        n += 3;
-                    } else {
-                        segs[n] = .{ .text = line, .style = style };
-                        n += 1;
-                    }
-                }
-                segs[n] = .{ .text = "Result\n", .style = .{ .bold = true, .dim = true } };
-                segs[n + 1] = .{ .text = if (e.output.items.len == 0) "No result" else std.mem.trimEnd(u8, e.output.items, "\n"), .style = if (e.run == .failed) .{ .fg = .{ .index = 1 }, .dim = true } else dim };
-                segs[n + 2] = .{ .text = "\nScript\n", .style = .{ .bold = true, .dim = true } };
-                segs[n + 3] = .{ .text = e.text.items, .style = dim };
-                n += 4;
-                return segs[0..n];
+                return segs[0..3];
             },
             .background => {
                 segs[0] = if (e.run == .warning) .{ .text = "! ", .style = .{ .fg = .{ .index = 3 } } } else if (e.run == .superseded) .{ .text = "  ", .style = dim } else .{ .text = if (e.run == .ok) "✓ " else "✗ ", .style = .{ .fg = .{ .index = if (e.run == .ok) 2 else 1 } } };
@@ -369,3 +423,79 @@ pub const Entry = struct {
         return segs[0..1];
     }
 };
+
+test "expanded edit and write Runs show only changes without hiding failures or other tools" {
+    const edit: ToolSummary = .{ .counts = &.{.{ .name = "edit", .count = 2 }}, .failures = 0 };
+    const cases = [_]struct {
+        summary: ?ToolSummary = edit,
+        run: @FieldType(Entry, "run") = .ok,
+        notice: []const u8 = "",
+        changes_only: bool = false,
+    }{
+        .{ .changes_only = true },
+        .{ .summary = .{ .counts = &.{.{ .name = "write", .count = 1 }}, .failures = 0 }, .changes_only = true },
+        .{ .summary = .{ .counts = &.{ .{ .name = "edit", .count = 2 }, .{ .name = "write", .count = 1 } }, .failures = 0 }, .changes_only = true },
+        .{ .summary = .{ .counts = edit.counts, .failures = 1 } },
+        .{ .summary = .{ .counts = edit.counts } },
+        .{ .run = .failed },
+        .{ .run = .running },
+        .{ .run = .warning },
+        .{ .notice = "after-edit hook failed" },
+        .{ .summary = .{ .counts = edit.counts, .files = &.{.{ .tool = "edit", .path = "a.zig", .failed = true }} } },
+        .{ .summary = .{ .counts = &.{ .{ .name = "edit", .count = 1 }, .{ .name = "bash", .count = 1 } } } },
+        .{ .summary = .{ .counts = &.{ .{ .name = "read", .count = 1 }, .{ .name = "edit", .count = 1 } } } },
+        .{ .summary = .{ .counts = edit.counts, .omitted = 1 } },
+        .{ .summary = .{} },
+        .{ .summary = null },
+    };
+    for (cases) |c| {
+        for ([_]bool{ false, true }) |simple| {
+            var e: Entry = .{ .kind = .run, .open = true, .simple = simple, .run = c.run, .tool_summary = c.summary };
+            defer {
+                e.tool_summary = null;
+                e.deinit(std.testing.allocator);
+            }
+            try e.text.appendSlice(std.testing.allocator, "edit-script");
+            try e.output.appendSlice(std.testing.allocator, "edit-result");
+            try e.hook_notice.appendSlice(std.testing.allocator, c.notice);
+            e.changes = try .init(std.testing.allocator, &.{.{ .path = "a.zig", .added = 1, .removed = 1, .diff = "-before\n+after\n" }});
+            try std.testing.expectEqual(c.changes_only, e.changesOnly());
+            e.details.open = true;
+            e.details.result_open = true;
+            e.details.script_open = true;
+            var screen = try vaxis.Screen.init(std.testing.allocator, .{ .cols = 120, .rows = 40, .x_pixel = 0, .y_pixel = 0 });
+            defer screen.deinit(std.testing.allocator);
+            const win: vaxis.Window = .{ .x_off = 0, .y_off = 0, .parent_x_off = 0, .parent_y_off = 0, .width = 120, .height = 40, .screen = &screen };
+            const rows = e.print(win, true);
+            var text: std.ArrayList(u8) = .empty;
+            defer text.deinit(std.testing.allocator);
+            for (0..rows) |row| for (0..win.width) |col| {
+                try text.appendSlice(std.testing.allocator, screen.readCell(@intCast(col), @intCast(row)).?.char.grapheme);
+            };
+            try std.testing.expect(std.mem.indexOf(u8, text.items, "Changes") != null);
+            try std.testing.expect(std.mem.indexOf(u8, text.items, "+after") != null);
+            for ([_][]const u8{ "Result", "Script", "edit-result", "edit-script" }) |body| {
+                try std.testing.expectEqual(!c.changes_only, std.mem.indexOf(u8, text.items, body) != null);
+            }
+            try std.testing.expectEqualStrings("edit-result", e.output.items);
+            try std.testing.expectEqualStrings("edit-script", e.text.items);
+        }
+    }
+}
+
+test "caught tool failures open Result by default without overriding an explicit choice" {
+    const cases = [_]struct { summary: ToolSummary, expanded: bool }{
+        .{ .summary = .{ .failures = 0 }, .expanded = false },
+        .{ .summary = .{ .failures = 1 }, .expanded = true },
+        .{ .summary = .{ .files = &.{.{ .tool = "edit", .path = "a.zig", .failed = true }} }, .expanded = true },
+    };
+    for (cases) |c| {
+        var e: Entry = .{ .kind = .run, .run = .ok, .tool_summary = c.summary, .changes = .{ .file_count = 1 } };
+        try std.testing.expectEqual(c.expanded, e.details.resultExpanded(&e));
+        e.details.result_open = false;
+        try std.testing.expect(!e.details.resultExpanded(&e));
+        e.details.result_open = true;
+        try std.testing.expect(e.details.resultExpanded(&e));
+        try std.testing.expect(!e.details.script_open);
+    }
+}

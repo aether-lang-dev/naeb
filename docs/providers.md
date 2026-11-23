@@ -6,13 +6,13 @@ Service identity is separate from wire protocol: codex, openai, anthropic, deeps
 
 | id | Protocol | Default `base_url` | Credentials | Default model / window |
 | --- | --- | --- | --- | --- |
-| codex | responses, Codex login/WS extensions | `https://chatgpt.com/backend-api` | ChatGPT sign-in (`/provider`, `naeb login codex`) or `CODEX_HOME/auth.json` | `gpt-6.1-sol` / 500000 |
-| openai | responses, SSE | `https://api.openai.com/v1` | `OPENAI_API_KEY` | `gpt-6.1-sol` / 1050000 |
+| codex | responses, Codex login/WS extensions | `https://chatgpt.com/backend-api` | ChatGPT sign-in (`/provider`, `naeb login codex`) or `CODEX_HOME/auth.json` | `gpt-6.2-sol` / 500000 |
+| openai | responses, SSE | `https://api.openai.com/v1` | `OPENAI_API_KEY` | `gpt-6.2-sol` / 1050000 |
 | anthropic | `anthropic_messages`, SSE | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` | `claude-sonnet-5-5` / 1000000 |
 | deepseek | `chat_completions`, SSE | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` | `deepseek-flash` / 1000000 |
 | xai | responses, SSE | `https://api.x.ai/v1` | `XAI_API_KEY` | `grok-4.7` / 500000 |
 
-Snapshot: user-provided models.dev `api.json`, fetched **2026-11-06**. OpenAI lists gpt-6.1-sol/terra, both window 1050000/output 128000. Anthropic lists claude-opus-5-5, `claude-sonnet-5-5`, claude-haiku-5-5, claude-fable-5-1, all window 1000000/output 128000. xAI lists grok-4.7/4.6, both window 500000. DeepSeek retains deepseek-flash/deepseek-v4-pro, both window 1000000. Codex retains its list/windows/defaults; see [codex.md](codex.md). This short catalog neither guarantees account access nor calls discovery endpoints.
+Snapshot: user-provided models.dev `api.json`, fetched **2026-11-06**. OpenAI additionally lists GPT-6.2 [Sol](https://developers.openai.com/api/docs/models/gpt-6.2-sol)/[Astra](https://developers.openai.com/api/docs/models/gpt-6.2-astra), both window 1050000/output 128000, alongside gpt-6.1-sol/terra. Both GPT-6.2 models reject reasoning effort `none`; `off` uses `low`. Anthropic lists claude-opus-5-5, `claude-sonnet-5-5`, claude-haiku-5-5, claude-fable-5-1, all window 1000000/output 128000. xAI lists grok-4.7/4.6, both window 500000. DeepSeek retains deepseek-flash/deepseek-v4-pro, both window 1000000. Codex also lists GPT-6.2 Sol/Astra with backend-specific windows; see [codex.md](codex.md). This short catalog neither guarantees account access nor calls discovery endpoints.
 
 ## Small model
 
@@ -41,7 +41,7 @@ Run `naeb`, then `/provider`. The menu lists every built-in service and each cus
 - `/provider logout <id>` removes naeb's stored key or ChatGPT login. Environment keys and a Codex CLI login are reported, not deleted. Typing `/provider lo` lists what can be signed out.
 - Terminal equivalents: `naeb login [service] [--device]` and `naeb logout <service>`.
 
-`/model` lists only the current service's models (its catalog, or a custom service's configured model); `/model <model>` selects one. `/model <service>/<model>` and `/model <service> <model>` still work. Unknown models require configured `context_window` or NAEB_CONTEXT_WINDOW. Selection saves atomically to `$NAEB_HOME/config.toml`, preserving other settings/comments and current effort. Committed Steps trigger a new Session; old Sessions retain their service and remain resumable. Empty Sessions switch in place; active Turns cannot switch. NAEB_PROVIDER/NAEB_MODEL still override on next launch, noted in confirmation. Direct file/environment edits remain alternatives.
+`/model` lists models across configured or signed-in services: built-in catalogs and configured models, custom services' configured models, and the active model. Each row names its service; selecting it switches both service and model. Filter by model name or `service/model`. `/model <model>` typed directly still selects a model of the current service. `/model <service>/<model>` and `/model <service> <model>` still work. Unknown models require configured `context_window` or NAEB_CONTEXT_WINDOW. Selection saves atomically to `$NAEB_HOME/config.toml`, preserving other settings/comments and current effort. Committed Steps trigger a new Session; old Sessions retain their service and remain resumable. Empty Sessions switch in place; active Turns cannot switch. NAEB_PROVIDER/NAEB_MODEL still override on next launch, noted in confirmation. Direct file/environment edits remain alternatives.
 
 Without a configured service that has credentials, startup silently uses the first credentialed one: Codex login, then keys for anthropic, openai, deepseek, xai, then custom services. It is not saved until you choose with `/provider` or `/model`. With none, the bottom bar shows `Not signed in`, the welcome line says `No provider · /provider to sign in`, and sending a message opens the `/provider` menu with the draft kept; `naeb ask` exits with `No provider · run naeb login`.
 
@@ -71,6 +71,8 @@ api_key_env = "MYSITE_API_KEY"
 ```
 
 Put the key in environment `MYSITE_API_KEY`; configuration stores its name only. protocol/base_url/model/context_window are required; unauthenticated local services omit api_key_env. It is an environment name, not a key. Endpoints added with `/provider` omit api_key_env and keep the key in `auth.json` under the endpoint id; an environment variable named by api_key_env still wins. Ids use ASCII letters/digits/underscore/hyphen; collisions with built-ins or custom error.
+
+`max_output = <positive integer>` (custom services only) sends that value as `max_tokens` on every Session model request of a `chat_completions` or `anthropic_messages` service (`responses` services ignore it); some gateways default to a low limit, while official DeepSeek already defaults to its maximum. Omitted, no limit is sent. Compaction, prediction, `tools.llm` and web search keep their own limits.
 
 `vision = true|false` (custom services only) declares whether the model accepts image input. Omitted, it follows the protocol: true for `responses` and `anthropic_messages`, false for `chat_completions`, where endpoints differ. Built-in rows carry it in the provider/model table: false for `chat_completions` and DeepSeek, true elsewhere. Without vision, attaching an image in the TUI is refused with a notice and `tools.view` returns `{ ok: false, error }`; images already in a resumed Session history become text placeholders.
 
@@ -108,7 +110,7 @@ Anthropic places ephemeral cache_control breakpoints on system, last user/tool_r
 
 Children inherit effective configuration through anonymous stdin, skipping files. Pass variable names; each process reads the selected environment key or the key in `auth.json` independently, so stored keys never travel through stdin. Only selected keys enter naeb children; bash removes built-in/current custom keys, and read/edit/write/bash refuse `$NAEB_HOME/auth.json` like Codex credential files. No secrets in argv/logs/config. Key precedence: environment variable, then `auth.json`, then (Codex only) `CODEX_HOME/auth.json`. Codex independently reads login files; only Codex has a subscription sign-in, and Claude subscriptions are not supported (API keys only).
 
-Legacy provider = "chat_completions", `[chat_completions]`, and `NAEB_API_KEY` over `DEEPSEEK_API_KEY` remain compatible; deepseek has its own identity/key. Old Session identities do not convert automatically. Cross-service resume rejects even for matching protocols. Custom logs use `provider:"custom"` plus `custom_provider:"mysite"`, both compared on resume/fork. Responses/Messages also require matching models to protect encrypted/signed continuation.
+Legacy provider = "chat_completions", `[chat_completions]`, and `NAEB_API_KEY` over `DEEPSEEK_API_KEY` remain compatible; deepseek has its own identity/key. Old Session identities do not convert automatically. Cross-service resume rejects even for matching protocols. Custom logs use `provider:"custom"` plus `custom_provider:"mysite"`, both compared on resume/fork. Within the same service, resume uses the configured model. Responses and Messages only send encrypted or signed continuation data from that model; other Steps are sent as ordinary conversation and tool history. Forking still requires a matching model on these protocols.
 
 401 asks users to check the current service's key (its environment variable, or `the key stored by naeb`) without exposing authentication response bodies; only Codex rereads or refreshes login once. 429/5xx, network, cancellation, and three timeouts reuse existing policies. Ordinary services do not automatically replay after visible deltas; buffered llm/summaries can retry. See [codex.md](codex.md#stream-failures-and-retries).
 

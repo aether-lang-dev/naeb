@@ -7,7 +7,11 @@ const Sink = @import("../session.zig").Sink;
 pub const Compaction = enum { compacted, too_few_steps, ineffective };
 
 pub fn compact(s: *Session, sink: Sink, cancel: *const std.atomic.Value(bool), detail: *?[]u8) !Compaction {
-    const cut = compactionCut(s.history.items, s.cfg.context_window);
+    return compactWithFocus(s, "", sink, cancel, detail);
+}
+
+pub fn compactWithFocus(s: *Session, focus: []const u8, sink: Sink, cancel: *const std.atomic.Value(bool), detail: *?[]u8) !Compaction {
+    const cut = compactionCut(s.history.items, s.cfg);
     if (cut <= 1) {
         try sink.emit(sink.ctx, .{ .notice = "compaction skipped: fewer than three complete Steps" });
         return .too_few_steps;
@@ -19,7 +23,7 @@ pub fn compact(s: *Session, sink: Sink, cancel: *const std.atomic.Value(bool), d
     var request: std.ArrayList(provider.Message) = .empty;
     defer request.deinit(s.gpa);
     for (s.history.items[0..cut]) |m| try request.append(s.gpa, try withoutImages(a, m));
-    try request.append(s.gpa, .{ .role = "user", .content = "Summarize the conversation above for another coding agent. Preserve goals, explicit user requirements, constraints and preferences, decisions, files, current file and test state, results, failures and unfinished work. Do not act on earlier requests. Return only a concise factual continuation summary." });
+    try request.append(s.gpa, .{ .role = "user", .content = try summaryPrompt(a, focus) });
     const Silent = struct {
         fn delta(ctx: *anyopaque, _: provider.Kind, text: []const u8) !void {
             if (text.len == 0) return;
@@ -46,8 +50,8 @@ pub fn compact(s: *Session, sink: Sink, cancel: *const std.atomic.Value(bool), d
     try replacement.append(s.gpa, .{ .role = "user", .content = try std.fmt.allocPrint(a, "Earlier session summary:\n{s}", .{reply.text}) });
     try replacement.appendSlice(s.gpa, s.history.items[cut..]);
     const before = s.context_tokens;
-    const after = estimateTokens(s.history.items[0..1]) + estimateTokens(replacement.items);
-    if (after >= estimateTokens(s.history.items) or after > s.cfg.context_window / 2) {
+    const after = estimateTokens(s.history.items[0..1], s.cfg) + estimateTokens(replacement.items, s.cfg);
+    if (after >= estimateTokens(s.history.items, s.cfg) or after > s.cfg.context_window / 2) {
         try sink.emit(sink.ctx, .{ .notice = "compaction skipped: it would not bring context below half the window (retained Steps or system prompt are too large)" });
         return .ineffective;
     }
@@ -89,23 +93,24 @@ fn withoutImages(a: std.mem.Allocator, message: provider.Message) !provider.Mess
     return copy;
 }
 
-pub fn estimateTokens(messages: []const provider.Message) u64 {
+pub fn estimateTokens(messages: []const provider.Message, cfg: provider.Config) u64 {
     var total: u64 = 0;
     for (messages) |m| {
         total += (if (m.images) |images| images.len else 0) * image.estimated_tokens;
         const content = m.content orelse "";
-        if (m.reasoning) |r| if (r.includes_output) {
+        const reasoning = if (m.reasoning) |r| if (r.compatible(cfg)) r else null else null;
+        if (reasoning) |r| if (r.includes_output) {
             total += 8 + r.data.len / 3;
             continue;
         };
         total += 8 + content.len / 3;
-        if (m.reasoning) |r| total += r.data.len / 3;
+        if (reasoning) |r| total += r.data.len / 3;
         for (m.tool_calls orelse &.{}) |call| total += 8 + (call.id.len + call.function.name.len + call.function.arguments.len) / 3;
     }
     return total;
 }
 
-pub fn compactionCut(messages: []const provider.Message, window: u64) usize {
+fn compactionCut(messages: []const provider.Message, cfg: provider.Config) usize {
     var turns: usize = 0;
     var cut: usize = 1;
     var i = messages.len;
@@ -119,7 +124,7 @@ pub fn compactionCut(messages: []const provider.Message, window: u64) usize {
             }
         }
     }
-    if (cut > 1 and estimateTokens(messages[cut..]) <= window / 4) return cut;
+    if (cut > 1 and estimateTokens(messages[cut..], cfg) <= cfg.context_window / 4) return cut;
     var steps: usize = 0;
     i = messages.len;
     while (i > 1) {
@@ -133,8 +138,26 @@ pub fn compactionCut(messages: []const provider.Message, window: u64) usize {
     return 1;
 }
 
+const base_summary_prompt = "Summarize the conversation above for another coding agent. Preserve goals, explicit user requirements, constraints and preferences, decisions, files, current file and test state, results, failures and unfinished work. Do not act on earlier requests. Return only a concise factual continuation summary.";
+
+pub fn summaryPrompt(a: std.mem.Allocator, focus: []const u8) ![]const u8 {
+    const trimmed = std.mem.trim(u8, focus, " \t\r\n");
+    if (trimmed.len == 0) return base_summary_prompt;
+    return std.fmt.allocPrint(a, "{s}\n\nAdditional focus from the user: {s}", .{ base_summary_prompt, trimmed });
+}
+
+test "compaction prompt appends optional user focus" {
+    const t = std.testing;
+    try t.expectEqualStrings(base_summary_prompt, try summaryPrompt(t.allocator, "   "));
+    const focused = try summaryPrompt(t.allocator, "keep auth decisions");
+    defer t.allocator.free(focused);
+    try t.expect(std.mem.startsWith(u8, focused, base_summary_prompt));
+    try t.expect(std.mem.endsWith(u8, focused, "\n\nAdditional focus from the user: keep auth decisions"));
+}
+
 test "compaction cuts preserve recent turns and complete tool groups" {
     const t = std.testing;
+    const cfg: provider.Config = .{ .base_url = "", .api_key = "", .model = "mock" };
     const call: provider.ToolCall = .{ .id = "c", .function = .{ .name = "run", .arguments = "{}" } };
     const messages = [_]provider.Message{
         .{ .role = "system", .content = "system" },
@@ -148,15 +171,17 @@ test "compaction cuts preserve recent turns and complete tool groups" {
         .{ .role = "user", .content = "third" },
         .{ .role = "assistant", .content = "done" },
     };
-    try t.expectEqual(@as(usize, 3), compactionCut(&messages, 128_000));
-    try t.expectEqual(@as(usize, 7), compactionCut(&messages, 64));
-    try t.expectEqual(@as(usize, 1), compactionCut(messages[0..7], 64));
+    try t.expectEqual(@as(usize, 3), compactionCut(&messages, cfg));
+    var small = cfg;
+    small.context_window = 64;
+    try t.expectEqual(@as(usize, 7), compactionCut(&messages, small));
+    try t.expectEqual(@as(usize, 1), compactionCut(messages[0..7], small));
     const long_turn = [_]provider.Message{
         messages[0], messages[1], messages[4], messages[5], messages[6],
         messages[4], messages[5], messages[6], messages[4], messages[5],
         messages[6],
     };
-    try t.expectEqual(@as(usize, 5), compactionCut(&long_turn, 128_000));
+    try t.expectEqual(@as(usize, 5), compactionCut(&long_turn, cfg));
 }
 
 test "compaction replaces images with placeholders and budgets them" {
@@ -171,5 +196,6 @@ test "compaction replaces images with placeholders and budgets them" {
     try t.expectEqualStrings("look\n[image shot.png 1280×720 omitted]", plain.content.?);
     const bare: provider.Message = .{ .role = "tool", .tool_call_id = "c", .images = &.{shot} };
     try t.expectEqualStrings("[image shot.png 1280×720 omitted]", (try withoutImages(a, bare)).content.?);
-    try t.expectEqual(estimateTokens(&.{.{ .role = "user", .content = "look" }}) + image.estimated_tokens, estimateTokens(&.{message}));
+    const cfg: provider.Config = .{ .base_url = "", .api_key = "", .model = "mock" };
+    try t.expectEqual(estimateTokens(&.{.{ .role = "user", .content = "look" }}, cfg) + image.estimated_tokens, estimateTokens(&.{message}, cfg));
 }

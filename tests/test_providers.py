@@ -29,6 +29,8 @@ class Providers(unittest.TestCase):
                 self.assertEqual(result.returncode == 0, ok, result.stdout + result.stderr)
                 return [json.loads(line) for line in result.stdout.splitlines()]
             events = ask("round trip", "--effort", "high")
+            if name == "openai":
+                self.assertTrue(all(body["model"] == "gpt-6.2-sol" for _, _, body in mock.requests))
             self.assertFalse(mock.errors, mock.errors)
             end = events[-1]["end"]
             self.assertEqual(end["steps"], 2)
@@ -62,10 +64,69 @@ class Providers(unittest.TestCase):
                 self.assertEqual(report.returncode, 0, report.stderr)
                 self.assertGreater(json.loads(report.stdout)["usage"]["prompt_cache_write_tokens"], 0)
 
+    def test_chat_completion_consistency(self):
+        example = 'Quoted example: <｜DSML｜tool_calls><｜DSML｜invoke name="run">console.log("example")</｜DSML｜invoke></｜DSML｜tool_calls>'
+        for structured, reason in ((False, "tool_calls"), (False, "stop"), (False, None), (True, "tool_calls"), (True, None)):
+            with self.subTest(structured=structured, reason=reason), tempfile.TemporaryDirectory(prefix="nib-chat-finish-") as tmp:
+                mock = Mock("chat_completions")
+                self.addCleanup(mock.close)
+
+                def serve(h, body):
+                    h.send_response(200)
+                    h.send_header("Content-Type", "text/event-stream")
+                    h.end_headers()
+
+                    def event(delta, **extra):
+                        h.wfile.write(("data: " + json.dumps({"choices": [{"delta": delta, **extra}]}) + "\n\n").encode())
+
+                    has_result = any(m.get("role") == "tool" for m in body["messages"])
+                    event({"content": example}, finish_reason=None)
+                    if structured and not has_result:
+                        args = json.dumps({"code": 'console.log("fragmented");'})
+                        event({"tool_calls": [{"index": 0, "id": "call_1", "function": {"name": "run", "arguments": args[:9]}}]})
+                        event({"tool_calls": [{"index": 0, "function": {"arguments": args[9:]}}]})
+                    terminal = "stop" if has_result else reason
+                    event({}, **({"finish_reason": terminal} if terminal else {}))
+                    h.wfile.write(b'data: {"choices":[],"usage":{"prompt_tokens":10}}\n\ndata: [DONE]\n\n')
+
+                mock.serve = serve
+                env = {k: v for k, v in os.environ.items() if not k.startswith(("NAEB_", "DEEPSEEK_"))}
+                env.update(HOME=tmp, NAEB_HOME=str(Path(tmp) / "nib"), NAEB_PROVIDER="deepseek", NAEB_API_KEY=mock.key, DEEPSEEK_API_KEY=mock.key, NAEB_BASE_URL=mock.url)
+                result = subprocess.run([str(BIN), "ask", "--json", "check completion"], cwd=tmp, env=env, capture_output=True, text=True, timeout=30)
+                events = [json.loads(line) for line in result.stdout.splitlines()]
+                inconsistent = not structured and reason == "tool_calls"
+                self.assertEqual(result.returncode == 0, not inconsistent, result.stdout + result.stderr)
+                if inconsistent:
+                    self.assertIn("InvalidResponse", events[-1]["error"]["message"])
+                    self.assertFalse(any("end" in e for e in events))
+                else:
+                    self.assertIn("end", events[-1])
+                    self.assertEqual(events[-1]["end"]["steps"], 2 if structured else 1)
+                    self.assertEqual(events[-1]["end"]["text"], example)
+                runs = [e["run_start"] for e in events if "run_start" in e]
+                self.assertEqual(runs, ['console.log("fragmented");'] if structured else [])
+                self.assertEqual(len(mock.requests), 2 if structured else 1)
+                self.assertFalse(mock.errors, mock.errors)
+
     def test_builtins(self):
         for name, protocol, key in [("openai", "responses", "OPENAI_API_KEY"), ("xai", "responses", "XAI_API_KEY"), ("anthropic", "anthropic_messages", "ANTHROPIC_API_KEY"), ("deepseek", "chat_completions", "DEEPSEEK_API_KEY")]:
             with self.subTest(provider=name):
                 self.exercise(name, protocol, key)
+
+    def test_gpt_62_minimum_reasoning(self):
+        with tempfile.TemporaryDirectory(prefix="nib-gpt-62-") as tmp:
+            mock = Mock("responses", custom_run=True)
+            self.addCleanup(mock.close)
+            env = {k: v for k, v in os.environ.items() if not k.startswith(("NAEB_", "OPENAI_", "CODEX_"))}
+            env.update(HOME=tmp, NAEB_HOME=str(Path(tmp) / "nib"), NAEB_PROVIDER="openai", NAEB_BASE_URL=mock.url, OPENAI_API_KEY=mock.key)
+            for model in ("gpt-6.2-sol", "gpt-6.2-astra"):
+                with self.subTest(model=model):
+                    result = subprocess.run([str(BIN), "ask", "--json", "again", "--effort", "off"], cwd=tmp, env=dict(env, NAEB_MODEL=model), capture_output=True, text=True, timeout=30)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    body = mock.requests[-1][2]
+                    self.assertEqual(body["model"], model)
+                    self.assertEqual(body["reasoning"], {"effort": "low"})
+            self.assertFalse(mock.errors, mock.errors)
 
     def test_custom_identity_and_no_auth(self):
         with tempfile.TemporaryDirectory(prefix="nib-provider-noauth-") as tmp:

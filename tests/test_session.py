@@ -30,7 +30,7 @@ def replay(path):
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if record.get("repair") or record.get("agent_session") or record.get("bash") or record.get("task_stop"):
+        if record.get("source") or record.get("repair") or record.get("agent_session") or record.get("bash") or record.get("task_stop"):
             continue
         messages = [dict(message) for message in record["messages"]]
         for message in messages:
@@ -234,8 +234,8 @@ with tempfile.TemporaryDirectory(prefix="nib-session-e2e-") as directory:
             assert header["naeb_version"] == version + "+" + git_commit.stdout.strip(), header
         assert header["system_sha"] == hashlib.sha256(base.encode()).hexdigest()[:12], header
         assert "patches_off" not in header
-        assert header["profile"] == "deepseek", header["profile"]
-        assert all(not any(key in record for key in ("naeb_version", "system_sha", "patches_off", "profile"))
+        assert (header["family"], header["profile"]) == ("deepseek", "deepseek"), header
+        assert all(not any(key in record for key in ("naeb_version", "system_sha", "patches_off", "family", "profile"))
                    for record in initial_records[1:])
         assert system.index("You are naeb") < system.index("GLOBAL_MARKER") < system.index("PROJECT_MARKER")
         assert "async mcp(" not in system and "<mcp_tools>" not in system
@@ -291,8 +291,8 @@ with tempfile.TemporaryDirectory(prefix="nib-session-e2e-") as directory:
         summary_home = tmp / "summary-home"
         (cwd / "summary.txt").write_text("old")
         for prompt, expected in [
-                ("run_summary_test", {"counts": [{"name": "edit", "count": 1}, {"name": "bash", "count": 1}], "omitted": 0, "files": []}),
-                ("run_summary_overflow", {"counts": [{"name": "read", "count": 200}], "omitted": 3, "files": [{"tool": "read", "path": "summary.txt"}]})]:
+                ("run_summary_test", {"counts": [{"name": "edit", "count": 1}, {"name": "bash", "count": 1}], "omitted": 0, "failures": 0, "files": []}),
+                ("run_summary_overflow", {"counts": [{"name": "read", "count": 200}], "omitted": 3, "failures": 0, "files": [{"tool": "read", "path": "summary.txt"}]})]:
             summary_events = events(ask("--json", prompt, overrides={"NAEB_HOME": str(summary_home)}))
             run_end = next(event["run_end"] for event in summary_events if "run_end" in event)
             assert run_end["tool_summary"] == expected, run_end
@@ -662,7 +662,12 @@ with tempfile.TemporaryDirectory(prefix="nib-session-e2e-") as directory:
         output = run_end["output"]
         assert "bytes omitted" in output and len(output.encode("utf-8")) <= 16384, output[:100]
         assert output.startswith('[entry 1 of 1 (result)]\n"' + 'x' * 100), output[:100]
-        assert output.endswith('x' * 100 + '"\n'), output[-110:]
+        assert ('x' * 100 + '"\n[full output: ') in output, output[-240:]
+        saved_match = re.search(r"\[full output: ([^\]]+)\]", output)
+        assert saved_match, output[-240:]
+        saved_text = Path(saved_match.group(1)).read_text()
+        assert saved_text.startswith('result: "' + 'x' * 100) and saved_text.endswith('x' * 100 + '"\n')
+        assert len(saved_text) > 32768
         requests = read_requests(requests_path)
         assert requests[-1]["messages"][-1]["content"] == output
         limited_id = limited[0]["start"]["session_id"]
@@ -683,6 +688,10 @@ with tempfile.TemporaryDirectory(prefix="nib-session-e2e-") as directory:
         assert output.startswith("[entry 1 of 3 (console)]\nleft short-left\n")
         assert "[entry 2 of 3 (console)]\nmiddle " in output
         assert "-middle-tail\n[entry 3 of 3 (console)]\nright short-right\n" in output
+        saved_entries = re.search(r"\[full output: ([^\]]+)\]", output)
+        assert saved_entries, output[-240:]
+        saved_entries_text = Path(saved_entries.group(1)).read_text()
+        assert "left short-left\nmiddle " + middle + "\nright short-right\n" == saved_entries_text
         omitted = re.search(r"\[(\d+) of (\d+) bytes omitted\]", output)
         assert omitted and 0 < int(omitted[1]) < int(omitted[2]), output[:100]
         assert int(omitted[2]) == len(("middle " + middle + "\n").encode("utf-8"))
@@ -736,6 +745,16 @@ with tempfile.TemporaryDirectory(prefix="nib-session-e2e-") as directory:
                 "\n\nInstructions below apply in order; later instructions take priority.\n", 1)[0]
             assert child_header["naeb_version"] == header["naeb_version"]
             assert child_header["system_sha"] == hashlib.sha256(child_base.encode()).hexdigest()[:12]
+        for model, family in (("google/gemini-3-flash", "gemini"), ("proxy/unknown-model", "unknown")):
+            home = tmp / family
+            ask("fallback route", overrides={"NAEB_HOME": str(home), "NAEB_MODEL": model})
+            route = replay(next((home / "sessions").glob("*.jsonl")))[1][0]
+            assert (route["model"], route["family"], route["profile"]) == (model, family, "default"), route
+            assert route["tuning"] == {"delivery": "user", "validation": "single"}, route
+            sent = read_requests(requests_path)[-1]
+            assert sent["model"] == model, sent["model"]
+            assert "async wait(ids)" not in sent["messages"][0]["content"]
+
         patches_home = tmp / "patches-home"
         ask("patch labels", overrides={"NAEB_HOME": str(patches_home), "NAEB_PATCHES_OFF": "all"})
         patches_header = replay(next((patches_home / "sessions").glob("[0-9a-f]" * 32 + ".jsonl")))[1][0]

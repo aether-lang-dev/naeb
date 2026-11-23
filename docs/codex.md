@@ -17,7 +17,7 @@ nib --continue
 
 No NIB_API_KEY needed. Nonsecret settings go in `$NIB_HOME/config.toml` (default `~/.nib/config.toml`) [codex]; [configuration](config.md). NIB_BASE_URL/NIB_MODEL/NIB_CONTEXT_WINDOW override files; clear obsolete overrides when switching services.
 
-Default `gpt-6.1-sol`, window 500,000 tokens. Explicit model:
+Default `gpt-6.2-sol`, window 500,000 tokens. Explicit model:
 
 ```sh
 NIB_MODEL=gpt-6-sol NIB_REASONING_EFFORT=high nib ask 'Hello'
@@ -30,19 +30,23 @@ provider = "codex"
 effort = "medium"
 
 [codex]
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 context_window = 500000
 ```
 
 These settings apply on subsequent launches; environment overrides temporarily, --effort has highest precedence.
 
-Local pi `catalog/providers/openai-codex.ts` list (2026-11-01, primary source):
+Upstream pi [`catalog/providers/openai-codex.ts`](https://github.com/earendil-works/pi/blob/main/packages/ai/catalog/providers/openai-codex.ts) catalog (November 2026; Codex backend defaults):
 
 | Model | Default window |
 |---|---:|
+| gpt-6.2-sol | 500,000 |
+| gpt-6.2-astra | 272,000 |
 | gpt-6.1-terra、`gpt-6.1-sol` | 500,000 |
 | gpt-6-astra、gpt-6-sol、gpt-6-luna | 272,000 |
 | gpt-5.6-luna、gpt-5.6-sol、gpt-5.6-terra | 272,000 |
+
+GPT-6.2 Sol and Astra both reject reasoning effort `none`; `off` and compaction use `low`. Their OpenAI API windows differ from Codex: both are 1,050,000 tokens with 128,000 maximum output tokens ([Sol](https://developers.openai.com/api/docs/models/gpt-6.2-sol), [Astra](https://developers.openai.com/api/docs/models/gpt-6.2-astra)).
 
 Unknown models require `context_window` or NIB_CONTEXT_WINDOW, without guessing. Availability depends on account.
 
@@ -62,6 +66,8 @@ TUI switches only while idle, affecting later Turns and children. `/effort <leve
 NIB_THINKING=on defaults medium; NIB_REASONING_EFFORT explicitly selects supported levels. off overrides effort: none where disableable, minimum low for sol/astra. Without environment overrides use file effort, otherwise server defaults.
 
 ## Effort and prompt caching
+
+Starting with GPT-6.2 (`gpt-6.2-sol`, `gpt-6.2-astra`), the Responses API appends top-level `instructions` after `input`, outside prompt caching. Local Codex `gpt-6.2-sol` WebSocket logs confirmed every Step lost an amount equal to `instructions` (~2k–6.3k tokens) from `cached_tokens`, while `gpt-6.1-sol` hit ~98%. For GPT-6.2+ on Codex and OpenAI, `src/provider/responses.zig` places the reusable system prompt in `input[0]` with `role: "developer"` and sends a short static `instructions` placeholder, keeping the system prompt in the cached prefix and out of incremental WebSocket deltas.
 
 Measured local ~/.nib/sessions Codex/gpt-6.1-sol logs: compare adjacent same-Turn Steps, grouped by actual effort change, measuring later-Step prompt_cache_hit_tokens / prompt_tokens against prior hit rate.
 
@@ -91,7 +97,7 @@ Two real comparisons on 2026-11-04 with gpt-6.1-sol/default effort: same task, p
 
 Tiny samples show first requests can hit parent prefixes with shared keys, not server guarantees. Observe larger-context benefits through `stats.py` child_costs.by_creation. Reconsider shared keys if fork first-hit rates cease materially exceeding new children.
 
-Model/effort inherit by default with overrides, but differing values lose parent-prefix benefits regardless of shared keys. Codex fork enforces resume model consistency; overrides cannot reuse encrypted parent reasoning across models. Future same-model/effort/prefix comparisons of parent/independent keys should measure first cache/prompt, uncached input, and time; reconsider keys absent benefits. Semantics/confidence: [delegation](tool-delegation.md), [ADR 0015](adr/0015-agent-fork.md).
+Model/effort inherit by default with overrides, but differing values lose parent-prefix benefits regardless of shared keys. Codex fork requires the parent model; overrides cannot reuse encrypted parent reasoning across models. Future same-model/effort/prefix comparisons of parent/independent keys should measure first cache/prompt, uncached input, and time; reconsider keys absent benefits. Semantics/confidence: [delegation](tool-delegation.md), [ADR 0015](adr/0015-agent-fork.md).
 
 ## Summaries and Session resume
 
@@ -174,6 +180,12 @@ Local `python3 tests/test_codex_websocket.py` covers increments, prefix/config c
 Compare same ReleaseFast binary/model/effort; record source commit, wrappers, actual binary hashes. Bench clears external NIB_*; wrappers must set NIB_CODEX_TRANSPORT=sse/websocket. Use independent Sessions/interleaved runs, separating cold first and later Steps.
 
 python3 `scripts/stats.py` `<log-directory>` --group-by transport --json compares actual model_ms/first_data_ms/code_first_ms, checking incremental/input_items/input_bytes/transport_fallback. Group full_reason for full-input causes. SSE fallback Steps include WS costs, not pure SSE. Judge success, Steps, tokens/cache, total wall time together; mocks prove no performance benefit. [Logs](session-log.md#step-transport-fields).
+
+## Fast mode
+
+On a supported Codex GPT model, use `/fast` while idle to request Fast mode for subsequent Turns in the same Session. Run `/fast` again to return to Standard. The setting is saved as `fast = true` or `fast = false` under `[codex]` in `config.toml`; it also applies to `nib ask`. The default is Standard, and other providers and unsupported models are unaffected.
+
+Fast mode requests `service_tier: "priority"` on WebSocket and SSE, including during transport fallback. Changing the tier opens a fresh WebSocket and sends full history on the next request. It does not change the model or reasoning effort. The new-Session heading shows **Fast** when requested, as does the bottom-right of the input frame in Normal mode. Like **Fast requested** in `/status`, this describes the local setting, not the tier actually used by the backend. Availability depends on your model and account, and Fast can use more of your allowance or credits. See [Codex Fast mode](https://developers.openai.com/codex/speed).
 
 ## Reasoning summaries
 

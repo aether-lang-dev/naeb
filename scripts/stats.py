@@ -492,8 +492,12 @@ def mechanical_step(codes, recorded_step, recordings):
 
 
 def header_group(header, group_by):
-    field = {'version': 'naeb_version', 'system': 'system_sha', 'patches': 'patches_off', 'profile': 'profile'}[group_by]
+    field = {'version': 'naeb_version', 'system': 'system_sha', 'patches': 'patches_off', 'profile': 'profile', 'tuning': 'tuning'}[group_by]
     value = header.get(field)
+    if group_by == 'tuning':
+        if isinstance(value, dict) and value and all(isinstance(k, str) and isinstance(v, str) for k, v in value.items()):
+            return ','.join(f'{k}={v}' for k, v in sorted(value.items()))
+        return 'unknown'
     if group_by != 'patches':
         return value if isinstance(value, str) and value.strip() else 'unknown'
     if field not in header:
@@ -777,14 +781,26 @@ class AgentStats:
                     pending[task_id]['terminal'] = True
                     self.complete(task_id, pending)
             return
-        for message in record['messages']:
-            if message.get('source') not in ('background', 'background_agent'):
-                continue
-            task_id = message.get('background_id', message.get('background_agent_id'))
-            kind = message.get('background_kind', 'agent')
-            if isinstance(task_id, str) and task_id in pending and pending[task_id]['kind'] == kind:
-                pending[task_id]['result'] = completed_steps
-                self.complete(task_id, pending)
+        deliveries = record.get('deliveries')
+        if isinstance(deliveries, list):
+            for delivery in deliveries:
+                event = delivery.get('event') if isinstance(delivery, dict) else None
+                if not isinstance(event, dict):
+                    continue
+                task_id = event.get('id')
+                if isinstance(task_id, str) and task_id in pending and pending[task_id]['kind'] == event.get('kind'):
+                    pending[task_id]['terminal'] = True
+                    pending[task_id]['result'] = completed_steps + (is_step and delivery.get('via') == 'fold')
+                    self.complete(task_id, pending)
+        else:
+            for message in record['messages']:
+                if message.get('source') not in ('background', 'background_agent'):
+                    continue
+                task_id = message.get('background_id', message.get('background_agent_id'))
+                kind = message.get('background_kind', 'agent')
+                if isinstance(task_id, str) and task_id in pending and pending[task_id]['kind'] == kind:
+                    pending[task_id]['result'] = completed_steps
+                    self.complete(task_id, pending)
         if not is_step:
             return
         calls = record.get('calls')
@@ -1031,7 +1047,7 @@ def records(path):
                     yield record
                     continue
                 messages = record.get('messages')
-                if not number(record.get('from')) or not isinstance(messages, list) or not messages:
+                if not number(record.get('from')) or not isinstance(messages, list) or (not messages and not record.get('deliveries')):
                     continue
                 if not all(isinstance(m, dict) and m.get('role') in ('system', 'user', 'assistant', 'tool')
                            and (m.get('content') is None or isinstance(m['content'], str))
@@ -1058,7 +1074,7 @@ def step_group(record, field):
 
 
 def summarize(paths, since=None, cwd=None, group_by=None, *, _systems=None, _step_filter=None):
-    if group_by not in (None, 'version', 'system', 'patches', 'profile', 'transport', 'incremental', 'full_reason'):
+    if group_by not in (None, 'version', 'system', 'patches', 'profile', 'tuning', 'transport', 'incremental', 'full_reason'):
         raise ValueError('invalid group_by')
     paths = list(paths)
     if _systems is None:
@@ -1160,6 +1176,8 @@ def summarize(paths, since=None, cwd=None, group_by=None, *, _systems=None, _ste
                 if include:
                     session_selected = True
                     time_filter['selected_records_with_at' if has_at else 'selected_records_using_mtime'] += 1
+                continue
+            if isinstance(record.get('source'), dict):
                 continue
             diagnostic = isinstance(record.get('diagnostic'), dict)
             lifecycle = isinstance(record.get('background') or record.get('background_agent'), dict)
@@ -1275,7 +1293,7 @@ def summarize(paths, since=None, cwd=None, group_by=None, *, _systems=None, _ste
                         step_codes.append(None)
                         continue
                     function = call['function']
-                    if function.get('name') != 'run':
+                    if function.get('name') not in ('run', 'rerun'):
                         step_codes.append(None)
                         continue
                     totals['runs'] += 1
@@ -1291,6 +1309,8 @@ def summarize(paths, since=None, cwd=None, group_by=None, *, _systems=None, _ste
                     except (ValueError, TypeError, RecursionError):
                         args = None
                     code = args.get('code') if isinstance(args, dict) else None
+                    if code is None:
+                        code = next((m.get('executed_source') for m in messages if m.get('tool_call_id') == call.get('id')), None)
                     step_codes.append(code)
                     step_runs[-1] = (call_id, code, None)
                     if isinstance(code, str):
@@ -1398,7 +1418,7 @@ def summarize(paths, since=None, cwd=None, group_by=None, *, _systems=None, _ste
                               _step_filter=(group_by, key) if group_by in ('transport', 'incremental', 'full_reason') else None)
             if group['overall']['sessions']:
                 report['groups'][key] = group
-        report['notes'][0] += (' --group-by transport/incremental/full_reason groups complete Steps by actual transport/continuation state; one session may appear in multiple groups; missing fields mean unknown. Filter by record; mixed-transport Turns are not complete wall-time samples. Other groups use header naeb_version/system_sha/patches_off/profile; '
+        report['notes'][0] += (' --group-by transport/incremental/full_reason groups complete Steps by actual transport/continuation state; one session may appear in multiple groups; missing fields mean unknown. Filter by record; mixed-transport Turns are not complete wall-time samples. Other groups use header naeb_version/system_sha/patches_off/profile/tuning; '
             'missing/invalid values mean unknown; missing patches_off with valid naeb_version or system_sha means none; '
             'explicitly empty patch sets also mean none; patch arrays group as deduplicated sorted sets, with the complete core report recomputed per group.')
     return report
@@ -1543,7 +1563,7 @@ def main():
     parser.add_argument('paths', nargs='*', type=Path, help='session JSONL files or directories')
     parser.add_argument('--since', type=date.fromisoformat, metavar='YYYY-MM-DD', help='record date, inclusive, local time; legacy records fall back to file modification time')
     parser.add_argument('--cwd', type=Path, help='exact session working directory')
-    parser.add_argument('--group-by', choices=('version', 'system', 'patches', 'profile', 'transport', 'incremental', 'full_reason'), help='group by session metadata, actual Step transport, incremental state or full-request reason')
+    parser.add_argument('--group-by', choices=('version', 'system', 'patches', 'profile', 'tuning', 'transport', 'incremental', 'full_reason'), help='group by session metadata, actual Step transport, incremental state or full-request reason')
     parser.add_argument('--json', action='store_true', help='emit JSON instead of text')
     args = parser.parse_args()
     inputs = args.paths or [Path(os.environ.get('NAEB_HOME', '~/.nib')).expanduser() / 'sessions']

@@ -59,6 +59,7 @@ pub const Activity = struct {
 pub const Status = struct {
     cfg: provider.Config,
     hovered: ?usize = null,
+    hovered_row: ?u16 = null,
     hover_bg: @import("vaxis").Color = .default,
     user_bg: @import("vaxis").Color = .default,
     code_bg: @import("vaxis").Color = .default,
@@ -79,6 +80,10 @@ pub const Status = struct {
     title: []const u8 = "",
     revision: usize = 0,
     new_output: bool = false,
+
+    pub fn fastRequested(s: Status) bool {
+        return !s.signed_out and s.cfg.codexServiceTier() != null;
+    }
 
     pub fn activityStyle(s: Status) @import("vaxis").Style {
         if (s.busy) |b| {
@@ -175,9 +180,19 @@ pub const Text = struct {
 
     pub fn footer(text: *Text, s: Status, width: u16) []const u8 {
         if (s.signed_out) return if (width >= 14) "Not signed in" else "";
-        var line = if (s.context > 0) std.fmt.bufPrint(&text.status, "{s} · context {d}%", .{ s.cfg.model, s.context * 100 / @max(s.cfg.context_window, 1) }) catch "" else s.cfg.model;
+        const fast = s.fastRequested();
+        const fast_only = if (fast and width >= 4) "Fast" else "";
+        const model = s.cfg.model;
+        const suffix = if (fast) " · Fast" else "";
+        var line = if (s.context > 0)
+            std.fmt.bufPrint(&text.status, "{s}{s} · context {d}%", .{ model, suffix, s.context * 100 / @max(s.cfg.context_window, 1) }) catch return fast_only
+        else if (fast)
+            std.fmt.bufPrint(&text.status, "{s}{s}", .{ model, suffix }) catch return fast_only
+        else
+            model;
         while (@import("vaxis").gwidth.gwidth(line, .unicode) > width) {
-            const separator = std.mem.lastIndexOf(u8, line, " · ") orelse return "";
+            const separator = std.mem.lastIndexOf(u8, line, " · ") orelse return fast_only;
+            if (fast and std.mem.eql(u8, line[separator..], suffix)) return fast_only;
             line = line[0..separator];
         }
         return line;

@@ -13,7 +13,7 @@ import tempfile
 import threading
 import unittest
 
-BINARY = Path(__file__).resolve().parents[1] / 'zig-out/bin/nib'
+BINARY = Path(__file__).resolve().parents[1] / 'ae/tests/run-unfenced'
 
 class Update(unittest.TestCase):
     def setUp(self):
@@ -48,7 +48,7 @@ class Update(unittest.TestCase):
         self.assertEqual(result.stderr, '')
         self.assertEqual(self.target.stat().st_mode & 0o777, 0o755)
         self.assertEqual(subprocess.check_output([self.target], text=True), 'nib 9.9.9\n')
-        self.assertEqual(list(self.target.parent.glob('.nib-*')), [])
+        self.assertEqual(list(self.target.parent.glob('.naeb-*')), [])
 
     def test_checksum_failure(self):
         original = self.target.read_bytes()
@@ -57,7 +57,7 @@ class Update(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(len(result.stderr.splitlines()), 1)
         self.assertEqual(self.target.read_bytes(), original)
-        self.assertEqual(list(self.target.parent.glob('.nib-*')), [])
+        self.assertEqual(list(self.target.parent.glob('.naeb-*')), [])
 
     def test_same_version(self):
         result = self.run_update(self.current)

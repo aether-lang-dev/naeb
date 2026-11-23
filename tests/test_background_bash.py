@@ -697,8 +697,8 @@ class BackgroundBashTests:
         self.assertTrue(any(r["stopped"] for r in stopped), stopped)
         self.assertTrue(all(not alive(pid) for pid in pids))
         self.assertEqual(len(self.completions(history(self.home))), 1)
-        finished = [r["background"] for r in root_records(self.home)
-                    if r.get("background", {}).get("state") == "finished"]
+        finished = [d["event"] for r in root_records(self.home) for d in r.get("deliveries", [])
+                    if d["event"]["state"] == "finished"]
         self.assertEqual([r["id"] for r in finished], ["b1"])
         self.assert_accounting(mock)
 
@@ -917,9 +917,10 @@ class BackgroundBashTests:
         execution = lifecycle[-1]["execution"]
         self.assertGreater(execution["start_ms_epoch"], 0)
         self.assertGreater(execution["end_ms_epoch"], execution["start_ms_epoch"])
-        finished = [r for r in root_records(self.home) if r.get("background", {}).get("state") == "finished"]
-        self.assertEqual(finished[-1]["background"]["execution"], execution)
-        self.assertLessEqual(execution["end_ms_epoch"], finished[-1]["at"])
+        event, at = [(d["event"], r["at"]) for r in root_records(self.home) for d in r.get("deliveries", [])
+                     if d["event"]["state"] == "finished"][-1]
+        self.assertEqual(event["execution"], execution)
+        self.assertLessEqual(execution["end_ms_epoch"], at)
 
         log = self.log(events)
         stored = [m for r in log for m in r.get("messages", []) if m.get("source") == "background"]
@@ -970,6 +971,12 @@ class BackgroundBashTests:
         self.assert_accounting(mock, events)
         self.assertGreater(len(content(message).encode("utf-8")), len(content(message)))
         self.assertIn("中文🙂", content(message))
+        saved_match = re.search(r"\[full output: ([^\]]+)\]", content(message))
+        self.assertIsNotNone(saved_match, content(message)[-240:])
+        saved_text = Path(saved_match.group(1)).read_text()
+        self.assertTrue(saved_text.startswith("exit_code: 0\n\nhead:"))
+        self.assertIn(":tail", saved_text)
+        self.assertGreater(len(saved_text.encode("utf-8")), 16 * 1024)
 
     def test_nonzero_exit_is_result(self):
         mock = self.mock("nonzero")
@@ -1020,9 +1027,9 @@ class BackgroundBashTests:
         mock = self.mock("limit")
         process = self.start()
         wait_for(lambda: len(list(self.cwd.glob("*.started"))) == 1)
-        # One command is reused, so eight jobs start and each appends to the same marker.
-        wait_for(lambda: len([e for e in records(next((self.home / "sessions").glob("?" * 32 + ".jsonl")))
-                              if e.get("background", {}).get("state") == "started"]) == 8)
+        # Keep workers blocked until the ninth admission attempt has completed.
+        log = next((self.home / "sessions").glob("?" * 32 + ".jsonl"))
+        wait_for(lambda: any(row.get("run_results") for row in records(log)))
         self.release()
         events = self.finish(process)
         output = next(e["run_end"]["output"] for e in events if "run_end" in e)

@@ -5,6 +5,8 @@ const End = @import("sandbox/record.zig").End;
 const output = @import("session/output.zig");
 const Allocator = std.mem.Allocator;
 const Value = std.json.Value;
+const session_log = @import("session/log.zig");
+const RunCompletion = @import("session/events.zig").RunCompletion;
 
 const Key = struct {
     step: usize,
@@ -64,11 +66,13 @@ fn parseOptions(args: []const []const u8) !Options {
 }
 
 const Run = struct {
+    source_reference: bool = false,
     key: Key,
     code: []const u8,
     expected: ?[]const u8,
     child: bool = false,
     remaining_steps: ?usize = null,
+    background_id: ?[]const u8 = null,
 };
 
 fn field(v: Value, name: []const u8) !Value {
@@ -102,14 +106,40 @@ fn parse(a: Allocator, line: []const u8) !Value {
     return std.json.parseFromSliceLeaky(Value, a, line, .{ .allocate = .alloc_always }) catch return error.InvalidReplayLog;
 }
 
+fn applyCompletion(runs: []Run, id: ?[]const u8, completion: RunCompletion) void {
+    const key: Key = .{ .step = completion.step, .run = completion.run_index };
+    for (runs) |*item| {
+        if (!item.key.eql(key)) continue;
+        if (item.background_id) |expected_id| if (id) |actual_id| {
+            if (!std.mem.eql(u8, expected_id, actual_id)) return;
+        };
+        item.expected = completion.output;
+        item.remaining_steps = null;
+        item.source_reference = completion.source_reference orelse item.source_reference;
+        return;
+    }
+}
+
+fn applyBackground(a: Allocator, runs: []Run, event: Value) !void {
+    if (try optionalString(event, "state")) |state| {
+        if (!std.mem.eql(u8, state, "finished")) return;
+    }
+    if (event.object.get("completion")) |value| if (value != .null) {
+        const completion = try std.json.parseFromValueLeaky(RunCompletion, a, value, .{ .ignore_unknown_fields = true });
+        applyCompletion(runs, try optionalString(event, "id"), completion);
+    };
+}
+
 // Replacement records and fork headers retain assistant messages, not new Steps.
-fn loadMain(a: Allocator, data: []const u8) ![]Run {
+pub fn loadMain(a: Allocator, data: []const u8) ![]Run {
     var runs: std.ArrayList(Run) = .empty;
+    var sources: std.ArrayList(session_log.Source) = .empty;
     var length: usize = 0;
     var step: usize = 0;
     var torn = false;
     var records: usize = 0;
     var child = false;
+    var fold_legacy_output = false;
     var lines = std.mem.splitScalar(u8, data, '\n');
     while (lines.next()) |line| {
         if (lines.peek() == null) break;
@@ -119,6 +149,14 @@ fn loadMain(a: Allocator, data: []const u8) ![]Run {
             continue;
         };
         if (record != .object) return error.InvalidReplayLog;
+        if (record.object.get("source")) |source| {
+            const value = try std.json.parseFromValueLeaky(session_log.Source, a, source, .{});
+            try sources.append(a, value);
+            for (runs.items) |*item| if (item.key.step == value.step and item.key.run == value.run) {
+                item.source_reference = value.failed;
+            };
+            continue;
+        }
         if (record.object.get("repair")) |repair| {
             if (repair == .bool and repair.bool) {
                 torn = false;
@@ -128,37 +166,55 @@ fn loadMain(a: Allocator, data: []const u8) ![]Run {
         if (torn) return error.InvalidReplayLog;
         if (record.object.get("diagnostic")) |d| if (d != .null) continue;
         if (record.object.get("agent_session")) |mapping| if (mapping != .null) continue;
-        if (record.object.get("background")) |b| if (b != .null) continue;
+        if (record.object.get("background")) |b| if (b != .null) {
+            try applyBackground(a, runs.items, b);
+            continue;
+        };
         if (record.object.get("bash")) |b| if (b != .null) continue;
         if (record.object.get("task_stop")) |stop| if (stop != .null) continue;
         if (record.object.get("sandbox_unavailable")) |reason| if (reason != .null) continue;
+        if (record.object.get("hook")) |hook| if (hook != .null) continue;
         const messages: []const Value = if (record.object.get("messages")) |v| try array(v) else &.{};
         if (messages.len == 0 and (try optionalString(record, "transport_fallback")) != null) continue;
         const from = if (record.object.get("from")) |v| try natural(v) else 0;
         if (from > length) return error.InvalidReplayLog;
-        if (records == 0) child = (try optionalString(record, "parent_session_id")) != null;
+        if (records == 0) {
+            child = (try optionalString(record, "parent_session_id")) != null;
+            if (record.object.get("tuning")) |tuning| {
+                if (tuning == .object) fold_legacy_output = std.mem.eql(u8, try optionalString(tuning, "delivery") orelse "", "tool");
+            }
+        }
         const appended = from == length;
         length = std.math.add(usize, from, messages.len) catch return error.InvalidReplayLog;
         records += 1;
         if (!appended) continue;
         if (record.object.get("forked_from")) |fork| if (fork != .null) continue;
+        const deliveries = record.object.get("deliveries");
         for (messages, 0..) |message, m| {
-            if (message.object.get("background_run")) |completion| if (completion != .null) {
-                const key: Key = .{ .step = try natural(try field(completion, "step")), .run = try natural(try field(completion, "run_index")) };
-                for (runs.items) |*item| if (item.key.eql(key)) {
-                    item.expected = try string(try field(completion, "output"));
-                    item.remaining_steps = null;
+            if (deliveries == null or deliveries.? == .null) {
+                if (message.object.get("background_run")) |value| if (value != .null) {
+                    const completion = try std.json.parseFromValueLeaky(RunCompletion, a, value, .{ .ignore_unknown_fields = true });
+                    applyCompletion(runs.items, try optionalString(message, "background_id"), completion);
                 };
-            };
+            }
             if (!std.mem.eql(u8, try string(try field(message, "role")), "assistant")) continue;
             step += 1;
             const calls_value = message.object.get("tool_calls") orelse continue;
             if (calls_value == .null) continue;
             for (try array(calls_value), 0..) |call, index| {
                 const function = try field(call, "function");
-                if (!std.mem.eql(u8, try string(try field(function, "name")), "run")) continue;
+                const name = try string(try field(function, "name"));
+                if (!std.mem.eql(u8, name, "run") and !std.mem.eql(u8, name, "rerun")) continue;
                 const arguments = parse(a, try string(try field(function, "arguments"))) catch continue;
-                const code = optionalString(arguments, "code") catch continue;
+                const code = if (std.mem.eql(u8, name, "rerun")) resolved: {
+                    var source_index = sources.items.len;
+                    while (source_index > 0) {
+                        source_index -= 1;
+                        const source = sources.items[source_index];
+                        if (source.step == step and source.run == index) break :resolved @as(?[]const u8, source.code);
+                    }
+                    break :resolved @as(?[]const u8, null);
+                } else optionalString(arguments, "code") catch continue;
                 if (code == null) continue;
                 const id = try string(try field(call, "id"));
                 var expected: ?[]const u8 = null;
@@ -174,10 +230,21 @@ fn loadMain(a: Allocator, data: []const u8) ![]Run {
                     }
                 }
                 var remaining_steps: ?usize = null;
+                var background_id: ?[]const u8 = null;
                 if (record.object.get("run_results")) |results| {
                     if (results != .null) for (try array(results)) |result| {
                         if (std.mem.eql(u8, id, try string(try field(result, "tool_call_id")))) {
-                            if (try optionalString(result, "background_id")) |_| expected = null;
+                            background_id = try optionalString(result, "background_id");
+                            if (background_id != null) {
+                                expected = null;
+                            } else if (try optionalString(result, "output")) |own| {
+                                expected = own;
+                            } else if (fold_legacy_output and deliveries == null) {
+                                // Older folded messages left their original byte length in run_results.
+                                if (result.object.get("output_bytes")) |bytes| if (bytes != .null) {
+                                    if (expected) |text| expected = text[0..@min(text.len, try natural(bytes))];
+                                };
+                            }
                             if (result.object.get("remaining_steps")) |remaining| {
                                 if (remaining != .null) remaining_steps = try natural(remaining);
                             }
@@ -185,9 +252,20 @@ fn loadMain(a: Allocator, data: []const u8) ![]Run {
                         }
                     };
                 }
-                try runs.append(a, .{ .key = .{ .step = step, .run = index }, .code = code.?, .expected = expected, .child = child, .remaining_steps = remaining_steps });
+                var source_reference = false;
+                for (sources.items) |source| if (source.step == step and source.run == index) {
+                    source_reference = source.failed;
+                };
+                try runs.append(a, .{ .source_reference = source_reference, .key = .{ .step = step, .run = index }, .code = code.?, .expected = expected, .child = child, .remaining_steps = remaining_steps, .background_id = background_id });
             }
         }
+        if (deliveries) |value| if (value != .null) {
+            const committed = try std.json.parseFromValueLeaky([]const session_log.Delivery, a, value, .{ .ignore_unknown_fields = true });
+            for (committed) |delivery| {
+                if (delivery.event.state != .finished) continue;
+                if (delivery.event.completion) |completion| applyCompletion(runs.items, delivery.event.id, completion);
+            }
+        };
     }
     if (records == 0) return error.InvalidReplayLog;
     return runs.toOwnedSlice(a);
@@ -293,10 +371,14 @@ const Report = struct {
     end: ?End = null,
 };
 
-fn replayOne(a: Allocator, io: std.Io, original: Run, recording: Recording, script: ?[]const u8) !Report {
+fn replayOne(a: Allocator, io: std.Io, original: Run, recording: Recording, script: ?[]const u8, outputs_dir: ?[]const u8) !Report {
     const evaluated = try core.executeSession(a, io, script orelse original.code, recording.entries.items, recording.start_ms_epoch, recording.end orelse .ok, script != null, original.child);
     defer evaluated.deinit(a);
-    const text = try output.stepLimitOutput(a, try output.format(a, evaluated.outcome, recording.run_output_bytes), original.remaining_steps);
+    const expect_saved = if (original.expected) |exp| std.mem.indexOf(u8, exp, "[full output") != null else false;
+    const save: ?output.Save = if (expect_saved) if (outputs_dir) |dir| .{ .io = io, .dir = dir, .write = false } else null else null;
+    const formatted = try output.formatSaved(a, evaluated.outcome, recording.run_output_bytes, save);
+    const referenced = if (original.source_reference) try std.fmt.allocPrint(a, "{s}\nSource: {d}:{d} (rerun executes from the beginning; prior effects may repeat)", .{ formatted, original.key.step, original.key.run }) else formatted;
+    const text = try output.stepLimitOutput(a, referenced, original.remaining_steps);
     const incomplete = recording.incomplete or evaluated.incomplete or original.expected == null;
     const determined = script == null and !incomplete and recording.end != .timeout and recording.end != .cancelled;
     const equal = if (original.expected) |expected| std.mem.eql(u8, expected, text) else false;
@@ -329,8 +411,10 @@ pub fn run(init: std.process.Init, args: []const []const u8, stdout: *std.Io.Wri
     const home = try config.home(a, init.environ_map);
     const main_name = try std.fmt.allocPrint(a, "{s}.jsonl", .{options.id});
     const calls_name = try std.fmt.allocPrint(a, "{s}.calls.jsonl", .{options.id});
+    const outputs_name = try std.fmt.allocPrint(a, "{s}.outputs", .{options.id});
     const main_path = try std.fs.path.join(a, &.{ home, "sessions", main_name });
     const calls_path = try std.fs.path.join(a, &.{ home, "sessions", calls_name });
+    const outputs_dir = try std.fs.path.join(a, &.{ home, "sessions", outputs_name });
     const data = try std.Io.Dir.cwd().readFileAlloc(init.io, main_path, a, .unlimited);
     const runs = try loadMain(a, data);
     const calls = std.Io.Dir.cwd().readFileAlloc(init.io, calls_path, a, .unlimited) catch |err| switch (err) {
@@ -361,7 +445,7 @@ pub fn run(init: std.process.Init, args: []const []const u8, stdout: *std.Io.Wri
                 undetermined += 1;
                 continue;
             };
-            const report = try replayOne(a, init.io, original, recording, null);
+            const report = try replayOne(a, init.io, original, recording, null, outputs_dir);
             try reports.append(a, report);
             if (report.divergence) |d| try differences.append(a, .{ .run = report.run, .divergence = d });
             if (report.match) |match| {
@@ -381,7 +465,7 @@ pub fn run(init: std.process.Init, args: []const []const u8, stdout: *std.Io.Wri
         const key = options.key.?;
         const original = findRun(runs, key) orelse return error.ReplayRunNotFound;
         const recording = recordingFor(recordings, key) orelse return error.ReplayMetadataNotFound;
-        const report = try replayOne(a, init.io, original, recording.*, script);
+        const report = try replayOne(a, init.io, original, recording.*, script, outputs_dir);
         if (options.json) {
             try writeJson(stdout, report);
         } else {
@@ -534,7 +618,7 @@ test "optional incomplete metadata distinguishes pending and settled ordinary er
     try t.expect(!recordings[1].incomplete);
     try t.expect(!recordings[2].incomplete);
     const pending: Run = .{ .key = .{ .step = 1, .run = 0 }, .code = "tools.read(); throw new Error('boom')", .expected = "Error: boom" };
-    const report = try replayOne(arena.allocator(), t.io, pending, recordings[0], null);
+    const report = try replayOne(arena.allocator(), t.io, pending, recordings[0], null, null);
     try t.expect(report.incomplete);
     try t.expect(report.match == null);
     try t.expect(report.divergence != null);

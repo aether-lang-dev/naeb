@@ -27,7 +27,7 @@ def replay(path):
     for line in path.read_text().splitlines():
         record = json.loads(line)
         records.append(record)
-        if not record.get("repair") and not record.get("diagnostic") and not record.get("bash") and not record.get("task_stop"):
+        if not record.get("source") and not record.get("repair") and not record.get("diagnostic") and not record.get("bash") and not record.get("task_stop"):
             history[record["from"]:] = record["messages"]
     return history, records
 
@@ -163,11 +163,15 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
         assert headers["authorization"] == "Bearer fake-access-initial"
         assert headers["chatgpt-account-id"] == "fake-account-initial"
         assert headers["openai-beta"] == "responses=experimental" and headers["originator"] == "nib"
-        assert body["model"] == "gpt-6.1-sol" and body["store"] is False and body["stream"] is True
-        assert "You are naeb" in body["instructions"]
-        assert "effort-specific" not in body["instructions"] and "run's effort" not in body["instructions"]
+        assert body["model"] == "gpt-6.2-sol" and body["store"] is False and body["stream"] is True
+        assert body["instructions"] == "You are a helpful assistant."
+        assert body["input"][0]["role"] == "developer"
+        system_text = body["input"][0]["content"]
+        assert "You are naeb" in system_text
+        assert "effort-specific" not in system_text and "run's effort" not in system_text
         assert "reasoning.encrypted_content" in body["include"]
         assert "messages" not in body
+        assert body["tools"][1]["type"] == "function" and body["tools"][1]["name"] == "rerun"
         tool = body["tools"][0]
         assert tool["type"] == "custom" and tool["name"] == "run"
         assert tool["format"]["type"] == "grammar" and tool["format"]["syntax"] == "lark"
@@ -176,8 +180,8 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
         session = plain[0]["start"]["session_id"]
         assert_cache_key([request], session)
         history, records = replay(tmp / f"nib/sessions/{session}.jsonl")
-        assert records[0]["provider"] == "codex" and records[0]["model"] == "gpt-6.1-sol"
-        base = body["instructions"].split("\n\nInstructions below apply in order; later instructions take priority.\n", 1)[0]
+        assert records[0]["provider"] == "codex" and records[0]["model"] == "gpt-6.2-sol"
+        base = system_text.split("\n\nInstructions below apply in order; later instructions take priority.\n", 1)[0]
         assert records[0]["system_sha"] == hashlib.sha256(base.encode()).hexdigest()[:12]
         reasoning = history[-1]["reasoning"]
         assert reasoning["provider"] == "codex"
@@ -195,8 +199,10 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
         assert not any(e.get("delta", {}).get("kind") == "reasoning" for e in disabled)
 
         before = len(requests())
-        ask("plain text", overrides={"NAEB_MODEL": "gpt-6.1-sol", "NAEB_THINKING": "off"})
-        assert requests()[-1]["body"]["reasoning"]["effort"] == "low"
+        for model in ("gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol"):
+            ask("plain text", overrides={"NAEB_MODEL": model, "NAEB_THINKING": "off"})
+            assert requests()[-1]["body"]["model"] == model
+            assert requests()[-1]["body"]["reasoning"]["effort"] == "low"
         large = ask("large reasoning")
         large_id = large[0]["start"]["session_id"]
         large_history, _ = replay(tmp / f"nib/sessions/{large_id}.jsonl")
@@ -235,7 +241,7 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
             assert_timing(timed_records, final_only=prompt == "timing final only")
         print("Codex timing E2E passed: streamed/final-only UTF-8 arguments, model latency and per-tool Run timing")
         for prompt in ("syntax recovery", "runtime recovery"):
-            recovered = ask(prompt)
+            recovered = ask(prompt, overrides={"NAEB_RECORD": "on"})
             recovered_id = recovered[0]["start"]["session_id"]
             _, recovery_records = replay(tmp / f"nib/sessions/{recovered_id}.jsonl")
             results = [r for record in recovery_records for r in record.get("run_results", [])]
@@ -346,7 +352,8 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
             assert report["errors"]["provider_failure"]["count"] == 1, report
             assert report["overall"]["steps"] == 0 and report["usage"]["total_tokens"] == 0, report
             ask("plain text", "--resume", failed_id)
-            assert requests()[-1]["body"]["input"] == [{"role": "user", "content": "plain text"}], requests()[-1]
+            resumed_input = requests()[-1]["body"]["input"]
+            assert len(resumed_input) == 2 and resumed_input[0]["role"] == "developer" and resumed_input[1] == {"role": "user", "content": "plain text"}, requests()[-1]
         retrying = subprocess.Popen([str(BIN), "ask", "--json", "stream retry cancel"], cwd=cwd, env=env,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
@@ -400,7 +407,7 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
         assert compact_id not in (session, tool_id, parent_id, child_id)
         assert_cache_key(requests()[before:], compact_id)
         summaries = [r["body"] for r in requests()[before:] if not r["body"].get("tools")]
-        assert summaries and all(body["reasoning"]["effort"] == "low" and body["model"] == "gpt-6.1-sol" for body in summaries), summaries
+        assert summaries and all(body["reasoning"]["effort"] == "low" and body["model"] == "gpt-6.2-sol" for body in summaries), summaries
         assert all("max_tokens" not in body and "max_output_tokens" not in body for body in summaries)
         assert all("Keep the summary within" in body["input"][-1]["content"] for body in summaries)
         for scenario in ("summary empty", "summary truncated"):
@@ -459,11 +466,32 @@ with tempfile.TemporaryDirectory(prefix="nib-codex-e2e-") as directory:
             assert len(requests()) == before + expected, failed
             assert records[-1]["diagnostic"]["message"] == failed[-1]["error"]["message"]
             assert records[-1]["diagnostic"]["attempts"] == expected
-        before = len(requests())
-        changed_model = ask("plain text", "--resume", session, ok=False, overrides={"NAEB_MODEL": "gpt-6-sol"})
-        assert "different model" in changed_model[-1]["error"]["message"]
-        assert len(requests()) == before
         print("Codex 401 reread, repeated-401 login guidance, credentials and tool isolation passed")
+
+        changed_cfg = {"NAEB_MODEL": "gpt-6-sol"}
+        changed_model = ask("plain text", "--resume", tool_id, overrides=changed_cfg)
+        assert changed_model[0]["start"]["session_id"] == tool_id
+        body = requests()[-1]["body"]
+        assert body["model"] == "gpt-6-sol"
+        assert not any(item.get("type") == "reasoning" for item in body["input"])
+        assert any(item.get("role") == "assistant" and "hello from codex mock" in item.get("content", "") for item in body["input"])
+        for item in (call, result):
+            restored = next(i for i in body["input"] if i.get("type") == item["type"])
+            assert restored["call_id"] == item["call_id"]
+            field = "input" if item is call else "output"
+            assert restored[field] == item[field]
+
+        mixed_history, _ = replay(tmp / f"nib/sessions/{tool_id}.jsonl")
+        original_items = [i for m in mixed_history[:-1] if m.get("reasoning") for i in json.loads(m["reasoning"]["data"]) if i["type"] == "reasoning"]
+        changed_items = [i for i in json.loads(mixed_history[-1]["reasoning"]["data"]) if i["type"] == "reasoning"]
+        assert original_items and changed_items
+        ask("plain text", "--resume", tool_id, overrides=changed_cfg)
+        replayed = [i for i in requests()[-1]["body"]["input"] if i.get("type") == "reasoning"]
+        assert replayed == changed_items
+        ask("plain text", "--resume", tool_id)
+        replayed = [i for i in requests()[-1]["body"]["input"] if i.get("type") == "reasoning"]
+        assert replayed == original_items
+        print("Codex cross-model resume preserves messages and sends only matching encrypted reasoning")
 
         config_path = tmp / "nib/config.toml"
         config_text = ('# Keep this comment and both provider sections.\n'

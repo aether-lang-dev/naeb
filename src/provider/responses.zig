@@ -9,6 +9,8 @@ const image = @import("../image.zig");
 
 const Model = p.Model;
 pub const models = [_]Model{
+    .{ .id = "gpt-6.2-sol", .context_window = 500_000, .can_disable_reasoning = false },
+    .{ .id = "gpt-6.2-astra", .context_window = 272_000, .can_disable_reasoning = false },
     .{ .id = "gpt-6.1-terra", .context_window = 500_000 },
     .{ .id = "gpt-6.1-sol", .context_window = 500_000, .can_disable_reasoning = false },
     .{ .id = "gpt-6-astra", .context_window = 272_000, .can_disable_reasoning = false },
@@ -18,7 +20,7 @@ pub const models = [_]Model{
     .{ .id = "gpt-5.6-sol", .context_window = 272_000 },
     .{ .id = "gpt-5.6-terra", .context_window = 272_000 },
 };
-pub const default_model = models[1].id;
+pub const default_model = models[0].id;
 
 fn modelInfo(id: []const u8) ?Model {
     for (models) |model| if (std.mem.eql(u8, id, model.id)) return model;
@@ -140,7 +142,8 @@ fn streamWebSocket(gpa: std.mem.Allocator, out: std.mem.Allocator, client: *std.
     const bearer = try std.fmt.allocPrint(gpa, "Bearer {s}", .{auth.access_token});
     defer gpa.free(bearer);
     var hash = std.crypto.hash.sha2.Sha256.init(.{});
-    for ([_][]const u8{ cfg.base_url, cfg.model, cache_key, bearer, auth.account_id }) |part| {
+    const tier = cfg.codexServiceTier();
+    for ([_][]const u8{ cfg.base_url, cfg.model, cache_key, bearer, auth.account_id, tier orelse "" }) |part| {
         hash.update(part);
         hash.update(&.{0});
     }
@@ -161,7 +164,7 @@ fn streamWebSocket(gpa: std.mem.Allocator, out: std.mem.Allocator, client: *std.
         const url = try std.fmt.allocPrint(gpa, "{s}/codex/responses", .{std.mem.trimEnd(u8, cfg.base_url, "/")});
         defer gpa.free(url);
         if (std.mem.indexOfAny(u8, cfg.model, "\r\n") != null) return error.WebSocketHandshake;
-        const routing = try std.fmt.allocPrint(gpa, "model={s}", .{cfg.model});
+        const routing = try routingHint(gpa, cfg.model, tier);
         defer gpa.free(routing);
         state.socket = try websocket.Connection.open(gpa, client, url, &.{
             .{ .name = "authorization", .value = bearer },
@@ -201,6 +204,13 @@ fn streamWebSocket(gpa: std.mem.Allocator, out: std.mem.Allocator, client: *std.
     unreachable;
 }
 
+fn routingHint(gpa: std.mem.Allocator, model: []const u8, tier: ?[]const u8) ![]u8 {
+    return if (tier) |value|
+        std.fmt.allocPrint(gpa, "model={s};tier={s}", .{ model, value })
+    else
+        std.fmt.allocPrint(gpa, "model={s}", .{model});
+}
+
 fn streamSse(gpa: std.mem.Allocator, out: std.mem.Allocator, client: *std.http.Client, cfg: p.Config, cache_key: []const u8, messages: []const p.Message, tools_json: []const u8, max_tokens: ?u32, sink: p.Sink, cancel: *const std.atomic.Value(bool), detail: *?[]u8, monitor: *idle.Monitor) !p.Reply {
     const body = try requestBody(gpa, client.io, cfg, cache_key, messages, tools_json, max_tokens);
     defer gpa.free(body);
@@ -213,17 +223,22 @@ fn streamSse(gpa: std.mem.Allocator, out: std.mem.Allocator, client: *std.http.C
         defer if (auth) |*value| value.deinit();
         const bearer = try std.fmt.allocPrint(gpa, "Bearer {s}", .{if (auth) |value| value.access_token else cfg.api_key});
         defer gpa.free(bearer);
+        const routing = if (cfg.codexServiceTier()) |tier| try routingHint(gpa, cfg.model, tier) else null;
+        defer if (routing) |value| gpa.free(value);
+        const codex_headers = [_]std.http.Header{
+            .{ .name = "accept", .value = "text/event-stream" },
+            .{ .name = "chatgpt-account-id", .value = if (auth) |value| value.account_id else "" },
+            .{ .name = "OpenAI-Beta", .value = "responses=experimental" },
+            .{ .name = "originator", .value = "nib" },
+            .{ .name = "session-id", .value = cache_key },
+            .{ .name = "x-client-request-id", .value = cache_key },
+            .{ .name = "x-codex-routing-hint", .value = routing orelse "" },
+        };
+        const header_count: usize = if (auth == null) 1 else if (routing == null) codex_headers.len - 1 else codex_headers.len;
         var req = try client.request(.POST, try std.Uri.parse(url), .{
             .redirect_behavior = .not_allowed,
             .headers = .{ .authorization = if (auth != null or cfg.api_key.len > 0) .{ .override = bearer } else .omit, .content_type = .{ .override = "application/json" }, .accept_encoding = .omit },
-            .extra_headers = if (auth != null) &.{
-                .{ .name = "accept", .value = "text/event-stream" },
-                .{ .name = "chatgpt-account-id", .value = auth.?.account_id },
-                .{ .name = "OpenAI-Beta", .value = "responses=experimental" },
-                .{ .name = "originator", .value = "nib" },
-                .{ .name = "session-id", .value = cache_key },
-                .{ .name = "x-client-request-id", .value = cache_key },
-            } else &.{.{ .name = "accept", .value = "text/event-stream" }},
+            .extra_headers = codex_headers[0..header_count],
         });
         defer req.deinit();
         req.transfer_encoding = .{ .content_length = body.len };
@@ -240,7 +255,7 @@ fn streamSse(gpa: std.mem.Allocator, out: std.mem.Allocator, client: *std.http.C
         const status = @backingInt(response.head.status);
         if (status == 401) {
             if (cfg.provider != .codex) {
-                detail.* = try std.fmt.allocPrint(gpa, "{s}: HTTP 401; check {s}.", .{ cfg.name(), cfg.api_key_env orelse "API key" });
+                detail.* = try std.fmt.allocPrint(gpa, "{s}: HTTP 401; check {s}.", .{ cfg.name(), cfg.keyHint() });
                 return error.HttpStatus;
             }
             if (attempt == 0) {
@@ -275,7 +290,33 @@ fn toolOutputImages(cfg: p.Config) bool {
     return cfg.provider == .codex or cfg.provider == .openai;
 }
 
-fn requestBody(gpa: std.mem.Allocator, io: std.Io, cfg: p.Config, cache_key: []const u8, messages: []const p.Message, tools_json: []const u8, max_tokens: ?u32) ![]u8 {
+const default_instructions = "You are a helpful assistant.";
+
+/// GPT-6.2+ appends top-level `instructions` after `input` outside prompt caching;
+/// reusable system prompts go in a leading `developer` input message instead.
+pub fn usesDeveloperSystem(cfg: p.Config) bool {
+    if (cfg.provider != .codex and cfg.provider != .openai) return false;
+    var name = cfg.model;
+    if (std.mem.indexOfScalar(u8, name, '/')) |slash| name = name[slash + 1 ..];
+    if (name.len < 5 or !std.ascii.eqlIgnoreCase(name[0..4], "gpt-")) return false;
+    var i: usize = 4;
+    const major_start = i;
+    while (i < name.len and std.ascii.isDigit(name[i])) : (i += 1) {}
+    if (i == major_start) return false;
+    const major = std.fmt.parseInt(u32, name[major_start..i], 10) catch return false;
+    var minor: u32 = 0;
+    if (i < name.len and name[i] == '.') {
+        i += 1;
+        const minor_start = i;
+        while (i < name.len and std.ascii.isDigit(name[i])) : (i += 1) {}
+        if (i == minor_start) return false;
+        minor = std.fmt.parseInt(u32, name[minor_start..i], 10) catch return false;
+    }
+    if (i < name.len and name[i] != '-' and name[i] != '.') return false;
+    return major > 6 or (major == 6 and minor >= 2);
+}
+
+pub fn requestBody(gpa: std.mem.Allocator, io: std.Io, cfg: p.Config, cache_key: []const u8, messages: []const p.Message, tools_json: []const u8, max_tokens: ?u32) ![]u8 {
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const a = arena.allocator();
@@ -283,14 +324,22 @@ fn requestBody(gpa: std.mem.Allocator, io: std.Io, cfg: p.Config, cache_key: []c
     const w = &input.writer;
     try w.writeByte('[');
     var separator: []const u8 = "";
-    var instructions: []const u8 = "You are a helpful assistant.";
+    const developer_system = usesDeveloperSystem(cfg);
+    var instructions: []const u8 = default_instructions;
     var pending_images: std.ArrayList(InputItem) = .empty;
     for (messages, 0..) |m, index| {
         if (std.mem.eql(u8, m.role, "system")) {
-            instructions = m.content orelse instructions;
+            if (developer_system) {
+                if (m.content) |text| if (text.len > 0) {
+                    try w.print("{s}{f}", .{ separator, std.json.fmt(.{ .role = "developer", .content = text }, .{}) });
+                    separator = ",";
+                };
+            } else {
+                instructions = m.content orelse instructions;
+            }
             continue;
         }
-        if (m.reasoning) |r| if (r.provider == cfg.provider) {
+        if (m.reasoning) |r| if (r.compatible(cfg)) {
             const items = try std.json.parseFromSliceLeaky([]const std.json.Value, a, r.data, .{});
             for (items) |raw| {
                 const item = if (r.includes_output) (try ws_state.normalize(a, raw) orelse return error.InvalidResponse) else raw;
@@ -374,9 +423,31 @@ fn requestBody(gpa: std.mem.Allocator, io: std.Io, cfg: p.Config, cache_key: []c
         try std.fmt.allocPrint(a, ",\"text\":{f}", .{std.json.fmt(.{ .format = .{ .type = "json_schema", .name = "result", .strict = true, .schema = schema } }, .{})})
     else
         "";
+    const service_tier = if (cfg.codexServiceTier()) |tier| try std.fmt.allocPrint(a, ",\"service_tier\":{f}", .{std.json.fmt(tier, .{})}) else "";
     return std.fmt.allocPrint(gpa,
-        \\{{"model":{f},"prompt_cache_key":{f},"store":false,"stream":true,"instructions":{f},"input":{s},"include":["reasoning.encrypted_content"]{s}{s}{s}}}
-    , .{ std.json.fmt(cfg.model, .{}), std.json.fmt(cache_key, .{}), std.json.fmt(instructions, .{}), input.written(), if (tools.len == 0) "" else try std.fmt.allocPrint(a, ",\"tools\":{s}", .{tool_writer.written()}), reasoning, format });
+        \\{{"model":{f},"prompt_cache_key":{f},"store":false,"stream":true,"instructions":{f},"input":{s},"include":["reasoning.encrypted_content"]{s}{s}{s}{s}}}
+    , .{ std.json.fmt(cfg.model, .{}), std.json.fmt(cache_key, .{}), std.json.fmt(instructions, .{}), input.written(), if (tools.len == 0) "" else try std.fmt.allocPrint(a, ",\"tools\":{s}", .{tool_writer.written()}), reasoning, format, service_tier });
+}
+
+test "Responses only requests Fast for supported Codex GPT models when enabled" {
+    const t = std.testing;
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { id: p.Id, model: []const u8, enabled: bool, priority: bool }{
+        .{ .id = .codex, .model = "gpt-6.2-sol", .enabled = true, .priority = true },
+        .{ .id = .codex, .model = "gpt-6.1-sol", .enabled = false, .priority = false },
+        .{ .id = .codex, .model = "unknown-model", .enabled = true, .priority = false },
+        .{ .id = .openai, .model = "gpt-6.1-sol", .enabled = true, .priority = false },
+        .{ .id = .xai, .model = "grok-4.7", .enabled = true, .priority = false },
+    };
+    for (cases) |case| {
+        const cfg: p.Config = .{ .provider = case.id, .model = case.model, .base_url = "", .api_key = "", .codex_fast = case.enabled };
+        const body = try requestBody(a, t.io, cfg, "key", &.{}, "[]", null);
+        const value = try std.json.parseFromSliceLeaky(std.json.Value, a, body, .{});
+        const tier = value.object.get("service_tier");
+        if (case.priority) try t.expectEqualStrings("priority", tier.?.string) else try t.expect(tier == null);
+    }
 }
 
 const custom_run_description = "Run JavaScript in a fresh sandbox using the tools API described in the system prompt. Send raw JavaScript, not JSON, a quoted string or markdown fences. Top-level await is allowed; the last expression's value is returned.";
@@ -657,9 +728,51 @@ pub fn retryDelayMs(message: []const u8) ?u64 {
 }
 
 test "Codex catalog context windows" {
+    try std.testing.expectEqualStrings("gpt-6.2-sol", default_model);
+    try std.testing.expectEqual(@as(u64, 500_000), try contextWindow("gpt-6.2-sol"));
+    try std.testing.expectEqual(@as(u64, 272_000), try contextWindow("gpt-6.2-astra"));
     try std.testing.expectEqual(@as(u64, 500_000), try contextWindow("gpt-6.1-sol"));
     try std.testing.expectEqual(@as(u64, 272_000), try contextWindow("gpt-6-sol"));
     try std.testing.expectError(error.UnknownCodexModelContextWindow, contextWindow("unknown"));
+}
+
+test "GPT-6.2+ on Codex and OpenAI sends system prompt as leading developer input for caching" {
+    const t = std.testing;
+    const messages = [_]p.Message{
+        .{ .role = "system", .content = "Reusable system prompt." },
+        .{ .role = "user", .content = "hello" },
+    };
+    const cases = [_]struct { provider: p.Id, model: []const u8, developer: bool }{
+        .{ .provider = .codex, .model = "gpt-6.2-sol", .developer = true },
+        .{ .provider = .codex, .model = "gpt-6.2-astra", .developer = true },
+        .{ .provider = .openai, .model = "gpt-6.2-sol", .developer = true },
+        .{ .provider = .openai, .model = "openai/gpt-6.3-pro", .developer = true },
+        .{ .provider = .codex, .model = "gpt-7-sol", .developer = true },
+        .{ .provider = .codex, .model = "gpt-6.1-sol", .developer = false },
+        .{ .provider = .codex, .model = "gpt-6-sol", .developer = false },
+        .{ .provider = .codex, .model = "gpt-5.6-sol", .developer = false },
+        .{ .provider = .xai, .model = "grok-4.7", .developer = false },
+        .{ .provider = .custom, .model = "gpt-6.2-sol", .developer = false },
+    };
+    for (cases) |case| {
+        const body = try requestBody(t.allocator, t.io, .{ .provider = case.provider, .base_url = "", .api_key = "", .model = case.model }, "cache", &messages, "[]", null);
+        defer t.allocator.free(body);
+        const parsed = try std.json.parseFromSlice(std.json.Value, t.allocator, body, .{});
+        defer parsed.deinit();
+        const object = parsed.value.object;
+        const input = object.get("input").?.array.items;
+        if (case.developer) {
+            try t.expectEqualStrings(default_instructions, object.get("instructions").?.string);
+            try t.expectEqual(@as(usize, 2), input.len);
+            try t.expectEqualStrings("developer", input[0].object.get("role").?.string);
+            try t.expectEqualStrings("Reusable system prompt.", input[0].object.get("content").?.string);
+            try t.expectEqualStrings("user", input[1].object.get("role").?.string);
+        } else {
+            try t.expectEqualStrings("Reusable system prompt.", object.get("instructions").?.string);
+            try t.expectEqual(@as(usize, 1), input.len);
+            try t.expectEqualStrings("user", input[0].object.get("role").?.string);
+        }
+    }
 }
 
 test "Codex reasoning mapping and readable summaries" {
@@ -689,6 +802,8 @@ test "Codex request body defaults to no summary and supports opt in" {
         .{ .thinking = true, .expected_effort = "medium" },
         .{ .effort = "high", .expected_effort = "high" },
         .{ .thinking = false, .expected_effort = "low" },
+        .{ .model = "gpt-6.2-astra", .thinking = false, .expected_effort = "low" },
+        .{ .model = "gpt-6.1-sol", .thinking = false, .expected_effort = "low" },
         .{ .model = "gpt-6.1-terra", .thinking = false, .expected_effort = "none" },
         .{ .effort = "none", .expected_effort = "none" },
     };
@@ -745,7 +860,7 @@ test "Codex custom and legacy history retain their wire types across tool config
         const messages = [_]p.Message{
             .{ .role = "assistant", .tool_calls = &.{.{ .id = "old", .function = .{ .name = "run", .arguments = old_args } }} },
             .{ .role = "tool", .tool_call_id = "old", .content = "42" },
-            .{ .role = "assistant", .tool_calls = &.{custom}, .reasoning = if (includes_output) .{ .provider = .codex, .data = raw, .includes_output = true } else null },
+            .{ .role = "assistant", .tool_calls = &.{custom}, .reasoning = if (includes_output) .{ .provider = .codex, .data = raw, .includes_output = true, .model = default_model } else null },
             .{ .role = "tool", .tool_call_id = "new", .content = "result" },
         };
         const cfg: p.Config = .{ .provider = .codex, .model = default_model, .api_key = "", .base_url = "", .codex_run_tool = mode };

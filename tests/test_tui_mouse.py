@@ -103,13 +103,71 @@ def test_click_and_ctrl_o_open_single_runs(tmp):
         assert "Script" not in view()
         row = title(0)
         terminal.send(mouse(0, 10, row) + mouse(0, 10, row, release=True))
-        wait_for(lambda: "script-one" in view(), "first Run opened by click")
-        assert "script-two" not in view(), view()
+        wait_for(lambda: "Details" in view(), "first Run opened by click")
+        assert "Result" not in view() and "Script" not in view(), view()
+        row = next(i for i, line in enumerate(view().split("\n")) if "Details" in line)
+        terminal.send(mouse(0, 6, row) + mouse(0, 6, row, release=True))
+        wait_for(lambda: "Script ·" in view(), "first Details opened by click")
+        assert "script-one" not in view() and "script-two" not in view(), view()
+        row = next(i for i, line in enumerate(view().split("\n")) if "Script ·" in line)
+        terminal.send(mouse(0, 5, row) + mouse(0, 5, row, release=True))
+        wait_for(lambda: "script-one" in view(), "first Script opened separately")
         terminal.send("\x0f\x1b[6~")
-        wait_for(lambda: "script-two" in view(), "latest Run opened by Ctrl+O")
+        wait_for(lambda: view().count("Details") == 2, "latest Run opened by Ctrl+O")
+        assert view().count("Script ·") == 1, view()
+        row = [i for i, line in enumerate(view().split("\n")) if "Details" in line][-1]
+        terminal.send(mouse(0, 6, row) + mouse(0, 6, row, release=True))
+        wait_for(lambda: view().count("Script ·") == 2, "latest Details opened")
+        assert "script-two" not in view(), view()
+        row = [i for i, line in enumerate(view().split("\n")) if "Script ·" in line][-1]
+        terminal.send(mouse(0, 5, row) + mouse(0, 5, row, release=True))
+        wait_for(lambda: "script-two" in view(), "latest Script opened separately")
         terminal.send("\x0f")
         wait_for(lambda: "script-two" not in view(), "latest Run closed by Ctrl+O")
         assert terminal.child.poll() is None
+
+
+def test_edit_run_shows_only_diff(tmp):
+    code = ('/* edit-script-marker */ console.log(await tools.edit('
+            '{path: "sample.txt", old_text: "before-edit", new_text: "after-edit"}));')
+    replies = [Reply("editing", code=code), Reply("edit-done")]
+    with fixture(tmp, replies) as (terminal, _, __):
+        (tmp / "sample.txt").write_text("before-edit\n")
+        terminal.send("edit the file\r")
+        terminal.wait_turn("edit-done")
+
+        def view():
+            return "\n".join(screen(terminal.read(), 120, 32))
+
+        row = next(i for i, line in enumerate(view().split("\n")) if "Run · edit" in line)
+        terminal.send(mouse(0, 10, row) + mouse(0, 10, row, release=True))
+        wait_for(lambda: "Changes" in view() and "after-edit" in view(), "edit diff opened")
+        for simple in (False, True):
+            if simple:
+                terminal.send("\x13")
+                wait_for(lambda: "context " not in view(), "simple mode")
+            shown = view()
+            assert "before-edit" in shown and "after-edit" in shown, shown
+            assert "Result" not in shown and "Script" not in shown, shown
+            assert "replaced" not in shown and "edit-script-marker" not in shown, shown
+        assert (tmp / "sample.txt").read_text() == "after-edit\n"
+
+
+def test_caught_edit_failure_keeps_result_and_script(tmp):
+    code = ('await tools.edit({path:"sample.txt",old_text:"before",new_text:"after"});'
+            'try { await tools.edit({path:"sample.txt",old_text:"missing",new_text:"unused"}); }'
+            'catch (e) { console.log("caught-edit-error", e.message); }')
+    with fixture(tmp, [Reply("editing", code=code), Reply("caught-edit-done")]) as (terminal, _, __):
+        (tmp / "sample.txt").write_text("before\n")
+        terminal.send("edit the file\r")
+        terminal.wait_turn("caught-edit-done")
+        def view():
+            return "\n".join(screen(terminal.read(), 120, 32))
+        row = next(i for i, line in enumerate(view().split("\n")) if "Run · edit" in line)
+        terminal.send(mouse(0, 10, row) + mouse(0, 10, row, release=True))
+        wait_for(lambda: "Changes" in view(), "caught edit opened")
+        shown = view()
+        assert "Result" in shown and "Script" in shown and "caught-edit-error" in shown, shown
 
 
 def test_simple_mode(tmp):
@@ -127,7 +185,7 @@ def test_simple_mode(tmp):
             return "\n".join(screen(terminal.read(), 160, 40))
 
         wait_for(lambda: "╭" + "─" * 158 + "╮" in view(), "resized normal frame")
-        wait_for(lambda: "tokens" in view(), "normal Turn footer")
+        wait_for(lambda: "context " in view(), "normal input metadata")
         terminal.send("\x13")
         wait_for(lambda: (home / "config.toml").exists() and 'ui = "simple"' in (home / "config.toml").read_text(), "Ctrl+S persistence")
         wait_for(lambda: "Ask about" not in view() and "tokens" not in view(), "Simple framed input")
@@ -139,11 +197,21 @@ def test_simple_mode(tmp):
         assert "tokens" not in view() and "mock" not in view(), view()
         row = next(i for i, line in enumerate(view().split("\n")) if "Run" in line)
         terminal.send(mouse(0, 15, row) + mouse(0, 15, row, release=True))
-        wait_for(lambda: "simple-script" in view(), "Run opens by click")
+        wait_for(lambda: "Details" in view(), "Run opens by click")
+        assert "Result" not in view() and "Script" not in view(), view()
+        row = next(i for i, line in enumerate(view().split("\n")) if "Details" in line)
+        terminal.send(mouse(0, 6, row) + mouse(0, 6, row, release=True))
+        wait_for(lambda: "Script ·" in view(), "Details opens by click")
+        assert "simple-script" not in view(), view()
+        row = next(i for i, line in enumerate(view().split("\n")) if "Script ·" in line)
+        terminal.send(mouse(0, 5, row) + mouse(0, 5, row, release=True))
+        wait_for(lambda: "simple-script" in view(), "Script opens by click")
         terminal.send("/simple\r")
         wait_for(lambda: "Ask about" in view(), "command returns to normal")
+        assert "simple-script" in view(), view()
         terminal.send("\x13")
         wait_for(lambda: "Ask about" not in view(), "key returns to Simple")
+        assert "simple-script" in view(), view()
         terminal.close()
         with patch.object(Terminal, "until", lambda *args, **kwargs: None):
             restarted = Terminal(tmp, env)
@@ -157,6 +225,6 @@ def test_simple_mode(tmp):
 
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="nib-tui-mouse-") as directory:
-        for test in (test_history_ignores_incomplete_record, test_cross_screen_selection, test_background_report_and_user_card, test_click_and_ctrl_o_open_single_runs, test_simple_mode):
+        for test in (test_history_ignores_incomplete_record, test_cross_screen_selection, test_background_report_and_user_card, test_click_and_ctrl_o_open_single_runs, test_edit_run_shows_only_diff, test_caught_edit_failure_keeps_result_and_script, test_simple_mode):
             test(Path(directory) / test.__name__)
             print(test.__name__ + ": ok")

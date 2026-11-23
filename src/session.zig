@@ -5,10 +5,12 @@ const sandbox = @import("sandbox.zig");
 const tools = @import("tools.zig");
 const provider = @import("provider.zig");
 const session_log = @import("session/log.zig");
+const inbox = @import("session/inbox.zig");
 const skills = @import("session/skills.zig");
 const instructions = @import("session/instructions.zig");
 const prompt = @import("session/prompt.zig");
-const Profile = @import("session/profile.zig").Profile;
+const model_profile = @import("session/profile.zig");
+const Tuning = @import("session/tuning.zig").Resolved;
 const compaction = @import("session/compact.zig");
 const runner = @import("session/run.zig");
 const session_history = @import("session/history.zig");
@@ -47,7 +49,6 @@ pub const Session = struct {
     interrupt_signal: ?*const std.atomic.Value(std.posix.SIG) = null,
     /// Next-request estimate: latest usage plus tool results, or the compacted history size.
     context_tokens: u64 = 0,
-    pending_background_bytes: u64 = 0,
     /// Automatic compaction is not retried until the context reaches this size.
     compact_backoff: u64 = 0,
     tools: tools.Tools,
@@ -60,6 +61,11 @@ pub const Session = struct {
     inbox: @import("session/inbox.zig").Inbox = .{},
     hook_jobs: std.ArrayList(*@import("session/hooks.zig").TurnJob) = .empty,
     undo_history: @import("tools/undo.zig").History = .{},
+    fn resolveTuning(s: *Session, profile: model_profile.Profile) !void {
+        var detail: []const u8 = "";
+        const env = if (s.options.environ) |e| e.get("NIB_TUNE") else null;
+        s.tools.tuning = try Tuning.resolve(s.arena.allocator(), profile, env, &detail);
+    }
 
     /// Thread-safe while a Turn runs; other Session mutation is exclusive.
     pub fn enqueue(s: *Session, text: []const u8) !u64 {
@@ -67,7 +73,7 @@ pub const Session = struct {
     }
 
     /// The caller owns the batch. Take leftovers only after joining the Turn.
-    pub fn takeQueued(s: *Session) !@import("session/inbox.zig").Batch {
+    pub fn takeQueued(s: *Session) !inbox.Batch {
         return s.inbox.takeUsers(s.gpa, s.io);
     }
 
@@ -76,7 +82,7 @@ pub const Session = struct {
     pub fn init(gpa: std.mem.Allocator, io: std.Io, client: *std.http.Client, cfg: provider.Config, options: Options) !Session {
         if (options.fork) |fork| {
             if (options.resume_id != null or options.continue_latest) return error.ConflictingForkOptions;
-            try cfg.checkSession(fork.provider, fork.model);
+            try cfg.checkFork(fork.provider, fork.model);
             if (!std.mem.eql(u8, cfg.custom_provider orelse "", fork.custom_provider orelse "")) return error.SessionProviderMismatch;
         }
         var s: Session = .{
@@ -98,7 +104,12 @@ pub const Session = struct {
         const enabled = try a.alloc([]const u8, cfg.enabled_skills.len);
         for (cfg.enabled_skills, enabled) |name, *copy| copy.* = try a.dupe(u8, name);
         s.cfg.enabled_skills = enabled;
+        const plugin_names = try a.alloc([]const u8, cfg.enabled_plugins.len);
+        for (cfg.enabled_plugins, plugin_names) |name, *item| item.* = try a.dupe(u8, name);
+        s.cfg.enabled_plugins = plugin_names;
         s.cfg.mcp_servers = try @import("mcp/config.zig").copy(a, cfg.mcp_servers);
+        s.cfg.plugin_skills = try skills.copy(a, cfg.plugin_skills);
+        if (options.resume_id == null and !options.continue_latest and options.fork == null and !cfg.plugins_loaded) try @import("plugin.zig").apply(a, io, options.home, &s.cfg);
         s.tools.cfg = s.cfg;
         const cwd = try std.process.currentPathAlloc(io, a);
         s.tools.mcp_client = try @import("mcp.zig").Client.create(gpa, io, s.cfg.mcp_servers, options.environ, options.home, options.user_home, s.cfg.sandbox.writable, s.cfg.sandbox.mode != .off);
@@ -116,11 +127,16 @@ pub const Session = struct {
             s.tools.mcp_client.?.destroy();
             s.tools.mcp_client = null;
             s.cfg.mcp_servers = try @import("mcp/config.zig").copy(a, s.log.mcp_servers);
+            s.cfg.plugin_skills = try skills.copy(a, s.log.plugin_skills);
+            s.cfg.plugins_loaded = true;
             s.tools.cfg = s.cfg;
             s.tools.mcp_client = try @import("mcp.zig").Client.create(gpa, io, s.cfg.mcp_servers, options.environ, options.home, options.user_home, s.cfg.sandbox.writable, s.cfg.sandbox.mode != .off);
-            s.pending_background_bytes = s.log.pending_background_bytes;
-            try cfg.checkSession(s.log.provider, s.log.model);
+            s.tools.tuning = s.log.tuning;
+            try cfg.checkSession(s.log.provider);
             if (!std.mem.eql(u8, cfg.custom_provider orelse "", s.log.custom_provider orelse "")) return error.SessionProviderMismatch;
+            if (cfg.protocol() != .chat_completions and !std.mem.eql(u8, s.log.model orelse "", cfg.model)) {
+                s.context_tokens = compaction.estimateTokens(s.history.items, cfg);
+            }
             s.cache_key = s.log.cache_key orelse s.id;
             s.tools.forked = s.log.forked_from != null;
             s.parent_session_id = s.log.parent_session_id;
@@ -140,10 +156,14 @@ pub const Session = struct {
                 s.parent_session_id = options.parent_session_id orelse try a.dupe(u8, fork.session);
                 try s.tools.file_state.importVersions(io, gpa, fork.file_versions);
                 const messages = try session_history.inherit(a, fork);
+                const family = model_profile.Family.forModel(cfg.model);
+                const profile = model_profile.Profile.forFamily(family);
+                try s.resolveTuning(profile);
                 try s.log.commit(io, gpa, &s.history, &s.context_tokens, .{
                     .mcp_servers = s.cfg.mcp_servers,
+                    .plugin_skills = s.cfg.plugin_skills,
                     .messages = messages,
-                    .context_tokens = compaction.estimateTokens(messages),
+                    .context_tokens = compaction.estimateTokens(messages, cfg),
                     .cwd = cwd,
                     .provider = cfg.provider,
                     .custom_provider = cfg.custom_provider,
@@ -152,15 +172,19 @@ pub const Session = struct {
                     .cache_key = s.cache_key,
                     .forked_from = .{ .session = try a.dupe(u8, fork.session), .message_count = fork.message_count },
                     .nib_version = @import("build_options").nib_version,
+                    .family = @tagName(family),
+                    .profile = @tagName(profile),
+                    .tuning = try s.tools.tuning.toLog(a),
                 });
             } else {
                 try s.initializeHistory(cwd);
             }
         }
         errdefer s.log.close(io);
-        const recording = if (options.environ) |env| !std.mem.eql(u8, env.get("NIB_RECORD") orelse "", "off") else true;
-        const calls_path = try std.fmt.allocPrint(a, "{s}/{s}.calls.jsonl", .{ directory, s.id });
-        s.recorder = sandbox.Recorder.init(gpa, io, calls_path, recording);
+        if (@import("config.zig").recordTools(options.environ)) {
+            const calls_path = try std.fmt.allocPrint(a, "{s}/{s}.calls.jsonl", .{ directory, s.id });
+            s.recorder = sandbox.Recorder.init(gpa, io, calls_path, true);
+        }
         errdefer if (s.recorder) |*recorder| recorder.deinit();
         s.tools.session_id = s.id;
         for (s.log.agent_sessions) |entry| {
@@ -189,12 +213,17 @@ pub const Session = struct {
     pub fn initializeHistory(s: *Session, cwd: []const u8) !void {
         std.debug.assert(s.log.steps == 0);
         const a = s.arena.allocator();
-        const template = try prompt.renderSystem(a, cwd, &s.tools, s.options.environ);
+        const family = model_profile.Family.forModel(s.cfg.model);
+        const profile = model_profile.Profile.forFamily(family);
+        try s.resolveTuning(profile);
+        const template = try prompt.renderSystem(a, cwd, &s.tools, profile, s.options.environ);
         const base = try prompt.stepLimitPrompt(a, template, s.cfg.limits.max_steps);
         const global = try std.fs.path.join(a, &.{ s.options.home, "AGENTS.md" });
         const root = try instructions.projectRoot(s.io, a, cwd);
         const project = try std.fs.path.join(a, &.{ root, "AGENTS.md" });
-        const discovered = try skills.load(s.io, a, s.options.home, s.options.user_home, root);
+        var discovered = try skills.load(s.io, a, s.options.home, s.options.user_home, root);
+        discovered.skills = try std.mem.concat(a, skills.Skill, &.{ discovered.skills, s.cfg.plugin_skills });
+        discovered.summary.found += s.cfg.plugin_skills.len;
         const found = try skills.select(a, discovered, s.cfg.enabled_skills);
         const system = try s.tools.mcp_client.?.prompt(a, try skills.append(a, try instructions.append(s.io, a, base, global, project), found.skills));
         s.log.skills = found.summary;
@@ -211,9 +240,13 @@ pub const Session = struct {
             .system_sha = &sha,
             .skills = found.summary,
             .mcp_servers = s.cfg.mcp_servers,
+            .plugin_skills = s.cfg.plugin_skills,
             .patches_off = try prompt.disabledPatches(a, s.options.environ),
-            .profile = @tagName(Profile.forModel(s.cfg.model)),
+            .family = @tagName(family),
+            .profile = @tagName(profile),
+            .tuning = try s.tools.tuning.toLog(a),
         });
+        s.log.resume_adaptation = .{};
     }
 
     /// Replaces this Session with a new one (`id == null`) or a logged one.
@@ -229,6 +262,9 @@ pub const Session = struct {
             const config = @import("config.zig");
             cfg.enabled_skills = try config.enabledSkills(arena.allocator(), try config.loadSkills(arena.allocator(), s.io, options.home));
             cfg.mcp_servers = try config.loadMcp(arena.allocator(), s.io, options.home);
+            cfg.enabled_plugins = try config.enabledSkills(arena.allocator(), try config.loadPlugins(arena.allocator(), s.io, options.home));
+            cfg.plugin_skills = &.{};
+            cfg.plugins_loaded = false;
         }
         const next = try Session.init(s.gpa, s.io, s.client, cfg, options);
         s.deinit();
@@ -255,8 +291,13 @@ pub const Session = struct {
             s.tools.recovery.enabled = true;
             return .new_session;
         }
-        s.cfg = cfg;
-        s.tools.cfg = cfg;
+        var updated = cfg;
+        updated.enabled_plugins = previous.enabled_plugins;
+        updated.plugin_skills = previous.plugin_skills;
+        updated.plugins_loaded = previous.plugins_loaded;
+        updated.mcp_servers = previous.mcp_servers;
+        s.cfg = updated;
+        s.tools.cfg = updated;
         const cwd = std.process.currentPathAlloc(s.io, s.arena.allocator()) catch |err| {
             s.cfg = previous;
             s.tools.cfg = previous;
@@ -299,6 +340,7 @@ pub const Session = struct {
         s.tools.progress.deinit(s.gpa);
         s.tools.agent_sessions.deinit(s.gpa);
         s.inbox.batch.deinit(s.gpa);
+        s.inbox.waited.deinit(s.gpa);
         s.tools.recovery.clear(s.gpa, s.io);
         s.tools.discardChanges(s.gpa);
         tools.clearImages(&s.tools.images, s.gpa);
@@ -315,6 +357,7 @@ pub const Session = struct {
 
     pub const Compaction = compaction.Compaction;
     pub const compact = compaction.compact;
+    pub const compactWithFocus = compaction.compactWithFocus;
     const autoCompact = compaction.autoCompact;
     pub const Ran = runner.Ran;
     pub const run = runner.run;
@@ -323,10 +366,10 @@ pub const Session = struct {
     pub fn undo(s: *Session) ![]u8 {
         const a = s.arena.allocator();
         const intent = "[undo requested] File restoration may follow. Re-read affected files before continuing.";
-        try s.commit(s.history.items.len, &.{.{ .role = "user", .content = intent, .source = .undo }}, s.context_tokens + compaction.estimateTokens(&.{.{ .role = "user", .content = intent }}), null);
+        try s.commit(s.history.items.len, &.{.{ .role = "user", .content = intent, .source = .undo }}, s.context_tokens + compaction.estimateTokens(&.{.{ .role = "user", .content = intent }}, s.cfg), null);
         const text = try s.undo_history.undo(&s.tools, s.gpa);
         errdefer s.gpa.free(text);
-        try s.commit(s.history.items.len, &.{.{ .role = "user", .content = try a.dupe(u8, text), .source = .undo }}, s.context_tokens + compaction.estimateTokens(&.{.{ .role = "user", .content = text }}), null);
+        try s.commit(s.history.items.len, &.{.{ .role = "user", .content = try a.dupe(u8, text), .source = .undo }}, s.context_tokens + compaction.estimateTokens(&.{.{ .role = "user", .content = text }}, s.cfg), null);
         return text;
     }
 
@@ -338,12 +381,16 @@ pub const Session = struct {
     pub fn discoverSkills(s: *Session, a: std.mem.Allocator) ![]const skills.Skill {
         const cwd = try std.process.currentPathAlloc(s.io, a);
         const root = try instructions.projectRoot(s.io, a, cwd);
-        return (try skills.load(s.io, a, s.options.home, s.options.user_home, root)).skills;
+        return std.mem.concat(a, skills.Skill, &.{ (try skills.load(s.io, a, s.options.home, s.options.user_home, root)).skills, s.cfg.plugin_skills });
     }
 
-    /// `text` with the SKILL.md of every skill named by `$name`, or `text` itself when none is.
+    pub fn isPluginCommand(s: *const Session, text: []const u8) bool {
+        return skills.commandSkill(text, s.cfg.plugin_skills) != null;
+    }
+
+    /// Expands explicit skill mentions and enabled package commands for the model.
     pub fn expandSkills(s: *Session, text: []const u8) ![]const u8 {
-        if (std.mem.indexOfScalar(u8, text, '$') == null) return text;
+        if (std.mem.indexOfScalar(u8, text, '$') == null and !s.isPluginCommand(text)) return text;
         const a = s.arena.allocator();
         return skills.expand(s.io, a, text, s.discoverSkills(a) catch return text);
     }
@@ -381,6 +428,7 @@ pub const Session = struct {
         var stop_background = true;
         defer {
             s.tools.background.finishTurn(s.gpa, s.io, stop_background);
+            if (stop_background) s.inbox.discardAbortedWaits(s.gpa, s.io);
             s.tools.progress.drain(s.io) catch {};
             s.usage.add(s.tools.takeUsage());
             s.summary.?.usage = s.usage;
@@ -448,33 +496,90 @@ pub const Session = struct {
             try messages.append(s.gpa, m);
         }
         try messages.append(s.gpa, .{ .role = "assistant", .content = text, .reasoning = reasoning });
-        try s.commit(s.history.items.len, messages.items, s.context_tokens + compaction.estimateTokens(messages.items), null);
+        try s.commit(s.history.items.len, messages.items, s.context_tokens + compaction.estimateTokens(messages.items, s.cfg), null);
     }
 
-    fn insertInbox(s: *Session, pending: *std.ArrayList(provider.Message), sink: Sink, background_only: bool) !@import("session/inbox.zig").Batch {
+    fn announceDelivered(s: *Session, item: inbox.Item, sink: Sink) !void {
+        if (item.background) |b| {
+            s.tools.background.delivered(s.io, b.id, item.invocation);
+            var event = b;
+            event.result = if (std.mem.indexOfScalar(u8, item.text, '\n')) |nl| item.text[nl + 1 ..] else item.text;
+            try sink.emit(sink.ctx, .{ .background = event });
+        } else if (sink.onUserInserted) |notify| try notify(sink.ctx, item.id);
+    }
+
+    fn commitDelivery(s: *Session, record: session_log.Record, delivered: inbox.Batch, via: @FieldType(session_log.Delivery, "via"), scopes: []const usize) !inbox.Batch {
+        var waited: inbox.Batch = .{};
+        errdefer waited.deinit(s.gpa);
+        for (scopes) |scope| try s.inbox.takeWaited(s.gpa, s.io, scope, &waited);
+        for (delivered.items.items) |item| {
+            if (item.run_scope) |scope| try s.inbox.takeWaited(s.gpa, s.io, scope, &waited);
+        }
+        var deliveries: std.ArrayList(session_log.Delivery) = .empty;
+        defer deliveries.deinit(s.gpa);
+        try delivered.appendDeliveries(s.gpa, &deliveries, via);
+        try waited.appendDeliveries(s.gpa, &deliveries, .wait);
+        var commit_record = record;
+        commit_record.deliveries = deliveries.items;
+        try s.log.commit(s.io, s.gpa, &s.history, &s.context_tokens, commit_record);
+        return waited;
+    }
+
+    pub fn commitLocalRun(s: *Session, scope: usize) !void {
+        var waited = try s.commitDelivery(.{
+            .from = s.history.items.len,
+            .context_tokens = s.context_tokens,
+            .task_ids = s.tools.progress.highWater(s.io),
+            .model = s.cfg.model,
+        }, .{}, .wait, &.{scope});
+        waited.deinit(s.gpa);
+    }
+
+    /// Delivery `tool`: queued results and user messages ride on the last tool message instead of becoming user messages.
+    fn foldInbox(s: *Session, pending: *std.ArrayList(provider.Message), sink: Sink) !inbox.Batch {
+        var batch = s.inbox.take(s.io);
+        errdefer batch.deinit(s.gpa);
+        if (batch.items.items.len == 0) return batch;
+        const target = &pending.items[pending.items.len - 1];
+        var text: std.ArrayList(u8) = .empty;
+        defer text.deinit(s.gpa);
+        try text.appendSlice(s.gpa, target.content orelse "");
+        for (batch.items.items) |item| {
+            try text.appendSlice(s.gpa, "\n\n");
+            if (item.background == null) try text.appendSlice(s.gpa, "[user message]\n");
+            try text.appendSlice(s.gpa, if (item.background == null) try s.expandSkills(item.text) else item.text);
+        }
+        target.content = try s.arena.allocator().dupe(u8, text.items);
+        for (batch.items.items) |item| try s.announceDelivered(item, sink);
+        return batch;
+    }
+
+    fn insertInbox(s: *Session, pending: *std.ArrayList(provider.Message), sink: Sink, background_only: bool) !inbox.Batch {
+        const before = pending.items.len;
         var inserted = if (background_only)
             try s.inbox.insertBackground(s.gpa, s.io, s.arena.allocator(), pending)
         else
             try s.inbox.insert(s.gpa, s.io, s.arena.allocator(), pending);
         errdefer inserted.deinit(s.gpa);
+        for (pending.items[before..]) |*message| {
+            if (message.source == null) message.content = try s.expandSkills(message.content orelse "");
+        }
         var has_background = false;
         for (inserted.items.items) |item| {
-            if (item.background) |b| {
-                has_background = true;
-                s.tools.background.delivered(s.io, b.id, item.invocation);
-                var event = b;
-                event.result = if (std.mem.indexOfScalar(u8, item.text, '\n')) |nl| item.text[nl + 1 ..] else item.text;
-                try sink.emit(sink.ctx, .{ .background = event });
-            } else if (sink.onUserInserted) |notify| try notify(sink.ctx, item.id);
+            has_background = has_background or item.background != null;
+            try s.announceDelivered(item, sink);
         }
         if (has_background) {
-            try s.commit(s.history.items.len, pending.items, s.context_tokens + compaction.estimateTokens(pending.items), null);
+            var waited = try s.commitDelivery(.{
+                .from = s.history.items.len,
+                .messages = pending.items,
+                .context_tokens = s.context_tokens + compaction.estimateTokens(pending.items, s.cfg),
+                .task_ids = s.tools.progress.highWater(s.io),
+                .model = s.cfg.model,
+            }, inserted, .insert, &.{});
+            defer waited.deinit(s.gpa);
             pending.clearRetainingCapacity();
-            for (inserted.items.items) |item| if (item.background != null) {
-                s.pending_background_bytes += item.text.len;
-            };
-            for (inserted.items.items) |item| if (item.background) |b|
-                try s.log.background(s.io, s.gpa, b, s.steps + 1);
+            for (waited.items.items) |item| try s.announceDelivered(item, sink);
         }
         return inserted;
     }
@@ -505,20 +610,23 @@ pub const Session = struct {
 
     fn runSteps(s: *Session, pending: *std.ArrayList(provider.Message), partial: *Partial, sink: Sink, cancel: *const std.atomic.Value(bool), detail: *?[]u8) !void {
         var step_index: usize = 0;
+        var held = false;
         while (true) : (step_index += 1) {
             if (cancel.load(.acquire)) return error.Canceled;
             if (s.cfg.limits.max_steps) |max_steps| {
                 if (step_index >= max_steps) return s.finishStepLimit(pending, sink, cancel, detail, max_steps);
             }
-            const size = s.context_tokens + compaction.estimateTokens(pending.items);
+            const size = s.context_tokens + compaction.estimateTokens(pending.items, s.cfg);
             // The first fork request must send the inherited cache prefix before compaction can rewrite it.
             if (!(s.tools.forked and s.log.steps == 0) and size >= s.cfg.context_window - s.cfg.context_window / 4 and size >= s.compact_backoff)
                 try s.autoCompact(sink, cancel, detail);
             if (cancel.load(.acquire)) return error.Canceled;
             try tools.Tools.poll(&s.tools);
-            var inserted = try s.insertInbox(pending, sink, false);
+            var inserted = if (held) inbox.Batch{} else try s.insertInbox(pending, sink, false);
             defer inserted.deinit(s.gpa);
-            const background_output_bytes = s.pending_background_bytes;
+            var folded: inbox.Batch = .{};
+            defer folded.deinit(s.gpa);
+            const background_output_bytes = s.log.pending_background_bytes;
             var request: std.ArrayList(provider.Message) = .empty;
             defer request.deinit(s.gpa);
             try request.appendSlice(s.gpa, s.history.items);
@@ -581,6 +689,8 @@ pub const Session = struct {
             defer s.tools.fork_snapshot = null;
             var run_results: std.ArrayList(session_log.RunResult) = .empty;
             defer run_results.deinit(s.gpa);
+            var scopes: std.ArrayList(usize) = .empty;
+            defer scopes.deinit(s.gpa);
             var output_tokens: u64 = 0;
             var empty_runs = reply.tool_calls.len > 0;
             for (reply.tool_calls, 0..) |call, run_index| {
@@ -588,12 +698,13 @@ pub const Session = struct {
                 const before_bytes = run_timing.tool_bytes;
                 const before_omitted = run_timing.omitted;
                 const result = try s.execute(call, sink, cancel, &run_timing);
+                if (result.scope_id) |scope| try scopes.append(s.gpa, scope);
                 empty_runs = empty_runs and result.ok and result.empty and result.background_id == null and
                     result.tool_summary != null and result.tool_summary.?.counts.len == 0 and result.tool_summary.?.omitted == 0;
                 run_timing.output_bytes += result.output.len;
                 run_ms += result.run_ms orelse 0;
                 try sink.emit(sink.ctx, .{ .usage = s.usage });
-                try pending.append(s.gpa, .{ .role = "tool", .content = result.output, .tool_call_id = call.id, .background_id = result.background_id, .run_ok = if (result.background_id == null) result.ok else null, .tool_summary = result.tool_summary, .images = if (result.images.len > 0) result.images else null });
+                try pending.append(s.gpa, .{ .role = "tool", .executed_source = result.executed_source, .content = result.output, .tool_call_id = call.id, .background_id = result.background_id, .run_ok = if (result.background_id == null) result.ok else null, .tool_summary = result.tool_summary, .images = if (result.images.len > 0) result.images else null });
                 try run_results.append(s.gpa, .{
                     .tool_call_id = call.id,
                     .background_id = result.background_id,
@@ -611,9 +722,16 @@ pub const Session = struct {
                 pending.items[assistant_index].waiting = true;
                 try sink.emit(sink.ctx, .{ .notice = "Waiting for background results." });
             }
+            held = s.tools.backgroundMode().foldsResults() and reply.tool_calls.len > 0 and !waiting;
+            if (held) {
+                try tools.Tools.poll(&s.tools);
+                const own = pending.items[pending.items.len - 1].content;
+                folded = try s.foldInbox(pending, sink);
+                if (folded.items.items.len > 0) run_results.items[run_results.items.len - 1].output = own;
+            }
             const tokens = reply.usage.prompt_tokens + reply.usage.completion_tokens + output_tokens;
             const ms: u64 = @intCast(@max(started.untilNow(s.io).raw.toMilliseconds(), 0));
-            try s.log.commit(s.io, s.gpa, &s.history, &s.context_tokens, .{
+            var waited = try s.commitDelivery(.{
                 .from = s.history.items.len,
                 .messages = pending.items,
                 .context_tokens = tokens,
@@ -645,8 +763,9 @@ pub const Session = struct {
                 .tool_bytes = run_timing.tool_bytes,
                 .output_bytes = run_timing.output_bytes + background_output_bytes,
                 .run_results = run_results.items,
-            });
-            s.pending_background_bytes = 0;
+            }, folded, .fold, scopes.items);
+            defer waited.deinit(s.gpa);
+            for (waited.items.items) |item| try s.announceDelivered(item, sink);
             s.summary.?.steps += 1;
             s.summary.?.usage = s.usage;
             s.summary.?.timing.model_ms += model_ms;
@@ -737,11 +856,11 @@ pub const Session = struct {
         var fwd: Forward = .{ .sink = sink, .gpa = s.gpa, .partial = partial, .io = s.io, .started = timing.started, .first_data_ms = first_data_ms, .session = s, .buffer_text = buffer_text, .timing = timing };
         const provider_sink: provider.Sink = .{ .ctx = &fwd, .onDelta = Forward.onDelta, .onData = Forward.onData, .onToolArguments = Forward.onToolArguments, .onFallback = Forward.onFallback, .timing = timing, .codex_state = &s.codex_state };
         if (!s.tools.background.anyPending(s.io))
-            return provider.complete(s.gpa, s.arena.allocator(), s.client, request_cfg, s.cache_key, messages, prompt.tools_json, null, provider_sink, cancel, detail, attempts, .{ .ctx = &fwd, .onEvent = Forward.onRetry });
+            return provider.complete(s.gpa, s.arena.allocator(), s.client, request_cfg, s.cache_key, messages, prompt.tools_json, s.cfg.sessionMaxTokens(), provider_sink, cancel, detail, attempts, .{ .ctx = &fwd, .onEvent = Forward.onRetry });
         const Request = struct {
             fn work(session: *Session, cfg: provider.Config, history: []const provider.Message, ps: provider.Sink, flag: *const std.atomic.Value(bool), failure: *?[]u8, tries: *u32, observer: *Forward, done: *std.Io.Event) !provider.Reply {
                 defer done.set(session.io);
-                return provider.complete(session.gpa, session.arena.allocator(), session.client, cfg, session.cache_key, history, prompt.tools_json, null, ps, flag, failure, tries, .{ .ctx = observer, .onEvent = Forward.onRetry });
+                return provider.complete(session.gpa, session.arena.allocator(), session.client, cfg, session.cache_key, history, prompt.tools_json, session.cfg.sessionMaxTokens(), ps, flag, failure, tries, .{ .ctx = observer, .onEvent = Forward.onRetry });
             }
         };
         var done: std.Io.Event = .unset;
@@ -917,9 +1036,178 @@ test "fork initialization copies history and resume retains independent identity
     try t.expectEqualStrings(fork.cache_key, session.cache_key);
     const resumed_encoded = try std.json.Stringify.valueAlloc(a, session.history.items, .{});
     try t.expectEqualStrings(expected_encoded, resumed_encoded);
+    try t.expectEqual(@as(?[]const u8, null), session.log.resume_adaptation.notice(cfg.model));
+    try t.expectEqualStrings("unknown", session.log.resume_adaptation.notice("deepseek-test").?);
     try session.reopen(null);
     try t.expect(!session.tools.forked);
     try t.expectEqualStrings(session.id, session.cache_key);
+}
+
+test "resumed adaptation uses the effective header and preserves system and tuning" {
+    const t = std.testing;
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var client: std.http.Client = .{ .allocator = t.allocator, .io = t.io };
+    defer client.deinit();
+    var env: std.process.Environ.Map = .init(t.allocator);
+    defer env.deinit();
+    const options: Session.Options = .{ .home = root, .user_home = root, .environ = &env };
+    const cfg: provider.Config = .{ .base_url = "invalid://local", .api_key = "mock", .model = "gpt-test" };
+    var deepseek = cfg;
+    deepseek.model = "deepseek-test";
+    const original = blk: {
+        var session = try Session.init(t.allocator, t.io, &client, cfg, options);
+        defer session.deinit();
+        try t.expect(session.switchConfig(deepseek) == .updated);
+        break :blk .{
+            .id = try a.dupe(u8, session.id),
+            .system = try a.dupe(u8, session.history.items[0].content.?),
+            .tuning = session.tools.tuning,
+        };
+    };
+    try t.expectEqual(Tuning.forProfile(.deepseek), original.tuning);
+    try env.put("NIB_TUNE", "delivery=user,validation=single");
+    var resumed_options = options;
+    resumed_options.resume_id = original.id;
+    var session = try Session.init(t.allocator, t.io, &client, cfg, resumed_options);
+    defer session.deinit();
+    try t.expectEqualStrings("deepseek", session.log.resume_adaptation.notice(cfg.model).?);
+    try t.expectEqualStrings(original.system, session.history.items[0].content.?);
+    try t.expectEqual(original.tuning, session.tools.tuning);
+    try t.expect(session.switchConfig(cfg) == .updated);
+    try t.expectEqual(@as(?[]const u8, null), session.log.resume_adaptation.notice(cfg.model));
+}
+
+test "disabled recording leaves the Session recorder absent" {
+    const t = std.testing;
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const root = try std.fmt.allocPrint(arena.allocator(), ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var client: std.http.Client = .{ .allocator = t.allocator, .io = t.io };
+    defer client.deinit();
+    var env: std.process.Environ.Map = .init(t.allocator);
+    defer env.deinit();
+    const cfg: provider.Config = .{ .base_url = "invalid://local", .api_key = "mock", .model = "mock" };
+    for ([_]?*const std.process.Environ.Map{ null, &env }) |environ| {
+        var session = try Session.init(t.allocator, t.io, &client, cfg, .{ .home = root, .user_home = root, .environ = environ });
+        defer session.deinit();
+        try t.expect(session.recorder == null);
+    }
+    try env.put("NIB_RECORD", "off");
+    var session = try Session.init(t.allocator, t.io, &client, cfg, .{ .home = root, .user_home = root, .environ = &env });
+    defer session.deinit();
+    try t.expect(session.recorder == null);
+}
+
+test "tuning follows the model, NIB_TUNE and the log" {
+    const t = std.testing;
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var client: std.http.Client = .{ .allocator = t.allocator, .io = t.io };
+    defer client.deinit();
+    var env: std.process.Environ.Map = .init(t.allocator);
+    defer env.deinit();
+    var cfg: provider.Config = .{ .base_url = "invalid://local", .api_key = "mock", .model = "mock" };
+    {
+        var session = try Session.init(t.allocator, t.io, &client, cfg, .{ .home = root, .user_home = root, .environ = &env });
+        defer session.deinit();
+        try t.expectEqual(Tuning.Delivery.user, session.tools.tuning.delivery);
+        try t.expectEqual(Tuning.Validation.single, session.tools.tuning.validation);
+        try t.expect(std.mem.indexOf(u8, session.history.items[0].content.?, "Before full builds/tests") != null);
+        try t.expect(!session.tools.waitEnabled());
+        try t.expect(std.mem.indexOf(u8, session.history.items[0].content.?, "async wait(") == null);
+    }
+    cfg.model = "deepseek-flash";
+    var id: []const u8 = undefined;
+    {
+        var session = try Session.init(t.allocator, t.io, &client, cfg, .{ .home = root, .user_home = root, .environ = &env });
+        defer session.deinit();
+        id = try a.dupe(u8, session.id);
+        try t.expectEqual(Tuning.Delivery.tool, session.tools.tuning.delivery);
+        try t.expectEqual(Tuning.Validation.none, session.tools.tuning.validation);
+        try t.expect(std.mem.indexOf(u8, session.history.items[0].content.?, "Before full builds/tests") == null);
+        try t.expect(session.tools.waitEnabled());
+        try t.expect(std.mem.indexOf(u8, session.history.items[0].content.?, "async wait(") != null);
+        try t.expect(std.mem.indexOf(u8, session.history.items[0].content.?, "Session waits") == null);
+        try session.commit(session.history.items.len, &.{ .{ .role = "user", .content = "hi" }, .{ .role = "assistant", .content = "yo" } }, 10, null);
+    }
+    {
+        try env.put("NIB_TUNE", "delivery=user,validation=existing-only");
+        var session = try Session.init(t.allocator, t.io, &client, cfg, .{ .home = root, .user_home = root, .environ = &env, .resume_id = id });
+        defer session.deinit();
+        try t.expectEqual(Tuning.Delivery.tool, session.tools.tuning.delivery);
+        try t.expectEqual(Tuning.Validation.none, session.tools.tuning.validation);
+        try t.expect(std.mem.indexOf(u8, session.history.items[0].content.?, "Before full builds/tests") == null);
+        try t.expect(session.tools.waitEnabled());
+    }
+    {
+        var session = try Session.init(t.allocator, t.io, &client, cfg, .{ .home = root, .user_home = root, .environ = &env });
+        defer session.deinit();
+        try t.expectEqual(Tuning.Delivery.user, session.tools.tuning.delivery);
+        try t.expectEqual(Tuning.Validation.@"existing-only", session.tools.tuning.validation);
+        try t.expect(std.mem.indexOf(u8, session.history.items[0].content.?, "do not write new test scripts") != null);
+        const path = try std.fmt.allocPrint(a, "{s}/sessions/{s}.jsonl", .{ root, session.id });
+        const data = try std.Io.Dir.cwd().readFileAlloc(t.io, path, a, .unlimited);
+        try t.expect(std.mem.indexOf(u8, data, "\"tuning\":{\"delivery\":\"user\",\"validation\":\"existing-only\"}") != null);
+    }
+    try env.put("NIB_TUNE", "delivery=nope");
+    try t.expectError(error.InvalidTuning, Session.init(t.allocator, t.io, &client, cfg, .{ .home = root, .user_home = root, .environ = &env }));
+}
+
+test "tool delivery folds queued results and user messages into the last tool message" {
+    const t = std.testing;
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const root = try std.fmt.allocPrint(arena.allocator(), ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var client: std.http.Client = .{ .allocator = t.allocator, .io = t.io };
+    defer client.deinit();
+    var env: std.process.Environ.Map = .init(t.allocator);
+    defer env.deinit();
+    var session = try Session.init(t.allocator, t.io, &client, .{ .base_url = "invalid://local", .api_key = "mock", .model = "deepseek-flash" }, .{ .home = root, .user_home = root, .environ = &env });
+    defer session.deinit();
+    const Quiet = struct {
+        events: usize = 0,
+        inserted: usize = 0,
+        fn emit(ctx: *anyopaque, _: Event) !void {
+            const quiet: *@This() = @ptrCast(@alignCast(ctx));
+            quiet.events += 1;
+        }
+        fn user(ctx: *anyopaque, _: u64) !void {
+            const quiet: *@This() = @ptrCast(@alignCast(ctx));
+            quiet.inserted += 1;
+        }
+    };
+    var ctx: Quiet = .{};
+    const sink: Sink = .{ .ctx = &ctx, .emit = Quiet.emit, .onUserInserted = Quiet.user };
+    var pending: std.ArrayList(provider.Message) = .empty;
+    defer pending.deinit(t.allocator);
+    try pending.append(t.allocator, .{ .role = "assistant", .content = "" });
+    try pending.append(t.allocator, .{ .role = "tool", .tool_call_id = "run", .content = "output" });
+    var none = try session.foldInbox(&pending, sink);
+    none.deinit(t.allocator);
+    try t.expectEqualStrings("output", pending.items[1].content.?);
+    _ = try session.inbox.enqueueBackground(t.allocator, t.io, "b1", .bash, .finished, true, "[background bash b1 finished]\n{\"exit_code\":0}", false, 0, null);
+    _ = try session.inbox.enqueue(t.allocator, t.io, "wait, also fix x");
+    var folded = try session.foldInbox(&pending, sink);
+    defer folded.deinit(t.allocator);
+    try t.expectEqual(@as(usize, 2), pending.items.len);
+    try t.expectEqualStrings("output\n\n[background bash b1 finished]\n{\"exit_code\":0}\n\n[user message]\nwait, also fix x", pending.items[1].content.?);
+    try t.expectEqual(@as(usize, 2), folded.items.items.len);
+    try t.expectEqual(@as(usize, 1), ctx.inserted);
+    try t.expectEqual(@as(usize, 1), ctx.events);
+    try t.expect(session.inbox.empty(t.io));
 }
 
 test "switchConfig updates a zero-Step Session in place and replaces one with Steps" {
@@ -936,6 +1224,10 @@ test "switchConfig updates a zero-Step Session in place and replaces one with St
     var session = try Session.init(t.allocator, t.io, &client, cfg, .{ .home = root, .user_home = root });
     defer session.deinit();
 
+    session.cfg.plugin_skills = &.{.{ .name = "example:review", .description = "review", .location = "/fixture/SKILL.md" }};
+    session.cfg.plugins_loaded = true;
+    session.cfg.enabled_plugins = &.{"example"};
+    session.cfg.mcp_servers = &.{.{ .id = "example__local" }};
     var next = cfg;
     next.model = "other";
     const id = try a.dupe(u8, session.id);
@@ -944,6 +1236,11 @@ test "switchConfig updates a zero-Step Session in place and replaces one with St
     try t.expectEqualStrings("other", session.cfg.model);
     try t.expectEqualStrings("other", session.tools.cfg.?.model);
     try t.expectEqualStrings("other", session.log.model.?);
+    try t.expect(session.cfg.plugins_loaded);
+    try t.expectEqualStrings("example:review", session.cfg.plugin_skills[0].name);
+    try t.expectEqualStrings("example", session.cfg.enabled_plugins[0]);
+    try t.expectEqualStrings("example__local", session.cfg.mcp_servers[0].id);
+    try t.expectEqualStrings("example:review", session.tools.cfg.?.plugin_skills[0].name);
 
     try session.commit(session.history.items.len, &.{ .{ .role = "user", .content = "hi" }, .{ .role = "assistant", .content = "yo" } }, 10, null);
     try t.expect(session.log.steps > 0);
