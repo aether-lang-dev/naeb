@@ -49,7 +49,7 @@ exports(TOOL_CONCURRENCY, MAX_STOPPED_BYTES, Limits, ToolResult, Host, Outcome, 
         host_set_record, host_set_virtual, new_virtual,
         result_ok, result_err, result_set_ok, result_set_err, result_set_err_denied, result_set_identity,
         result_set_started, result_started,
-        eval, syntax_context)
+        eval, source_context)
 
 const TOOL_CONCURRENCY = 8
 const MAX_STOPPED_BYTES = 4096
@@ -838,9 +838,11 @@ teardown_(st: *State) {
     list.list_clear(st.calls)
 }
 
-// The SyntaxError message with the offending source line, bounded to about
-// 200 bytes around the column without splitting a UTF-8 sequence.
-syntax_context(msg_text: string, code: string) -> string {
+// The error message with the source line its "<run>:line:column" location
+// names, bounded to about 200 bytes around the column without splitting a
+// UTF-8 sequence; the message unchanged when it has no usable location
+// (upstream sourceContext, 933696d: every failed Run, not only SyntaxError).
+source_context(msg_text: string, code: string) -> string {
     marker = "<run>:"
     at = string.index_of(msg_text, marker)
     if at < 0 { return msg_text }
@@ -1025,9 +1027,7 @@ eval(code: string, lp: ptr, host: @keep ptr, cancel: @keep ptr) -> ptr {
         }
         end_js_(st)
     }
-    if ok == 0 && string.starts_with(text, "SyntaxError:") {
-        text = syntax_context(text, code)
-    }
+    if ok == 0 { text = source_context(text, code) }
     if jobs_drained == 1 { jobs_(st) }
     if st.host != null {
         rec = (st.host as *Host).record

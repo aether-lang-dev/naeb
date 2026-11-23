@@ -140,6 +140,7 @@ read_stream(lines: ptr, cp: ptr, sk: ptr, cancel: ptr) -> (ptr, string, string) 
     hit_tok = 0 as long
     write_tok = 0 as long
     done = 0
+    finish_tool_calls = 0   // the last finish_reason was "tool_calls"
     while done == 0 {
         line, lerr = sse.next(lines, cancel)
         if lerr != "" && lerr != "EOF" { return fail_(lerr, "") }
@@ -179,6 +180,10 @@ read_stream(lines: ptr, cp: ptr, sk: ptr, cancel: ptr) -> (ptr, string, string) 
             ci = 0
             while ci < cn {
                 choice = json.json_array_get_raw(choices, ci)
+                if jsonx.kind(choice, "finish_reason") == json.JSON_STRING {
+                    finish_tool_calls = 0
+                    if jsonx.str_or(choice, "finish_reason", "") == "tool_calls" { finish_tool_calls = 1 }
+                }
                 dl = jsonx.field(choice, "delta")
                 if dl != null && json.json_type(dl) == json.JSON_OBJECT {
                     if text_or_null_(dl, "content") == 0 || text_or_null_(dl, "reasoning_content") == 0 {
@@ -244,6 +249,8 @@ read_stream(lines: ptr, cp: ptr, sk: ptr, cancel: ptr) -> (ptr, string, string) 
         if lerr == "EOF" { break }
     }
     if done == 0 { return fail_("IncompleteResponse", "") }
+    // A stream that says it ended in tool calls but carried none is inconsistent.
+    if finish_tool_calls == 1 && list.list_size(calls) == 0 { return fail_("InvalidResponse", "") }
     rep = types.reply_new() as *types.Reply
     i = 0
     while i < list.list_size(calls) {

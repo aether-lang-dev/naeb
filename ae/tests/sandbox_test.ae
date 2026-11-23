@@ -151,11 +151,28 @@ main() {
                 code = "${code}你"
                 i = i + 1
             }
-            bounded = sandbox.syntax_context("SyntaxError: bad\n    at <run>:1:500", code)
+            bounded = sandbox.source_context("TypeError: bad\n    at <eval> (<run>:1:500)", code)
             spec.assert_true(string.length(bounded) < 300, "bounded: ${string.length(bounded)}")
+            spec.assert_true(string.starts_with(bounded, "TypeError: bad\n    at <eval> (<run>:1:500)") == 1, "message kept")
             // whole characters only: every 你 is 3 bytes after the prefix
             line_at = string.index_of(bounded, "source line 1: …")
             spec.assert_true(line_at >= 0, "ellipsis prefix")
+        }
+        // 933696d
+        spec.it("runtime errors retain async stack and include source context") callback {
+            r = sandbox.eval("await Promise.resolve();\nconst value = null;\nvalue.missing();", sandbox.limits(), null, null) as *sandbox.Outcome
+            spec.assert_eq(r.ok, 0, "not ok")
+            spec.assert_true(string.starts_with(r.text, "TypeError:") == 1, "TypeError: ${r.text}")
+            spec.assert_true(contains_(r.text, "(<run>:3:"), "location: ${r.text}")
+            spec.assert_true(string.ends_with(r.text, "source line 3: value.missing();") == 1, "source line: ${r.text}")
+        }
+        spec.it("source context preserves errors without a usable source line") callback {
+            msgs = ["TypeError: bad", "TypeError: bad\n    at <eval> (<run>:invalid:2)", "TypeError: bad\n    at <eval> (<run>:0:2)", "TypeError: bad\n    at <eval> (<run>:99:2)"]
+            i = 0
+            while i < 4 {
+                spec.assert_str_eq(sandbox.source_context(msgs[i], "const x = 1;"), msgs[i], "unchanged ${i}")
+                i = i + 1
+            }
         }
         // Ours: Host.start, which the port adds so calls claim ordered state at dispatch.
         spec.it("start runs per call in creation order and what it leaves reaches that call") callback {

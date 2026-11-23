@@ -251,6 +251,26 @@ main() {
             spec.assert_str_eq(e4, "TooManyToolCalls", "index over 64")
         }
 
+        // 933696d: a finish_reason of tool_calls with no tool call is inconsistent
+        spec.it("a tool_calls finish without calls is invalid; other endings and structured calls pass") callback {
+            quote = data_("{\"choices\":[{\"delta\":{\"content\":\"Quoted example\"}}]}")
+            fin_tools = data_("{\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}")
+            fin_stop = data_("{\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}")
+            tools_stop = "${quote}${fin_tools}data: [DONE]\n\n"
+            rep, e, detail = openai.read_stream(sse.fixed(tools_stop), cfg_("chat_completions"), sink.new(null), null)
+            spec.assert_str_eq(e, "InvalidResponse", "tool_calls finish without calls")
+            plain_stop = "${quote}${fin_stop}data: [DONE]\n\n"
+            rep2, e2, detail2 = openai.read_stream(sse.fixed(plain_stop), cfg_("chat_completions"), sink.new(null), null)
+            spec.assert_str_eq(e2, "", "stop is fine")
+            no_reason = "${quote}data: [DONE]\n\n"
+            rep3, e3, detail3 = openai.read_stream(sse.fixed(no_reason), cfg_("chat_completions"), sink.new(null), null)
+            spec.assert_str_eq(e3, "", "no finish_reason is fine")
+            call = data_("{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"run\",\"arguments\":\"{}\"}}]}}]}")
+            structured = "${quote}${call}${fin_tools}data: [DONE]\n\n"
+            rep4, e4, detail4 = openai.read_stream(sse.fixed(structured), cfg_("chat_completions"), sink.new(null), null)
+            spec.assert_str_eq(e4, "", "structured call with a tool_calls finish")
+        }
+
         spec.it("the default model, and request bodies never carry the key") callback {
             spec.assert_str_eq(openai.DEFAULT_MODEL, "deepseek-flash", "default model")
             cp = types.new_config("deepseek", "", "fake-key", "m")
