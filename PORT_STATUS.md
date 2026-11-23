@@ -118,7 +118,7 @@ out (below).
 | 7d9ea17 | encode recordings directly into the Run buffer; Run ownership on OOM | performance only (the port's recorder builds its own text); its test (`test_large_result_is_complete_in_js_but_recording_and_replay_stay_bounded`) is in `test_replay`; not a separate port |
 | b60552f | model-free native tool scheduling benchmark | not applicable (a Zig benchmark harness) |
 | e327dbb | GPT-6.2 models, OpenAI default | ported (3d6b5df) for the openai service; the Codex catalog part is out by policy |
-| c93d0cb | GPT-6.2+ system prompts sent as developer input | **not yet** (Responses encoder) |
+| c93d0cb | GPT-6.2+ system prompts sent as developer input | ported for OpenAI's own Responses (`responses.uses_developer_system`); the Codex wire is out by policy |
 | 9a9a2cf, 3cc339a, eda8313 | upstream CI scheduling and `nib-dev` install | not applicable (upstream's CI and install scripts) |
 | bda9d03 | session resume after switching models (reasoning data tagged by model) | ported: `msg.reasoning_model`, `tag_reasoning_model`, `reasoning_compatible`; log replay tags a record's reasoning with its model; the Responses and Anthropic encoders and `compact.estimate_tokens` ignore another model's reasoning; a resume takes the model selected now (a fork still keeps its parent's); `test_model` green |
 | 8f8a2a0 | unified provider credential resolution | **not yet**: touches `auth`, `config`, `main`, `tui/providers`; its test (`test_provider_login.py`) is out by policy |

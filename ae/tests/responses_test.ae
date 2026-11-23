@@ -203,6 +203,33 @@ main() {
             jsonx.free(root)
         }
 
+        spec.it("GPT-6.2+ on Codex and OpenAI sends system prompt as leading developer input for caching") callback {
+            providers = ["codex", "codex", "openai", "openai", "codex", "codex", "codex", "codex", "xai", "custom"]
+            models = ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.2-sol", "openai/gpt-6.3-pro", "gpt-7-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "grok-4.7", "gpt-6.2-sol"]
+            developer = [1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+            for i in 0..10 {
+                cp = cfg_(providers[i], models[i])
+                spec.assert_eq(responses.uses_developer_system(cp), developer[i], "${providers[i]} ${models[i]}")
+                msgs = list.list_new()
+                list.list_add(msgs, msg.system("Reusable system prompt."))
+                list.list_add(msgs, msg.user("hello"))
+                body, err = responses.request_body(cp, "cache", msgs, "[]", -1)
+                spec.assert_str_eq(err, "", "body")
+                root = doc_(body)
+                input = jsonx.field(root, "input")
+                if developer[i] == 1 {
+                    spec.assert_str_eq(jsonx.str_or(root, "instructions", ""), "You are a helpful assistant.", "default instructions")
+                    spec.assert_eq(json.json_array_size(input), 2, "developer and user")
+                    first = json.json_array_get_raw(input, 0)
+                    spec.assert_str_eq(jsonx.str_or(first, "role", ""), "developer", "developer")
+                    spec.assert_str_eq(jsonx.str_or(first, "content", ""), "Reusable system prompt.", "system text")
+                } else {
+                    spec.assert_str_eq(jsonx.str_or(root, "instructions", ""), "Reusable system prompt.", "instructions")
+                    spec.assert_eq(json.json_array_size(input), 1, "user only")
+                }
+                jsonx.free(root)
+            }
+        }
         spec.it("Codex custom and legacy history retain their wire types across tool configuration changes") callback {
             dollar = "$"
             code = "// @run: {\"effort\":\"low\"}\nconst text = `line one\n${dollar}{1}\\path`; text"

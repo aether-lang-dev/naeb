@@ -33,7 +33,7 @@ import naeb.provider.sink
 import naeb.provider.sse
 import naeb.provider.http
 
-exports(reasoning_effort, request_body, read_stream, stream, retry_delay_ms, fatal_code)
+exports(reasoning_effort, uses_developer_system, request_body, read_stream, stream, retry_delay_ms, fatal_code)
 
 const CUSTOM_RUN_DESCRIPTION = "Run JavaScript in a fresh sandbox using the tools API described in the system prompt. Send raw JavaScript, not JSON, a quoted string or markdown fences. Top-level await is allowed; the last expression's value is returned."
 const CUSTOM_RUN_GRAMMAR = "start: SOURCE\nSOURCE: /[\\s\\S]+/"
@@ -153,6 +153,35 @@ tool_output_images_(provider: string) -> int {
     return 0
 }
 
+// GPT-6.2+ appends top-level `instructions` after `input`, outside prompt
+// caching, so on OpenAI's own Responses the reusable system prompt is a leading
+// `developer` input message instead (upstream usesDeveloperSystem).
+uses_developer_system(cp: ptr) -> int {
+    c = cp as *types.Config
+    if c.provider != "codex" && c.provider != "openai" { return 0 }
+    name = c.model
+    slash = string.index_of(name, "/")
+    if slash >= 0 { name = string.substring(name, slash + 1, string.length(name)) }
+    n = string.length(name)
+    if n < 5 || string.starts_with(string.to_lower(name), "gpt-") == 0 { return 0 }
+    i = 4
+    ms = i
+    while i < n && name[i] >= 48 && name[i] <= 57 { i = i + 1 }
+    if i == ms || i - ms > 9 { return 0 }
+    major, _me = string.to_int(string.substring(name, ms, i))
+    minor_n = 0
+    if i < n && name[i] == 46 {
+        i = i + 1
+        mn = i
+        while i < n && name[i] >= 48 && name[i] <= 57 { i = i + 1 }
+        if i == mn || i - mn > 9 { return 0 }
+        minor_n, _ne = string.to_int(string.substring(name, mn, i))
+    }
+    if i < n && name[i] != 45 && name[i] != 46 { return 0 }
+    if major > 6 || (major == 6 && minor_n >= 2) { return 1 }
+    return 0
+}
+
 // (body, "") or ("", "InvalidResponse") when a stored message, the tools or
 // the output schema are malformed.
 request_body(cp: ptr, cache_key: string, messages: ptr, tools_json: string, max_tokens: int) -> (string, string) {
@@ -160,6 +189,7 @@ request_body(cp: ptr, cache_key: string, messages: ptr, tools_json: string, max_
     vision = types.vision(cp)
     n = list.list_size(messages)
     instructions = "You are a helpful assistant."
+    developer = uses_developer_system(cp)
     pending_images = ""
     w = strbuilder.new(4096)
     strbuilder.append(w, "[")
@@ -169,7 +199,14 @@ request_body(cp: ptr, cache_key: string, messages: ptr, tools_json: string, max_
         m, _e = list.get_string(messages, i)
         r = msg.role(m)
         if r == "system" {
-            if msg.has_content(m) == 1 { instructions = msg.content(m) }
+            if developer == 1 {
+                if msg.has_content(m) == 1 && string.length(msg.content(m)) > 0 {
+                    strbuilder.append(w, "${sep}{\"role\":\"developer\",\"content\":${jsonx.quote(msg.content(m))}}")
+                    sep = ","
+                }
+            } else if msg.has_content(m) == 1 {
+                instructions = msg.content(m)
+            }
             i = i + 1
             continue
         }
