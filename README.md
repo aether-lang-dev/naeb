@@ -120,14 +120,15 @@ aeb .build.ae          # builds target/build/bin/naeb
 ### 3. Install
 
 ```sh
-install -m 755 target/build/bin/naeb ~/.local/bin/naeb
+aeb .install.ae        # builds, then installs ${PREFIX:-$HOME/.local}/bin/naeb
 naeb --version         # naeb 0.13.0-ae
 ```
 
-To update, run `git pull`, then `aeb .build.ae`, then the `install` lines
-again. Project policies need no rebuild unless naeb says so. Keep the
-checkout: `naeb build` compiles policies against its `ae/policy_lib`
-(`NAEB_SRC` points elsewhere).
+`PREFIX=/some/dir aeb .install.ae` installs under `/some/dir/bin`. The old file
+is removed before the new one is copied in. To update, run `git pull`, then
+`aeb .install.ae` again. Project policies need no rebuild unless naeb says so.
+Keep the checkout where it is: `naeb build` compiles policies against its
+`ae/policy_lib` (`NAEB_SRC` points elsewhere).
 
 ## Use
 

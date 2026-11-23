@@ -1,0 +1,19 @@
+// Installs the one binary, naeb, after building it: `aeb .install.ae`.
+// Destination ${PREFIX:-$HOME/.local}/bin/naeb. `aeb .build.ae` writes only
+// under target/; nothing outside the checkout is touched until this file is
+// asked for. Shells out to bash for now (tools/install.sh).
+
+import bldr
+import bldr (dep)
+import bash
+import bash (script)
+
+aeb(cap) {
+    bldr.build() {
+        dep(".build.ae")
+        bash.run() {
+            script("tools/install.sh")
+        }
+        return 0
+    }
+}

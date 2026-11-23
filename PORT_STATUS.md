@@ -55,6 +55,15 @@ header carries `naeb_version` and `mode`; the system prompt opens "You are
 naeb". Upstream's `scripts/stats.py` is edited the same way (`naeb_version`,
 "refused by naeb").
 
+## Release readiness
+
+Before any release the full red-team suite (`ae/tests/redteam/run.sh`, 0 holes,
+including `mode_selection.py`) and upstream's end-to-end suite
+(`ae/tests/upstream-e2e.sh`, 29 of 30 with `test_effort`'s Codex half the one
+failure) must be run and green on the single `naeb` binary. Last run complete:
+not yet on the single binary (the last complete runs, on the two-binary tree at
+f1a1d1a, 2026-11-22, were 89/89, 200 red-team checks with 0 holes, and e2e 29 of 30).
+
 ## Decisions (Paul, 2026-11-12)
 
 - **Providers use API keys only**, as each vendor documents. Not ported, by

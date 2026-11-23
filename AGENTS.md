@@ -66,7 +66,7 @@ tools/               check_layers.sh (which module may import which), upstream-d
 asks/                what the port needs from Aether, written up for Aether's maintainers
 tests/, scripts/     upstream's Python end-to-end tests and mock providers; stats.py and charts.py
 docs/                upstream's docs (user-facing ones use naeb's names); docs/naeb/ is the fence's
-.build.ae, .tests.ae aeb build and test definitions
+.build.ae, .install.ae, .tests.ae   aeb build, install and test definitions
 pins                 the Aether (AE_PIN) and aeb (AEB_REF) versions last verified
 ```
 
@@ -83,7 +83,8 @@ Toolchain: `ae` and `aeb`, installed with aeb's `get.sh` at the versions in `pin
 compiler, OpenSSL 3 and `python3`.
 
 ```sh
-aeb .build.ae                 # target/build/bin/naeb
+aeb .build.ae                 # target/build/bin/naeb (writes only under target/)
+aeb .install.ae               # build, then install ${PREFIX:-$HOME/.local}/bin/naeb (tools/install.sh)
 aeb .tests.ae                 # 89 targets: 85 std.spec suites plus workspace.sh, redteam/run.sh,
                               # tui_e2e.sh and tools/check_layers.sh
 ae/tests/upstream-e2e.sh      # upstream's Python tests against the built binary (the oracle)
