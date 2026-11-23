@@ -6,13 +6,13 @@
 # and this script says so and checks only edit/write.
 set -eu
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-UNFENCED=${NAEB_UNFENCED:-$ROOT/target/build/bin/naeb-unfenced}
+NAEB=${NAEB:-$ROOT/target/build/bin/naeb}
 work=$(mktemp -d)
 outside=$(mktemp -d "${HOME}/.naeb-workspace-test.XXXXXX")
 trap 'rm -rf "$work" "$outside"' EXIT
 mkdir -p "$work/proj/.git"
 cd "$work/proj"
-out=$(NAEB_SANDBOX=workspace "$UNFENCED" js "const a = await tools.bash({command: 'echo in > inside.txt; echo out > $outside/x; echo done'}); const w = await tools.write({path: '$outside/y', content: 'y'}).catch(e => e.message); [a.output, w]")
+out=$(NAEB_SANDBOX=workspace "$NAEB" --mode unfenced js "const a = await tools.bash({command: 'echo in > inside.txt; echo out > $outside/x; echo done'}); const w = await tools.write({path: '$outside/y', content: 'y'}).catch(e => e.message); [a.output, w]")
 echo "$out"
 fail=0
 [ "$(cat inside.txt)" = in ] || { echo "FAIL inside write"; fail=1; }

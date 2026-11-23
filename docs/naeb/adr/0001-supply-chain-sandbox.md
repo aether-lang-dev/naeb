@@ -8,7 +8,7 @@ date: 2026-11-15
 naeb's own ADR series, separate from upstream's `docs/adr/` numbering. It
 extends upstream's [ADR 0004](../../adr/0004-two-layer-isolation.md) (write-only
 workspace sandbox) and [0006](../../adr/0006-deny-dangerous-commands.md)
-(deny-list, credential paths) without changing them: `naeb-unfenced` stays as upstream,
+(deny-list, credential paths) without changing them: `--mode unfenced` stays as upstream,
 and everything here is `naeb`'s, the second binary.
 
 ## Threat
@@ -63,9 +63,17 @@ the same checks.
 
 **Fail closed.** naeb always has a Fence: a project without `naeb.ae` gets
 the default one (the project only, no egress) and a one-line notice. There
-is no `naeb --unfenced`; that is `naeb-unfenced`. A child is never started
+is no environment variable, config key or project file that turns the fence
+off. The one way is `naeb --mode unfenced ...`, the first two arguments of the
+command line of the person starting naeb, announced on stderr and recorded as
+`"mode":"unfenced"` in the Session log header; a sub-agent of a fenced naeb is
+started fenced, and of an unfenced one unfenced, as its parent. (It was a
+second binary, `naeb-unfenced`, until the two were merged: nothing about the
+fence needed a separate executable, since the fence is installed in-process
+and by the OS jail at start, and an unfenced naeb started from inside a fenced
+Run is still inside the Run's inherited Landlock or SBPL jail.) A child is never started
 unconfined: where the OS jail cannot be applied, the command is refused with
-the reason. `naeb-unfenced` has no Fence and nothing changes there (upstream's
+the reason. `--mode unfenced` has no Fence and nothing changes there (upstream's
 off/workspace behaviour and its tests stay as they are).
 
 ### Reads
@@ -243,7 +251,7 @@ build`. Where the records are:
   carries `fence_denied`; an uncaught one prints it after the stack;
 - a sub-agent: its Runs' records reach the parent through `run_end`
   (`fence_denied`) and the agent result's `fence_denied`;
-- the model is told the field in the fenced tool table; `naeb-unfenced`, with no
+- the model is told the field in the fenced tool table; unfenced mode, with no
   Fence, keeps upstream's shapes and descriptions.
 
 In detail:
@@ -317,7 +325,7 @@ In detail:
 
 ### The policy in force, visible
 
-`tools.fence()` (only under naeb; not in upstream's table, so `naeb-unfenced` has no
+`tools.fence()` (only under naeb; not in upstream's table, so unfenced mode has no
 such tool) returns the fence as data: `platform`, `policy` (`file`,
 `sha256`, `library`, `library_sha256`, as the build record vouched for them
 at start; `null` for the default fence), `project`, `home`, `home_open`,
@@ -817,7 +825,7 @@ mode) the same fixtures find 15 holes on macOS.
 
 - Under naeb every project gets reads, writes and egress confined on Linux
   (kernel with user namespaces; Landlock ABI 1+) and macOS; `naeb.ae` widens
-  the default fence. `naeb-unfenced` behaves as upstream.
+  the default fence. `--mode unfenced` behaves as upstream.
 - Toolchains need their `$HOME` paths and hosts declared; the first runs
   of a new project hit denials until `naeb.ae` has them.
 - `naeb build` needs `ae` on `PATH` and the naeb-code checkout naeb was

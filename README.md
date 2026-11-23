@@ -44,10 +44,12 @@ port is renamed to match.
 - **Aether instead of Zig.** The agent is built from Aether, compiled to C,
   with the agent's Run scripts on QuickJS embedded through Aether's
   `contrib.quickjs`.
-- **Two commands.** `naeb` runs the agent inside a project fence against
-  supply-chain attacks (below), which upstream does not have. `naeb-unfenced`
-  is the same agent with no fence, behaving as upstream's `nib` does; it is
-  what upstream's own tests are run against.
+- **A project fence.** `naeb` runs the agent inside a project fence against
+  supply-chain attacks (below), which upstream does not have.
+  `naeb --mode unfenced ...` runs it with no fence, as upstream's `nib` does;
+  it is chosen only by those first two arguments on the command line, announced
+  on stderr and recorded in the Session log, and it is what upstream's own tests
+  are run with.
 - **API keys only.** OpenAI, Anthropic, DeepSeek, Grok (xAI) and your own
   Responses or Chat Completions endpoint. The Codex subscription sign-in, its
   WebSocket protocol and the Codex backend are not ported, by choice.
@@ -59,22 +61,21 @@ port is renamed to match.
 - **Behind upstream.** The port is current with upstream through the commits
   listed in [PORT_STATUS.md](PORT_STATUS.md), which is behind upstream's
   latest release.
-- **Names.** Everything the port names itself is `naeb`: the commands, the
+- **Names.** Everything the port names itself is `naeb`: the command, the
   `NAEB_*` environment variables (upstream's `NIB_*`), `~/.naeb` (upstream's
-  `~/.nib`), and the Aether modules under
-  `ae/naeb/`. Upstream's documents under `docs/` still say `nib` and `NIB_*`;
-  read them with that substitution. Two names are deliberately still upstream's:
-  the field `nib_version` in the Session log header, kept as upstream writes it
-  so that upstream's `scripts/stats.py` reads naeb's logs, and the words "You
-  are nib" that open the system prompt, which upstream's own test asserts.
-  Also still upstream's, because they are shared contracts and upstream's
-  tests use them: `.nib/skills` inside a project, and `NIB_EVENT`, `NIB_FILES`
-  and `NIB_TURN_STATUS`, the variables a hook command receives.
+  `~/.nib`), `.naeb/skills` in a project, the hook variables `NAEB_EVENT`,
+  `NAEB_FILES` and `NAEB_TURN_STATUS`, the `naeb_version` field of the Session
+  log header, and the Aether modules under `ae/naeb/`. The user-facing docs
+  under `docs/` (config, providers, skills, session log and the like) use these
+  names; upstream's ADRs, release notes, benchmarks and Codex notes are as
+  upstream wrote them. Upstream's Python tests in `tests/` carry the same
+  renamed words and nothing else.
 
 ## Licence
 
 MIT, as upstream's. [LICENSE](LICENSE) is upstream's licence text with its
-copyright line, "Copyright (c) 2026 jackyyy", unaltered, and the port's
+copyright line, "Copyright (c) 2026 jackyyy", unaltered, and below it the line
+"Portions copyright 2026 - Aether language developers" for the port. The port's
 changes are under the same licence.
 
 ## Set up
@@ -107,14 +108,13 @@ on Linux) and OpenSSL 3 or later:
 ```sh
 git clone -b aether-port https://github.com/aether-lang-dev/naeb.git naeb
 cd naeb
-aeb .build.ae          # builds target/build/bin/naeb and target/build/bin/naeb-unfenced
+aeb .build.ae          # builds target/build/bin/naeb
 ```
 
 ### 3. Install
 
 ```sh
 install -m 755 target/build/bin/naeb ~/.local/bin/naeb
-install -m 755 target/build/bin/naeb-unfenced ~/.local/bin/naeb-unfenced
 naeb --version         # naeb 0.13.0-ae
 ```
 
@@ -156,6 +156,13 @@ a model. Your own endpoint: [providers](docs/providers.md).
 the project, write outside it, or reach any host the project has not
 allowed, and get no secrets from naeb's environment. Linux (Landlock and
 namespaces) and macOS (`sandbox-exec`).
+
+`naeb --mode unfenced ...` turns the fence off, for upstream's behaviour. Only
+the person starting naeb can: it must be the first two arguments of the command
+line, no environment variable, config key, project file, skill, hook or
+sub-agent can set it, a sub-agent of a fenced naeb is always fenced, and a naeb
+started from inside a fenced Run is still inside that Run's OS jail. Unfenced
+runs say so on stderr and in the Session log header (`"mode":"unfenced"`).
 
 The project says what it needs in `naeb.ae` at its root, in Aether:
 
@@ -281,11 +288,12 @@ naeb runs model-written code with your permissions, as you would yourself.
 aeb .tests.ae               # the port's unit suites
 tools/tui_tests.sh          # the TUI suites
 tools/check_layers.sh       # which module may import which
-ae/tests/upstream-e2e.sh    # upstream's own Python end-to-end tests, unchanged
+ae/tests/upstream-e2e.sh    # upstream's own Python end-to-end tests
 ```
 
-Upstream's tests and mock providers in `tests/` are the parity oracle and are
-never edited; they need `python3` and talk only to local mocks. Gaps found in
+Upstream's tests and mock providers in `tests/` are the parity oracle. They are
+edited only to rename words (`ae/tests/check_tests_vs_main.py` enforces it);
+they need `python3` and talk only to local mocks. Gaps found in
 Aether are written up in [asks/](asks/) and fixed in Aether itself.
 [PORT_STATUS.md](PORT_STATUS.md) has the per-host results and what is left.
 

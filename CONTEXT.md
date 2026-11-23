@@ -1,6 +1,6 @@
-# nibcode
+# naeb
 
-A coding agent written in Zig: the model acts by writing code, which runs in a sandbox embedded in the host.
+A coding agent (the Aether port of nib-code): the model acts by writing code, which runs in a sandbox embedded in the host.
 
 ## Sessions and Turns
 

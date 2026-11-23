@@ -63,6 +63,13 @@ import naeb.mcp
 import naeb.tools.agent_input
 import naeb.tools.agent_sessions
 
+// "fenced" or "unfenced" (--mode): the Session log header says which, so a log
+// shows what confined the commands that wrote it.
+mode_name_(tp: ptr) -> string {
+    if (tp as *tools.Tools).fence == null { return "unfenced" }
+    return "fenced"
+}
+
 exports(Session, Options, Sink, Ran, new_options, new_sink, init, turn, turn_with_images, image_directory, run, compact_now, close, swap_fence, start_turn_end_hooks, finish_hooks, error_message, timing_json, undo,
         set_activity, enqueue, take_queued, switch_config, steps_logged,
         VERSION)
@@ -429,7 +436,7 @@ initialize_fork_(s: *Session, fp: ptr, cwd: string) -> string {
     members = ",\"mcp_servers\":${agent_input.mcp_servers_json(c.mcp_servers)},\"cwd\":${jsonx.quote(cwd)},\"provider\":${jsonx.quote(c.provider)}"
     if c.custom_provider != "" { members = "${members},\"custom_provider\":${jsonx.quote(c.custom_provider)}" }
     members = "${members},\"model\":${jsonx.quote(c.model)},\"parent_session_id\":${jsonx.quote(s.parent_session_id)},\"cache_key\":${jsonx.quote(s.cache_key)}"
-    members = "${members},\"forked_from\":{\"session\":${jsonx.quote(f.session)},\"message_count\":${f.message_count}},\"naeb_version\":${jsonx.quote(build_info.naeb_version())}"
+    members = "${members},\"forked_from\":{\"session\":${jsonx.quote(f.session)},\"message_count\":${f.message_count}},\"naeb_version\":${jsonx.quote(build_info.naeb_version())},\"mode\":${jsonx.quote(mode_name_(s.tools))}"
     tokens = compact.estimate_tokens(msgs, 0, list.list_size(msgs))
     return log.commit(s.log, s.history, 0, msgs, tokens, members, 1)
 }
@@ -499,6 +506,7 @@ initialize_history_(s: *Session, cwd: string) -> string {
     off = prompt.disabled_patches(o.patches_off)
     if list.list_size(off) > 0 { members = "${members},\"patches_off\":${json_list_(off)}" }
     members = "${members},\"profile\":${jsonx.quote(profile.name(profile.for_model(c.model)))}"
+    members = "${members},\"mode\":${jsonx.quote(mode_name_(s.tools))}"
     msgs = list.list_new()
     list.list_add(msgs, msg.system(system))
     one = list.list_new()

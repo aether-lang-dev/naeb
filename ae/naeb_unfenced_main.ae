@@ -1,9 +1,0 @@
-// The naeb-unfenced binary (its name is set once, in .build.ae's output()): naeb.app
-// with no project fence, as upstream behaves. ae/naeb_main.ae is the fenced
-// one (docs/naeb/adr/0001).
-
-import naeb.app
-
-main() {
-    app.run_unfenced()
-}

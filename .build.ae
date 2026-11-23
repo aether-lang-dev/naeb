@@ -1,7 +1,6 @@
-// The two binaries of the Aether port under ae/: `naeb-unfenced`,
-// upstream's behaviour with no project fence, and `naeb`, always fenced by the
-// project's policy (docs/naeb/adr/0001). Their names are set here and
-// nowhere else.
+// The Aether port under ae/: one binary, `naeb`, fenced by the project's
+// policy (docs/naeb/adr/0001) unless started with --mode unfenced. Its name is
+// set here and nowhere else.
 
 import bldr
 import aether
@@ -34,11 +33,6 @@ write_commit_() {
 aeb(cap) {
     write_commit_()
     bldr.build() {
-        aether.program() {
-            source("ae/naeb_unfenced_main.ae")
-            lib("ae")
-            output("naeb-unfenced")
-        }
         aether.program() {
             source("ae/naeb_main.ae")
             lib("ae")

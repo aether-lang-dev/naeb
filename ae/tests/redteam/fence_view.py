@@ -26,7 +26,6 @@ sys.path.insert(0, os.path.join(ROOT, "tests"))
 from mock_providers import Mock  # noqa: E402
 
 NAEB = os.environ.get("NAEB", os.path.join(ROOT, "target/build/bin/naeb"))
-UNFENCED = os.environ.get("NAEB_UNFENCED", os.path.join(os.path.dirname(NAEB), "naeb-unfenced"))
 
 POLICY = """import naeb.policy
 
@@ -119,7 +118,7 @@ def main():
     check("default-fence", d.get("policy", "missing") is None and d.get("hosts") == [], "the default fence was %r" % d)
 
     # unfenced: no fence, no tools.fence.
-    p = subprocess.run([UNFENCED, "js", "typeof tools.fence"], cwd=proj, env=env, capture_output=True, text=True, timeout=120)
+    p = subprocess.run([NAEB, "--mode", "unfenced", "js", "typeof tools.fence"], cwd=proj, env=env, capture_output=True, text=True, timeout=120)
     check("naeb-has-none", p.stdout.strip().endswith('"undefined"'), "the unfenced build said %r" % p.stdout[-200:])
 
     # A sub-agent sees the same fence as its parent.

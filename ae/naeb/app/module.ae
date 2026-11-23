@@ -1,7 +1,7 @@
-// app: the body of both binaries, upstream src/main.zig. run_unfenced (ae/naeb_unfenced_main.ae)
-// runs with no fence, as upstream; run_naeb (ae/naeb_main.ae) always with the
-// project's (docs/naeb/adr/0001: naeb.ae through naeb.fence.policy, else the
-// default fence), plus `naeb build [-y]`. This slice has `naeb ask [--json] [-c|--resume <id>]
+// app: the whole program, upstream src/main.zig. `naeb` runs with the
+// project's fence (docs/naeb/adr/0001: naeb.ae through naeb.fence.policy, else the
+// default fence), plus `naeb build [-y]`; `naeb --mode unfenced ...` runs with
+// no fence, as upstream does, and says so on stderr and in the Session log. This slice has `naeb ask [--json] [-c|--resume <id>]
 // [--effort <level>] <prompt|->`, `naeb js '<code>'`, `naeb login`/`logout`
 // (API keys only), `--help` and `--version`, and the hidden
 // `naeb __jail [-w <root>]... -- <command>...` helper the Linux write sandbox
@@ -42,9 +42,9 @@ import naeb.tui
 import naeb.tui.live
 import naeb.tui.clock
 
-exports(run_unfenced, run_naeb)
+exports(run)
 
-const HELP = "naeb · a coding agent whose unit of work is a Run\n\nUsage:\n  naeb [options]                        Open the TUI\n  naeb ask [options] <prompt|->         Ask once; - reads stdin\n  naeb js <code>                        Run sandbox JavaScript\n  naeb login [service] [--device]       Sign in or store a key; no service lists them\n  naeb update [version]                 Upgrade in place\n  naeb logout <service>                 Remove naeb's stored credential\n  naeb replay <session-id> --all [--json] Replay recorded Runs offline\n\nOptions:\n  -h, --help            Show help\n  -V, --version         Show version\n  -c, --continue        Continue this directory's latest session\n  --resume <id>         Resume a session (32 lowercase hex characters)\n  --effort <level>      Set reasoning effort; /effort lists levels\n  --json                Stream NDJSON events (ask only)\n\nTUI: Enter sends · Shift+Enter adds a line · Esc cancels · Ctrl+O opens latest details · click a Run\nType / for commands, /help for keys, /status for timing and cache details.\nFirst run: naeb, then /provider to sign in; /model picks a model.\nSetup: see README.md and docs/config.md.\n"
+const HELP = "naeb · a coding agent whose unit of work is a Run\n\nUsage:\n  naeb [options]                        Open the TUI\n  naeb ask [options] <prompt|->         Ask once; - reads stdin\n  naeb js <code>                        Run sandbox JavaScript\n  naeb login [service] [--device]       Sign in or store a key; no service lists them\n  naeb update [version]                 Upgrade in place\n  naeb logout <service>                 Remove naeb's stored credential\n  naeb replay <session-id> --all [--json] Replay recorded Runs offline\n\nOptions:\n  -h, --help            Show help\n  -V, --version         Show version\n  -c, --continue        Continue this directory's latest session\n  --resume <id>         Resume a session (32 lowercase hex characters)\n  --effort <level>      Set reasoning effort; /effort lists levels\n  --json                Stream NDJSON events (ask only)\n  --mode <mode>         fenced (default) or unfenced; first argument only; unfenced runs with no\n                        project fence and is announced on stderr and in the Session log\n\nTUI: Enter sends · Shift+Enter adds a line · Esc cancels · Ctrl+O opens latest details · click a Run\nType / for commands, /help for keys, /status for timing and cache details.\nFirst run: naeb, then /provider to sign in; /model picks a model.\nSetup: see README.md and docs/config.md.\n"
 
 // Bare `naeb`: the TUI (upstream tui.run) on the controlling terminal, over
 // a Session with undo on; -c/--resume reopen one.
@@ -93,6 +93,33 @@ run_tui_(envp: @keep ptr, ap: ptr, fence: @keep ptr) {
     term.close(t)
     session.close(live.session_of(p))
 }
+
+// --mode <fenced|unfenced> is a global option and only ever the first two
+// arguments, set by the person who starts naeb: not by the environment, a
+// config file, a project file, or anything a Run, a hook, a skill or a
+// sub-agent can reach. The rest of the program sees the arguments without it.
+mode_skip_() -> int {
+    if os.args_count() >= 2 && os.args_get(1) == "--mode" { return 2 }
+    return 0
+}
+
+args_n_() -> int { return os.args_count() - mode_skip_() }
+
+arg_(i: int) -> string {
+    if i == 0 { return os.args_get(0) }
+    return os.args_get(i + mode_skip_())
+}
+
+// (mode, error): "fenced" (the default) or "unfenced".
+mode_() -> (string, string) {
+    if mode_skip_() == 0 { return "fenced", "" }
+    if os.args_count() < 3 { return "", "--mode needs fenced or unfenced" }
+    m = os.args_get(2)
+    if m == "fenced" || m == "unfenced" { return m, "" }
+    return "", "unknown mode ${m}: use --mode fenced or --mode unfenced"
+}
+
+const UNFENCED_NOTICE = "naeb: UNFENCED (--mode unfenced): no project fence confines commands, file tools or network access"
 
 self_exe_() -> string {
     a0 = os.args_get(0)
@@ -153,8 +180,8 @@ confirm_() -> fn {
 build_(envp: ptr) -> int {
     yes = 0
     i = 2
-    while i < os.args_count() {
-        a = os.args_get(i)
+    while i < args_n_() {
+        a = arg_(i)
         if a == "-y" || a == "--yes" {
             yes = 1
         } else {
@@ -213,7 +240,7 @@ parse_args_(n: int) -> ptr {
     a.detail = ""
     i = 1
     while i < n {
-        arg = os.args_get(i)
+        arg = arg_(i)
         if a.ask == 0 && arg == "ask" {
             a.ask = 1
         } else if a.ask == 1 && arg == "--agent-input" {
@@ -228,7 +255,7 @@ parse_args_(n: int) -> ptr {
                 a.err = "MissingReasoningEffort"
                 return a as ptr
             }
-            a.effort = os.args_get(i)
+            a.effort = arg_(i)
             a.has_effort = 1
         } else if arg == "--resume" {
             i = i + 1
@@ -236,7 +263,7 @@ parse_args_(n: int) -> ptr {
                 a.err = "MissingSessionId"
                 return a as ptr
             }
-            a.resume_id = os.args_get(i)
+            a.resume_id = arg_(i)
         } else if string.length(arg) > 1 && string.starts_with(arg, "-") == 1 {
             a.err = "InvalidArguments"
             a.detail = "Unknown option: ${arg} · run naeb --help"
@@ -293,6 +320,7 @@ zero_usage_() -> string { return types.usage_json(types.usage_new()) }
 help_(envp: ptr, fenced: int) {
     print(HELP)
     if fenced == 1 { println("naeb: fenced by the project's naeb.ae; naeb build [-y] reviews and builds it.") }
+    if fenced == 0 { println("naeb: --mode unfenced: no project fence confines this run.") }
     home, herr = config.home(envp)
     if herr == "" {
         cfg, err, _d = config.load(envp, home)
@@ -327,8 +355,8 @@ line_reader_(secret: int) -> fn {
 rest_args_(from: int) -> ptr {
     l = list.list_new()
     i = from
-    while i < os.args_count() {
-        list.list_add(l, os.args_get(i))
+    while i < args_n_() {
+        list.list_add(l, arg_(i))
         i = i + 1
     }
     return l
@@ -373,19 +401,23 @@ jail_helper_() {
     }
 }
 
-// The naeb-unfenced binary: upstream's behaviour, no project fence.
-run_unfenced() {
+// The program: fenced by the project's policy unless the person who started
+// it said --mode unfenced on the command line (upstream's behaviour, no fence).
+run() {
     jail_helper_()
-    run_(env.from_process(), null)
-}
-
-// The naeb binary: the project's fence, always.
-run_naeb() {
-    jail_helper_()
+    mode, merr = mode_()
+    if merr != "" {
+        eprint_("naeb: ${merr}\n")
+        exit(2)
+    }
+    if mode == "unfenced" {
+        run_(env.from_process(), null)
+        return
+    }
     // A descriptor naeb inherited would reach every fenced child, past
     // Landlock and SBPL, which check opens (docs/naeb/adr/0001).
     jail.cloexec_inherited()
-    if os.args_count() >= 2 && os.args_get(1) == "build" {
+    if args_n_() >= 2 && arg_(1) == "build" {
         code = build_(env.from_process())
         if code != 0 { exit(code) }
         return
@@ -402,12 +434,12 @@ run_naeb() {
     run_(envp, f)
 }
 
-// The whole program. fence: naeb's *fence.Fence, or null (unfenced).
+// The whole program. fence: naeb's *fence.Fence, or null (--mode unfenced).
 run_(envp: @keep ptr, fence: @keep ptr) {
-    n = os.args_count()
+    n = args_n_()
     i = 1
     while i < n {
-        h = os.args_get(i)
+        h = arg_(i)
         if h == "--help" || h == "-h" {
             fenced = 0
             if fence != null { fenced = 1 }
@@ -416,11 +448,11 @@ run_(envp: @keep ptr, fence: @keep ptr) {
         }
         i = i + 1
     }
-    if n == 2 && (os.args_get(1) == "--version" || os.args_get(1) == "-V") {
+    if n == 2 && (arg_(1) == "--version" || arg_(1) == "-V") {
         println("naeb ${session.VERSION}")
         return
     }
-    if n >= 2 && (os.args_get(1) == "login" || os.args_get(1) == "logout") {
+    if n >= 2 && (arg_(1) == "login" || arg_(1) == "logout") {
         lhome, lherr = config.home(envp)
         if lherr != "" {
             eprint_("naeb: ${session.error_message(lherr)}\n")
@@ -429,7 +461,7 @@ run_(envp: @keep ptr, fence: @keep ptr) {
         code = 0
         out = ""
         errtext = ""
-        if os.args_get(1) == "login" {
+        if arg_(1) == "login" {
             code, out, errtext = auth.login(lhome, envp, rest_args_(2), line_reader_(0), line_reader_(1))
         } else {
             code, out, errtext = auth.logout(lhome, envp, rest_args_(2))
@@ -439,7 +471,7 @@ run_(envp: @keep ptr, fence: @keep ptr) {
         if code != 0 { exit(code) }
         return
     }
-    if n >= 2 && os.args_get(1) == "replay" {
+    if n >= 2 && arg_(1) == "replay" {
         rhome, rherr = config.home(envp)
         if rherr != "" {
             eprint_("naeb: ${replay_error_message_(rherr)}\n")
@@ -454,7 +486,8 @@ run_(envp: @keep ptr, fence: @keep ptr) {
         eprint_(rerrs)
         return
     }
-    if n >= 3 && os.args_get(1) == "js" {
+    if fence == null { eprint_("${UNFENCED_NOTICE}\n") }
+    if n >= 3 && arg_(1) == "js" {
         home_dir = env.get(envp, "HOME")
         if home_dir == "" { home_dir = "/" }
         t = tools.new(home_dir)
@@ -462,7 +495,7 @@ run_(envp: @keep ptr, fence: @keep ptr) {
         if env.get(envp, "NAEB_SANDBOX") == "workspace" { tools.set_workspace(t, 1) }
         if fence != null { tools.set_fence(t, fence) }
         sc = tools.new_scope(t, 0)
-        jo = sandbox.eval(os.args_get(2), sandbox.limits(), tools.host(sc), null) as *sandbox.Outcome
+        jo = sandbox.eval(arg_(2), sandbox.limits(), tools.host(sc), null) as *sandbox.Outcome
         background.stop_all((t as *tools.Tools).background)
         print(jo.logs)
         if jo.ok == 1 {

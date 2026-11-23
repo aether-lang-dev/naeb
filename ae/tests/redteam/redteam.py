@@ -9,8 +9,9 @@ real host or real provider is touched.
 
     python3 -I ae/tests/redteam/redteam.py [case-prefix ...]
 
-NAEB names the binary to drive (default target/build/bin/naeb-unfenced in workspace
-mode, the strictest mode upstream has). With NAEB_FENCED=1 the binary is naeb:
+NAEB names the binary to drive (default target/build/bin/naeb). Without NAEB_FENCED=1 it
+is run with --mode unfenced, in workspace mode, the strictest mode upstream has.
+With NAEB_FENCED=1 it is run fenced:
 the fixture project gets a naeb.ae allowing the allowed listener's
 host:port, built with `naeb build -y` (against this checkout, NAEB_SRC)
 into the fixture HOME's ~/.naeb.
@@ -31,8 +32,9 @@ import tempfile
 import threading
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-NAEB = os.environ.get("NAEB", os.path.join(ROOT, "target/build/bin/naeb-unfenced"))
+NAEB = os.environ.get("NAEB", os.path.join(ROOT, "target/build/bin/naeb"))
 FENCED = os.environ.get("NAEB_FENCED") == "1"
+MODE = [] if FENCED else ["--mode", "unfenced"]
 
 
 class Listener:
@@ -277,7 +279,7 @@ def main(argv):
     if not FENCED:
         env["NAEB_SANDBOX"] = "workspace"
     try:
-        p = subprocess.run([NAEB, "js", script], cwd=proj, env=env, capture_output=True, text=True, timeout=600)
+        p = subprocess.run([NAEB, *MODE, "js", script], cwd=proj, env=env, capture_output=True, text=True, timeout=600)
     except BaseException:
         os.remove(planted_real)
         raise

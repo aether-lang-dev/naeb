@@ -1,7 +1,7 @@
 #!/bin/sh
 # tools/check_layers.sh — the reach of each module of the Aether port is its
 # import list (sae's tests/check_layers.sh is the model). This pins the
-# imports of every module (ae/naeb_unfenced_main.ae and each ae/naeb module; an unpinned one
+# imports of every module (ae/naeb_main.ae and each ae/naeb module; an unpinned one
 # fails), so widening one is a reviewed change here, and checks the rules a
 # single import list cannot: who may start a process, who may embed QuickJS,
 # who may use the marked stand-in, who reaches the network, and that the
@@ -137,9 +137,8 @@ expect_imports $T/mcp_tool/module.ae "naeb.image|naeb.jsonx|naeb.mcp|std.encodin
 # The TUI (ae/term underneath; no network, no process of its own except the
 # exceptions named in the rules below).
 U=ae/naeb/tui
-expect_imports ae/naeb_unfenced_main.ae "naeb.app"
 expect_imports ae/naeb_main.ae "naeb.app"
-# The binaries' body: ae/naeb_unfenced_main.ae (unfenced) runs it with no fence, ae/naeb_main.ae (naeb) with the project's.
+# The binary's body: ae/naeb_main.ae runs it with the project's fence, or with none under --mode unfenced.
 expect_imports ae/naeb/app/module.ae "naeb.auth|naeb.build_info|naeb.config|naeb.config.env|naeb.fence|naeb.fence.policy|naeb.jsonx|naeb.provider.types|naeb.run_replay|naeb.sandbox|naeb.session|naeb.tools|naeb.tools.agent_input|naeb.tools.background|naeb.tools.jail|naeb.tui|naeb.tui.clock|naeb.tui.live|std.fs|std.io|std.list|std.os|std.signal|std.string|std.sync|std.worker|term|term.input"
 # `/model`'s listing (src/auth/models.zig): one GET of the provider's /models.
 expect_imports ae/naeb/auth/models/module.ae "naeb.jsonx|std.http.client|std.json|std.list|std.string|std.time"
@@ -189,7 +188,7 @@ expect_imports $U/reflect/module.ae "naeb.fserr|naeb.jsonx|naeb.tools.process|st
 expect_imports $U/open/module.ae "std.fs|std.list|std.map|std.os|std.strbuilder|std.string|std.worker"
 
 # Every module is pinned: a new one needs its line above.
-for f in ae/naeb_unfenced_main.ae ae/naeb_main.ae $(find ae/naeb -name '*.ae' | sort); do
+for f in ae/naeb_main.ae $(find ae/naeb -name '*.ae' | sort); do
     case " $PINNED " in
         *" $f "*) ;;
         *) echo "FAIL $f has no expect_imports line"; fail=1 ;;
@@ -197,7 +196,7 @@ for f in ae/naeb_unfenced_main.ae ae/naeb_main.ae $(find ae/naeb -name '*.ae' | 
 done
 
 rule() {   # rule "what" "pattern" "allowed path regex"
-    hits=$(grep -rnE "$2" --include='*.ae' ae/naeb ae/naeb_unfenced_main.ae ae/naeb_main.ae 2>/dev/null \
+    hits=$(grep -rnE "$2" --include='*.ae' ae/naeb ae/naeb_main.ae 2>/dev/null \
           | grep -vE "^($3)" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
     if [ -n "$hits" ]; then
         echo "FAIL $1:"
@@ -219,7 +218,7 @@ PROC="exec run_capture run_pipe run_pipe_drain_and_wait run_socket run_stdio run
 # ties a child to a Run (output capture, deadline, kill on cancel); a click is
 # outside any Run. So tui/open alone keeps spawn_proc_to (and os.wait on its
 # own worker to reap the child).
-for f in $(grep -rlE '^import std\.os( |$)' --include='*.ae' ae/naeb ae/naeb_unfenced_main.ae ae/naeb_main.ae | sort); do
+for f in $(grep -rlE '^import std\.os( |$)' --include='*.ae' ae/naeb ae/naeb_main.ae | sort); do
     case $f in $T/process/*|$T/jail/*) continue ;; esac
     stmt=$(awk '/^import std\.os( |$)/ { on = 1 } on { printf "%s ", $0; if ($0 ~ /\)/ || $0 ~ /^import std\.os$/) exit }' "$f")
     keep=""

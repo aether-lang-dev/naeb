@@ -27,7 +27,6 @@ sys.path.insert(0, os.path.join(ROOT, "tests"))
 from mock_providers import Mock  # noqa: E402
 
 NAEB = os.environ.get("NAEB", os.path.join(ROOT, "target/build/bin/naeb"))
-UNFENCED = os.environ.get("NAEB_UNFENCED", os.path.join(os.path.dirname(NAEB), "naeb-unfenced"))
 SECRET_NOTE = "not offered: naeb keeps ~/.ssh closed; open it only by editing naeb.ae yourself"
 
 SCRIPT = r'''
@@ -96,13 +95,13 @@ def main():
     }
     script = "const HOME = %s;\n%s" % (json.dumps(home), SCRIPT)
 
-    def js(binary):
-        p = subprocess.run([binary, "js", script], cwd=proj, env=env, capture_output=True, text=True, timeout=300)
+    def js(*mode):
+        p = subprocess.run([NAEB, *mode, "js", script], cwd=proj, env=env, capture_output=True, text=True, timeout=300)
         try:
             r = json.loads(p.stdout.strip().splitlines()[-1])
             return json.loads(r) if isinstance(r, str) else r
         except Exception:
-            print("fixture broken: %s exited %d\nstdout: %s\nstderr: %s" % (binary, p.returncode, p.stdout[-2000:], p.stderr[-2000:]))
+            print("fixture broken: %s exited %d\nstdout: %s\nstderr: %s" % (NAEB, p.returncode, p.stdout[-2000:], p.stderr[-2000:]))
             return None
 
     results = js(NAEB)
@@ -166,7 +165,7 @@ def main():
           "the Run said %r" % (p.stdout + p.stderr)[-500:])
 
     # Without a fence (unfenced): upstream's shapes.
-    plain = js(UNFENCED)
+    plain = js("--mode", "unfenced")
     pr = json.loads(plain.get("read", "{}")) if plain else {}
     pt = json.loads(plain.get("tool_other", "{}")) if plain else {}
     check("naeb-unchanged", plain is not None and "fence_denied" not in pr and set(pr) == {"exit_code", "output"} and pt.get("fence_denied") is None,

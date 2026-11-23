@@ -921,6 +921,7 @@ agent_ctx_(s: *RunScope) -> ptr {
     c.forked = t.forked
     c.session_id = t.session_id
     c.self_exe = t.self_exe
+    if t.fence == null { c.unfenced = 1 }
     c.env = t.env
     c.undo_dir = t.undo_dir
     td = turn_undo_dir(s.tools)

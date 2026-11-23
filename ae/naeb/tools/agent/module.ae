@@ -51,6 +51,7 @@ struct Ctx {
     forked: int
     session_id: string       // "" none
     self_exe: string
+    unfenced: int            // 1 when this naeb runs --mode unfenced: a child is started the same way; never otherwise
     env: ptr                 // "NAME=value" list the child starts from, null: this process's
     undo_dir: string
     fork: ptr                // *agent_input.Fork of the running Step, or null
@@ -139,6 +140,7 @@ new_ctx(progress_q: @keep ptr, sessions: @keep ptr, gate: @keep ptr) -> ptr {
     c.forked = 0
     c.session_id = ""
     c.self_exe = ""
+    c.unfenced = 0
     c.env = null
     c.undo_dir = ""
     c.fork = null
@@ -817,6 +819,10 @@ run_child_(c: *Ctx, a: *Args, cfg: @keep ptr, cancel: ptr, id: string, session: 
     }
     argv = list.list_new()
     list.list_add(argv, c.self_exe)
+    if c.unfenced == 1 {
+        list.list_add(argv, "--mode")
+        list.list_add(argv, "unfenced")
+    }
     list.list_add(argv, "ask")
     list.list_add(argv, "--json")
     list.list_add(argv, "--agent-input")

@@ -1,9 +1,10 @@
-// The naeb binary (its name is set once, in .build.ae's output()): naeb.app
+// The naeb binary (its name is set once, in .build.ae's output()): naeb.app,
 // fenced by the project's policy, naeb.ae, or the default fence without one
-// (docs/naeb/adr/0001). `naeb build` reviews and builds the policy.
+// (docs/naeb/adr/0001), unless started with --mode unfenced. `naeb build`
+// reviews and builds the policy.
 
 import naeb.app
 
 main() {
-    app.run_naeb()
+    app.run()
 }

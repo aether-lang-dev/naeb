@@ -8,7 +8,8 @@
 # (one record format everywhere), fence_view.py (the policy in force, as
 # data), naeb_policy.py (how naeb builds, checks and loads a policy) and
 # fence_approval.py (the TUI's approval loop) and maven_broker.py (the
-# experimental Maven broker, against a fixture repository on 127.0.0.1).
+# experimental Maven broker, against a fixture repository on 127.0.0.1) and
+# mode_selection.py (nothing but the command line can turn the fence off).
 set -eu
 ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 cd "$ROOT"
@@ -26,5 +27,6 @@ if [ $# -eq 0 ]; then
     NAEB="$NAEB" python3 -I ae/tests/redteam/naeb_policy.py || status=1
     NAEB="$NAEB" python3 -I ae/tests/redteam/fence_approval.py || status=1
     NAEB="$NAEB" python3 -I ae/tests/redteam/maven_broker.py || status=1
+    NAEB="$NAEB" python3 -I ae/tests/redteam/mode_selection.py || status=1
 fi
 exit $status

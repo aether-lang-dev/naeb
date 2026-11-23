@@ -2,4 +2,4 @@
 # Upstream's tests (tests/*.py) drive "the program" and need it without a
 # project fence, as upstream behaves: local mock providers are on loopback and
 # the fence allows no egress. This runs the built naeb that way.
-exec "$(dirname "$0")/../../target/build/bin/naeb-unfenced" "$@"
+exec "$(dirname "$0")/../../target/build/bin/naeb" --mode unfenced "$@"

@@ -16,8 +16,13 @@ Ported through upstream commit: **a2dd439** (Release 0.13.0) for the files liste
 - Each row below names the upstream file, the Aether file that ports it, and
   the upstream commit that file is ported through. `git diff <commit>..main -- <file>`
   is what the port still owes for that file.
-- The parity gate is upstream's own Python tests and mocks (`tests/`), unchanged,
-  run against the Aether binary. Fixtures of ours sit beside them, never inside them.
+- The parity gate is upstream's own Python tests and mocks (`tests/`), run
+  against the Aether binary through `ae/tests/naeb-unfenced`. They differ from
+  upstream's only by renamed words (`NIB_` to `NAEB_`, `nib_version` to
+  `naeb_version`, `.nib` to `.naeb`, the program name in a few asserted
+  messages); `ae/tests/check_tests_vs_main.py` applies the reverse substitution
+  and requires the result to equal `main`. Fixtures of ours sit beside them,
+  never inside them.
 
 ## Layout
 
@@ -25,7 +30,7 @@ The Aether sources live under `ae/`, beside the Zig originals, which stay
 untouched so `main` merges in cleanly:
 
 ```
-ae/naeb_unfenced_main.ae, ae/naeb_main.ae   the two binaries' entries (names set once, in .build.ae's output())
+ae/naeb_main.ae          the binary's entry (name set once, in .build.ae's output())
 ae/naeb/<concept>/        one module per upstream file or concept, imported as naeb.<concept>
                          (the naeb. prefix keeps them clear of std and aeb module names,
                          e.g. aeb's own `sandbox` SDK)
@@ -36,22 +41,19 @@ ae/term/                 the TUI's terminal layer (another slice)
 ae/tests/<name>_test.ae  std.spec suites; upstream's inline Zig tests ported by name
 tools/                   port maintenance scripts (upstream-diff.sh, check_layers.sh)
 asks/                    what the port needs from Aether, written up for upstream
-.build.ae, .tests.ae     aeb: `aeb .build.ae` builds target/build/bin/naeb-unfenced, `aeb .tests.ae` runs the suites
+.build.ae, .tests.ae     aeb: `aeb .build.ae` builds target/build/bin/naeb, `aeb .tests.ae` runs the suites
 pins                     AE_PIN / AEB_REF the port is verified against
 ```
 
-Names. The port is `naeb`; upstream is `nib`. `naeb` is the fenced command
-and `naeb-unfenced` the same agent with no fence (upstream's behaviour);
-configuration is `NAEB_*` and `~/.naeb`, where upstream has `NIB_*` and
-`~/.nib`. Upstream's own end-to-end tests, which are unchanged and hard-code
-`zig-out/bin/nib` and `NIB_*`, are run through `ae/tests/nib-oracle-launcher.py`,
-which translates the names (see `ae/tests/upstream-e2e.sh`). The Session log
-header keeps upstream's `nib_version` field so upstream's `scripts/stats.py`
-reads it. The system prompt still opens "You are nib",
-because upstream's tests/test_session.py asserts it. Two more names stay
-upstream's as shared contracts that upstream's tests use: the project skills
-directory `.nib/skills`, and the hook variables `NIB_EVENT`, `NIB_FILES` and
-`NIB_TURN_STATUS`.
+Names. The port is `naeb`; upstream is `nib`. There is one binary, `naeb`,
+fenced by the project's policy; `naeb --mode unfenced ...` (first two
+arguments, nothing else selects it) is the same agent with no fence, as
+upstream behaves. Configuration is `NAEB_*` and `~/.naeb`, where upstream has
+`NIB_*` and `~/.nib`; hook commands receive `NAEB_EVENT`, `NAEB_FILES` and
+`NAEB_TURN_STATUS`; project skills live in `.naeb/skills`; the Session log
+header carries `naeb_version` and `mode`; the system prompt opens "You are
+naeb". Upstream's `scripts/stats.py` is edited the same way (`naeb_version`,
+"refused by naeb").
 
 ## Decisions (Paul, 2026-11-12)
 
@@ -140,7 +142,7 @@ directory `.nib/skills`, and the hook variables `NIB_EVENT`, `NIB_FILES` and
 | `src/provider/codex_ws.zig`, `websocket.zig` | 523 | not ported |  | policy: API keys only |
 | `src/config.zig` | 1680 | `ae/naeb/config/module.ae`, `ae/naeb/config/env/module.ae` | a2dd439 | no Codex provider ([codex] validated and ignored); default service anthropic |
 | `src/mcp.zig`, `src/mcp/*` | 700 | `ae/naeb/mcp/module.ae`, `mcp/mcp_index`, `mcp/mcp_headers`, `mcp/mcp_transport` | a2dd439 | stdio over os.run_stdio (newline-delimited JSON-RPC; stderr discarded and cwd set by os.run_stdio; kill by pid, no process group); Streamable HTTP on std.http.client from a worker thread; no environment proxy |
-| `src/main.zig` | 311 | `ae/naeb_unfenced_main.ae` | a2dd439 | ask, js, login/logout, help, version, __jail; bare `naeb` opens the TUI (`run_tui_`); `naeb replay` with its three error texts; no update |
+| `src/main.zig` | 311 | `ae/naeb_main.ae` | a2dd439 | ask, js, login/logout, help, version, __jail; bare `naeb` opens the TUI (`run_tui_`); `naeb replay` with its three error texts; no update |
 | `src/replay.zig` | 541 | `ae/naeb/run_replay/module.ae` | a2dd439 | renamed (basename `replay` is the core's) |
 | `src/image.zig` | 324 | `ae/naeb/image/module.ae` | a2dd439 | images are JSON texts (the log's `images` entries); binary-safe reads; SHA-256 hash name; Attached/Target for the Run's images; pastedPath, and read_pasted for the TUI's stat-then-read |
 | `src/tui.zig` | 1911 | `ae/naeb/tui/module.ae` | 7788541 | the App; takes term, Session port and clock; app events through `naeb.tui.app_queue`; the Ticker is the poll timeout; the clipboard reader is an instance field (upstream's test override) |
@@ -450,7 +452,7 @@ Runs after the `/js` Run, so later background progress attaches to its Run,
 and `naeb.tui.live`'s idle tick now drains the due progress snapshots
 (upstream's `.tick` with no Turn). `tui_app_test.ae` has a spec for both.
 
-**`tools/check_layers.sh`** pins the imports of every module (ae/naeb_unfenced_main.ae and
+**`tools/check_layers.sh`** pins the imports of every module (ae/naeb_main.ae and
 every ae/naeb module; an unpinned one fails). Who may start a program is the
 compiler's rule since Aether 0.911.0 (`import ns hiding (...)`, aether
 #3653): every std.os import outside tools/process and tools/jail hides

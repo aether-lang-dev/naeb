@@ -2,7 +2,7 @@
 # ae/tests/upstream-e2e.sh: run upstream's Python end-to-end tests against the
 # Aether binary. tests/ is upstream's, edited only where a word pins the old
 # name (checked below); they drive ae/tests/naeb-unfenced, which runs the built
-# naeb without a project fence.
+# naeb with --mode unfenced.
 # Every test drives local mocks only (tests/mock_*.py); none reaches a real
 # provider.
 #
@@ -15,7 +15,7 @@
 set -u
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$ROOT"
-BIN="$ROOT/target/build/bin/naeb-unfenced"
+BIN="$ROOT/target/build/bin/naeb"
 if [ ! -x "$BIN" ]; then
     echo "build first: aeb .build.ae" >&2
     exit 2
