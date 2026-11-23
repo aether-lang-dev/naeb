@@ -244,7 +244,7 @@ module was mutation-checked.
 | test_files.py | pass | |
 | test_providers.py | every protocol and provider passes round trip, cache usage, resume, provider mismatch, 401 without the key; fails at its `delegate` step | tools.agent (subagents) |
 | test_sandbox.py | all but `test_subagent_inherits_the_sandbox` | tools.agent |
-| test_session.py | every section passes except subagents, tools.fetch and `nib_version` | one script: it stops at the first (subagent stats); `nib_version` is `0.13.0-ae`, upstream's is the build.zig.zon version plus the git commit |
+| test_session.py | every section passes except subagents, tools.fetch and `naeb_version` | one script: it stops at the first (subagent stats); `naeb_version` is `0.13.0-ae`, upstream's is the build.zig.zon version plus the git commit |
 | test_stream_idle.py | Chat cases pass except two | tools.agent, tools.llm in a child; Codex classes excluded |
 | test_background_bash.py | 30 of 38 non-TUI Chat cases (Linux; on macOS its `/proc` helper needs a stand-in) | tools.agent ids, the TUI; Codex classes excluded |
 | test_llm.py | Chat cases pass except the child one, with one assertion set aside | its docs check requires `async agent(` in the prompt |
@@ -268,7 +268,7 @@ section is validated and ignored. HTTP error bodies are never echoed, for
 every protocol. The request runs on its own thread and an abandoned one ends
 at the server's close or the client's whole-exchange timeout. No `Expect:
 100-continue` is sent, as upstream (std.http.client skips interim 1xx
-responses since Aether 0.910.0 in any case). Header `nib_version` is `0.13.0-ae`.
+responses since Aether 0.910.0 in any case). Header `naeb_version` is `0.13.0-ae`.
 
 **What the TUI slice (src/tui*, on ae/term) needs from this one.**
 `session.init(cfg, options)` (set `options.undo_enabled = 1` for the TUI),
@@ -398,7 +398,7 @@ as rN after `run_background_after_ms` while waiting on tools). Hooks
 Streamable HTTP, `tools.mcp`, `tools.mcp_schema`). `tools.fetch` (HTML to
 Markdown) and `tools.search` (openai, anthropic, deepseek). Images and
 `tools.view`. Run recording and `naeb replay` (its own section above). Session
-headers record `nib_version` as build.zig.zon's version plus the commit
+headers record `naeb_version` as build.zig.zon's version plus the commit
 (.build.ae writes it; `naeb --version` keeps `0.13.0-ae`). Upstream's
 `[providers.<id>] max_output` (8537d53) is ported; `main` was fast-forwarded to
 upstream 8537d53 (two Config commits: dd82e39, 8537d53).
