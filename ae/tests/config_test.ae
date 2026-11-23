@@ -109,6 +109,11 @@ str_(l: ptr, i: int) -> string {
     return s
 }
 
+records_(e: ptr, v: string) {
+    env.set(e, "NAEB_RECORD", v)
+    spec.assert_eq(config.record_tools(e), 1, "value '${v}' records")
+}
+
 main() {
     fw = spec.init()
     spec.describe(fw, "config") {
@@ -825,6 +830,22 @@ main() {
             spec.assert_str_eq(cfg_(cp).api_key, "k1", "key")
             spec.assert_str_eq(cfg_(cp).api_key_env, "OPENAI_API_KEY", "key variable")
             spec.assert_eq(types.missing_key(cp), 0, "has a key")
+        }
+        // 7872a32: tool recording is opt-in and preserves explicit legacy values
+        spec.it("tool recording is opt-in and preserves explicit legacy values") callback {
+            e = env.new()
+            spec.assert_eq(config.record_tools(null), 0, "no environment")
+            spec.assert_eq(config.record_tools(e), 0, "unset")
+            env.set(e, "NAEB_RECORD", "off")
+            spec.assert_eq(config.record_tools(e), 0, "off")
+            records_(e, "on")
+            records_(e, "")
+            records_(e, "1")
+            records_(e, "0")
+            records_(e, "true")
+            records_(e, "false")
+            records_(e, "OFF")
+            records_(e, "legacy")
         }
     }
     return spec.run_summary(fw)

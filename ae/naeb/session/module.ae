@@ -85,7 +85,7 @@ struct Options {
     continue_latest: int
     patches_off: string      // NAEB_PATCHES_OFF
     self_exe: string
-    record_env: string       // NAEB_RECORD
+    record: int              // 1: write the full tool sidecar (NAEB_RECORD, config.record_tools)
     undo_enabled: int        // the TUI's /undo (naeb ask has none, as upstream)
     fork: ptr                // *agent_input.Fork: a forked subagent's inherited history, or null
     undo_dir: string         // a subagent's: the parent Turn's undo directory
@@ -155,7 +155,7 @@ new_options(home: string, user_home: string) -> ptr {
     o.continue_latest = 0
     o.patches_off = ""
     o.self_exe = ""
-    o.record_env = ""
+    o.record = 0
     o.undo_enabled = 0
     o.fork = null
     o.undo_dir = ""
@@ -376,9 +376,7 @@ init(cp: @keep ptr, op: @keep ptr) -> (ptr, string, string) {
             if ierr != "" { return null, ierr, "" }
         }
     }
-    recording = 1
-    if o.record_env == "off" { recording = 0 }
-    s.recorder = record.new("${directory}/${s.id}.calls.jsonl", recording)
+    s.recorder = record.new("${directory}/${s.id}.calls.jsonl", o.record)
     tools.set_config(s.tools, cp, s.id)
     tt2 = s.tools as *tools.Tools
     tt2.session_id = s.id

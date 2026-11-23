@@ -28,7 +28,7 @@ import naeb.provider.types
 import naeb.auth.store
 import naeb.tools.atomic_file
 
-exports(File, Prov, Switch, Custom, ModelEntry, Val, DEFAULT_PROVIDER, home, load, parse, parse_value,
+exports(record_tools, File, Prov, Switch, Custom, ModelEntry, Val, DEFAULT_PROVIDER, home, load, parse, parse_value,
         resolve, apply_store, credentialed, startup_order, custom_providers, endpoint_id_problem,
         add_endpoint, parse_model, model_text, save_model, model_entries, save_effort, save_simple,
         save_skill, save_mcp, load_skills, load_mcp, skill_enabled, enabled_skills, rewrite_value)
@@ -312,6 +312,16 @@ newline_of_(text: string) -> string {
 }
 
 // ---- home ---------------------------------------------------------------
+
+// Whether full tool sidecars (<id>.calls.jsonl) are recorded: off unless
+// NAEB_RECORD is set, and set to anything but "off" (explicit legacy values
+// such as "", "1" or "false" enable it). Upstream config.recordTools, 7872a32.
+record_tools(envp: ptr) -> int {
+    if envp == null { return 0 }
+    if env.has(envp, "NAEB_RECORD") == 0 { return 0 }
+    if env.get(envp, "NAEB_RECORD") == "off" { return 0 }
+    return 1
+}
 
 // NAEB_HOME, else $HOME/.naeb. (path, "") or ("", "MissingHome").
 home(envp: ptr) -> (string, string) {
