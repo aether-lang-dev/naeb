@@ -59,6 +59,7 @@ struct Limits {
     stack_bytes: long
     timeout_ms: long
     max_log_bytes: long
+    max_full_log_bytes: long   // the saved copy of a truncated console
 }
 
 // What a tool hands back: ok with JSON text, or an error message. id and
@@ -120,6 +121,8 @@ struct Outcome {
     log_head_bytes: long
     log_tail_start: long
     log_truncated: int
+    full_logs: string          // the whole console when it passed max_log_bytes, else ""
+    full_logs_truncated: int   // full_logs was cut at max_full_log_bytes
     tool_bytes: long
     stopped: string
 }
@@ -165,6 +168,7 @@ limits() -> ptr {
     l.stack_bytes = 1024 * 1024
     l.timeout_ms = 5 * 60 * 1000
     l.max_log_bytes = 64 * 1024
+    l.max_full_log_bytes = 16 * 1024 * 1024
     return l as ptr
 }
 
@@ -962,7 +966,7 @@ eval(code: string, lp: ptr, host: @keep ptr, cancel: @keep ptr) -> ptr {
     l = lp as *Limits
     st = heap.new(State)
     st.host = host
-    st.logs = console.new(l.max_log_bytes)
+    st.logs = console.new(l.max_log_bytes, l.max_full_log_bytes)
     st.js_remaining_ns = l.timeout_ms * 1000000
     st.js_started_ns = 0
     st.js_running = 0
@@ -1053,6 +1057,8 @@ eval(code: string, lp: ptr, host: @keep ptr, cancel: @keep ptr) -> ptr {
     o.log_tail_start = snap.tail_start
     o.log_truncated = 0
     if console.bytes(st.logs) > l.max_log_bytes { o.log_truncated = 1 }
+    o.full_logs = snap.full
+    o.full_logs_truncated = snap.full_truncated
     o.tool_bytes = st.tool_bytes
     o.stopped = stopped
     return o as ptr

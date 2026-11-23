@@ -197,7 +197,7 @@ main() {
             pending.has_expected = 1
             pending.child = 0
             pending.remaining_steps = -1 as long
-            rp, rerr = run_replay.replay_one(pending as ptr, rec_at_(recs, 0) as ptr, "", 0)
+            rp, rerr = run_replay.replay_one(pending as ptr, rec_at_(recs, 0) as ptr, "", 0, "")
             spec.assert_str_eq(rerr, "", "replayed")
             rep = rp as *run_replay.Report
             spec.assert_eq(rep.incomplete, 1, "incomplete")

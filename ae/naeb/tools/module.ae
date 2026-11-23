@@ -48,7 +48,7 @@ import naeb.tools.view
 import naeb.image
 import naeb.provider.types
 
-exports(Tools, RunScope, new, new_scope, host, call_tool, active_tool, names_json, docs, all_docs, tool_names,
+exports(Tools, RunScope, outputs_dir, new, new_scope, host, call_tool, active_tool, names_json, docs, all_docs, tool_names,
         is_ported, take_images, credential_paths, writable_roots, naeb_home, take_changes, set_workspace, set_fence, swap_fence, fence_json, maven_override, fence_spec, fence_proxy, fence_monitor, fence_base, fence_child, close_channel, child_refusals, refusals_json, take_denied,
         cancel_cell, set_log, sandbox_roots, change_paths, export_versions, import_versions, set_config, take_usage, take_jail_notice, enable_undo, begin_turn_undo, finish_turn_undo, run_undo, turn_undo_dir, attach_turn_undo_dir, close_undo)
 
@@ -712,6 +712,15 @@ all_docs() -> string {
         i = i + 1
     }
     return wrap_docs_(body)
+}
+
+// Where a truncated Run's or background task's full output is saved:
+// <data home>/sessions/<session id>.outputs, or "" before the Session has
+// both (upstream Tools.outputsDir, f7ed5ea).
+outputs_dir(tp: ptr) -> string {
+    t = tp as *Tools
+    if t.data_home == "" || t.session_id == "" { return "" }
+    return "${t.data_home}/sessions/${t.session_id}.outputs"
 }
 
 naeb_home(tp: ptr) -> string {

@@ -981,7 +981,7 @@ execute_(s: *Session, tc: *types.ToolCall, sk: ptr, cancel: @keep ptr, run: @kee
     poll_(s, sk)
     changes = tools.take_changes(j.scope)
     if j.hook_notice != "" { emit_(sk, "{\"notice\":${jsonx.quote(j.hook_notice)}}") }
-    out_text = output.step_limit_output(output.format_hook(o as ptr, j.hook, l.run_output_bytes as long), remaining_steps_(s))
+    out_text = output.step_limit_output(output.format_hook_saved(o as ptr, j.hook, l.run_output_bytes as long, tools.outputs_dir(s.tools), 1), remaining_steps_(s))
     summary = tool_summary.init(run, run_index, timing.omitted(run) - before_omitted)
     viewed = tools.take_images(j.scope)
     tool_summary.annotate_views(summary, viewed)
@@ -1053,7 +1053,7 @@ poll_runs_(s: *Session) {
     while k < list.list_size(done) {
         j2 = list.list_get_raw(done, k) as *RunJob
         o2 = j2.outcome as *sandbox.Outcome
-        out_text = output.format_hook(o2 as ptr, j2.hook, l.run_output_bytes as long)
+        out_text = output.format_hook_saved(o2 as ptr, j2.hook, l.run_output_bytes as long, tools.outputs_dir(s.tools), 1)
         okt = "false"
         if o2.ok == 1 { okt = "true" }
         changes = tools.take_changes(j2.scope)
@@ -1102,6 +1102,24 @@ fork_snapshot_(s: *Session, pending: ptr) -> ptr {
 }
 
 // Delivers finished (or lost) background bash results as user messages before
+// The plain text a finished background bash saves whole when its message is
+// cut: "exit_code: N", a blank line, then the output; "" for other tasks and
+// for results without output (the JSON itself is saved then).
+raw_full_(kind: string, body: string) -> string {
+    if kind != "bash" { return "" }
+    v = jsonx.parse(body)
+    if v == null { return "" }
+    if jsonx.kind(v, "output") != 3 {
+        jsonx.free(v)
+        return ""
+    }
+    code = -1 as long
+    if jsonx.kind(v, "exit_code") == 2 { code = jsonx.long_or(v, "exit_code", -1) }
+    text = "exit_code: ${code}\n\n${jsonx.str_or(v, "output", "")}"
+    jsonx.free(v)
+    return text
+}
+
 // the next request (upstream inbox insert / insertBackground, bash only).
 // include_detached 0: only jobs a Turn waits for (the step-limit wait).
 insert_background_(s: *Session, pending: ptr, sk: ptr, include_detached: int) -> string {
@@ -1132,7 +1150,7 @@ insert_background_(s: *Session, pending: ptr, sk: ptr, include_detached: int) ->
                 head = string.substring(it.text, 0, nl + 1)
                 body = string.substring(it.text, nl + 1, string.length(it.text))
             }
-            content = output.format_message(head, body, l.run_output_bytes as long)
+            content = output.format_message_saved(head, body, l.run_output_bytes as long, tools.outputs_dir(s.tools), 1, raw_full_(it.kind, body))
         }
         event = "{\"id\":${jsonx.quote(it.id)},\"kind\":${jsonx.quote(it.kind)},\"state\":${jsonx.quote(it.state)}"
         m = msg.user_from(content, "background")

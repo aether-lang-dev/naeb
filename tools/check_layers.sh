@@ -52,7 +52,7 @@ expect_imports $T/background/module.ae "naeb.jsonx|naeb.lock|std.list|std.string
 # File system, no process.
 expect_imports $T/atomic_file/module.ae "naeb.fserr|std.cryptography|std.fs|std.io|std.list|std.os|std.string"
 expect_imports $T/file_state/module.ae "naeb.fserr|naeb.lock|std.cryptography|std.fs|std.io|std.list|std.map|std.string|std.sync"
-expect_imports $T/files/module.ae "naeb.fserr|naeb.jsonx|naeb.tools.atomic_file|naeb.tools.file_state|naeb.tools.rules|naeb.tools.undo|std.fs|std.list|std.strbuilder|std.string|std.sync"
+expect_imports $T/files/module.ae "naeb.fserr|naeb.jsonx|naeb.tools.atomic_file|naeb.tools.file_state|naeb.tools.rules|naeb.tools.undo|std.fs|std.io|std.list|std.strbuilder|std.string|std.sync"
 expect_imports $T/undo/module.ae "naeb.fserr|naeb.jsonx|naeb.tools.atomic_file|naeb.tools.file_state|naeb.tools.registry|std.cryptography|std.dir|std.fs|std.list|std.string|std.strbuilder|std.sync"
 expect_imports $T/walk/module.ae "naeb.tools.atomic_file|naeb.tools.rules|std.dir|std.fs|std.list|std.strbuilder|std.string|std.sync"
 expect_imports $T/grep/module.ae "contrib.quickjs|naeb.tools.atomic_file|naeb.tools.rules|naeb.tools.walk|std.fs|std.list|std.strbuilder|std.string|std.sync"
@@ -121,7 +121,8 @@ expect_imports ae/naeb/session/log/module.ae "naeb.fserr|naeb.jsonx|naeb.lock|na
 expect_imports ae/naeb/session/module.ae "naeb.build_info|naeb.image|naeb.jsonx|naeb.lock|naeb.mcp|naeb.msg|naeb.provider|naeb.provider.timing as modeltiming|naeb.provider.sink|naeb.provider.types|naeb.sandbox|naeb.sandbox.record|naeb.sandbox.timing|naeb.session.compact|naeb.session.fork_history|naeb.session.hooks|naeb.session.instructions|naeb.session.log|naeb.session.output|naeb.session.profile|naeb.session.prompt|naeb.session.skills|naeb.session.tool_summary|naeb.tools|naeb.tools.agent_input|naeb.tools.agent_sessions|naeb.tools.atomic_file|naeb.tools.background|naeb.tools.diff|naeb.tools.progress|std.cryptography|std.fs|std.json|std.list|std.os|std.string|std.sync|std.worker"
 # `naeb replay`: reads the two Session files, replays through naeb.sandbox.replay; no tools, no provider.
 expect_imports ae/naeb/run_replay/module.ae "naeb.jsonx|naeb.sandbox|naeb.sandbox.replay|naeb.session.output|std.fs|std.json|std.list|std.map|std.strbuilder|std.string"
-expect_imports ae/naeb/session/output/module.ae "naeb.sandbox|naeb.sandbox.console|std.list|std.strbuilder|std.string"
+# Saves a truncated Run's whole output to a file (f7ed5ea): atomic_file writes it.
+expect_imports ae/naeb/session/output/module.ae "naeb.sandbox|naeb.sandbox.console|naeb.tools.atomic_file|std.cryptography|std.fs|std.list|std.strbuilder|std.string"
 expect_imports ae/naeb/session/profile/module.ae "std.string"
 expect_imports ae/naeb/session/skills/module.ae "naeb.jsonx|std.dir|std.fs|std.list|std.os|std.strbuilder|std.string"
 expect_imports ae/naeb/session/prompt/module.ae "naeb.sandbox|naeb.session.output|naeb.session.profile|std.cryptography|std.list|std.strbuilder|std.string"

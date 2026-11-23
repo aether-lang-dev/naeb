@@ -5,6 +5,7 @@ import std.spec
 import std.string
 import std.strbuilder
 import std.list
+import std.fs
 import naeb.sandbox
 import naeb.sandbox.console
 import naeb.session.output
@@ -72,6 +73,8 @@ plain_(ok: int, text: string, logs: string) -> *sandbox.Outcome {
     o.log_head_bytes = 0
     o.log_tail_start = 0
     o.log_truncated = 0
+    o.full_logs = ""
+    o.full_logs_truncated = 0
     o.tool_bytes = 0
     o.stopped = ""
     return o
@@ -459,6 +462,58 @@ main() {
                 spec.assert_true(string.length(out) <= MAX, "size ${size} fits")
                 size = size + 7
             }
+        }
+        // f7ed5ea
+        spec.it("formatSaved writes full truncated output once and skips small outputs") callback {
+            tmp, terr = fs.make_temp_dir("", "naebout")
+            spec.assert_str_eq(terr, "", "temp dir")
+            dir = "${tmp}/outputs"
+            small = ev_("console.log('short');")
+            small_out = output.format_saved(small as ptr, MAX as long, dir, 1)
+            spec.assert_str_eq(small_out, "short", "small output is shown whole")
+            spec.assert_eq(fs.exists(dir), 0, "nothing is written for a small output")
+
+            big = ev_("console.log('HEAD\\n' + 'x'.repeat(40000) + '\\nMIDDLE-NEEDLE\\n' + 'y'.repeat(40000) + '\\nTAIL');")
+            spec.assert_eq(big.log_truncated, 1, "truncated")
+            out1 = output.format_saved(big as ptr, MAX as long, dir, 1)
+            spec.assert_true(string.length(out1) <= MAX, "fits the budget")
+            start = string.index_of(out1, "[full output: ") + string.length("[full output: ")
+            end = string.index_of_from(out1, "]", start)
+            saved_path = string.substring(out1, start, end)
+            saved, rerr = fs.read(saved_path)
+            spec.assert_str_eq(rerr, "", "saved file reads")
+            spec.assert_true(string.starts_with(saved, "HEAD\n") == 1, "starts at the head")
+            spec.assert_true(has_(saved, "\nMIDDLE-NEEDLE\n"), "keeps the middle")
+            spec.assert_true(ends_(saved, "\nTAIL\n") == 1, "ends at the tail")
+
+            // Identical output names the same file, and a dry run matches without writing.
+            out2 = output.format_saved(big as ptr, MAX as long, dir, 0)
+            spec.assert_str_eq(out2, out1, "same text and path")
+
+            big.full_logs_truncated = 1
+            partial = output.format_saved(big as ptr, MAX as long, dir, 0)
+            spec.assert_true(string.length(partial) <= MAX, "partial fits")
+            spec.assert_true(has_(partial, "[full output (first 16 MiB): "), "partial footer")
+            fs.remove_tree(tmp)
+        }
+        spec.it("formatMessageSaved writes raw full background output only when truncated") callback {
+            tmp, terr = fs.make_temp_dir("", "naebout")
+            spec.assert_str_eq(terr, "", "temp dir")
+            dir = "${tmp}/bg-outputs"
+            prefix = "[background bash b1 finished]\n"
+            short_msg = output.format_message_saved(prefix, "{\"exit_code\":0,\"output\":\"ok\"}", MAX as long, dir, 1, "exit_code: 0\n\nok")
+            spec.assert_true(has_(short_msg, "[full output:") == 0, "no footer")
+            spec.assert_eq(fs.exists(dir), 0, "nothing written")
+
+            long_body = "${repeat_("a", 12000)}NEEDLE${repeat_("a", 12582)}"
+            msg = output.format_message_saved(prefix, long_body, MAX as long, dir, 1, "exit_code: 1\n\nline1\nNEEDLE\nline3\n")
+            spec.assert_true(string.length(msg) <= MAX, "fits")
+            start = string.index_of(msg, "[full output: ") + string.length("[full output: ")
+            end = string.index_of_from(msg, "]", start)
+            saved, rerr = fs.read(string.substring(msg, start, end))
+            spec.assert_str_eq(rerr, "", "saved file reads")
+            spec.assert_str_eq(saved, "exit_code: 1\n\nline1\nNEEDLE\nline3\n", "the raw output is what is saved")
+            fs.remove_tree(tmp)
         }
     }
     return spec.run_summary(fw)

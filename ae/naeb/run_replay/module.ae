@@ -553,7 +553,7 @@ new_report_(run: string) -> *Report {
 
 // One Run replayed against its recording; script "" (has_script 0) for the
 // original code. (*Report, "") or (null, err).
-replay_one(rp: ptr, cp: ptr, script: string, has_script: int) -> (ptr, string) {
+replay_one(rp: ptr, cp: ptr, script: string, has_script: int, outputs_dir: string) -> (ptr, string) {
     original = rp as *Run
     recording = cp as *Recording
     code = original.code
@@ -562,7 +562,11 @@ replay_one(rp: ptr, cp: ptr, script: string, has_script: int) -> (ptr, string) {
     if end == "" { end = replay.END_OK }
     ev = replay.execute_session(code, recording.entries, recording.start_ms_epoch, end, has_script, original.child) as *replay.Report
     if ev.failed == 1 { return null, "OutOfMemory" }
-    text = output.step_limit_output(output.format(ev.outcome, recording.run_output_bytes), original.remaining_steps)
+    // A Run whose shown output pointed at a saved file is replayed with the
+    // same save directory, naming the file without writing it.
+    save_dir = ""
+    if original.has_expected == 1 && string.index_of(original.expected, "[full output") >= 0 { save_dir = outputs_dir }
+    text = output.step_limit_output(output.format_saved(ev.outcome, recording.run_output_bytes, save_dir, 0), original.remaining_steps)
     incomplete = 0
     if recording.incomplete == 1 || ev.incomplete == 1 || original.has_expected == 0 { incomplete = 1 }
     determined = 0
@@ -621,6 +625,7 @@ run(home: string, args: ptr) -> (string, string, string) {
     runs, merr = load_main(data)
     if merr != "" { return "", "", merr }
     calls_path = "${dir}/${o.id}.calls.jsonl"
+    outputs_dir = "${dir}/${o.id}.outputs"
     if fs.exists(calls_path) == 0 { return "", "", "ReplayMetadataNotFound" }
     calls, cerr = fs.read(calls_path)
     if cerr != "" { return "", "", cerr }
@@ -650,7 +655,7 @@ run(home: string, args: ptr) -> (string, string, string) {
                 list.list_add(reports, missing as ptr)
                 undetermined = undetermined + 1
             } else {
-                rp, err = replay_one(original, rec as ptr, "", 0)
+                rp, err = replay_one(original, rec as ptr, "", 0, outputs_dir)
                 if err != "" { return "", "", err }
                 rep = rp as *Report
                 list.list_add(reports, rp)
@@ -698,7 +703,7 @@ run(home: string, args: ptr) -> (string, string, string) {
         if original2 == null { return "", "", "ReplayRunNotFound" }
         rec2 = recording_for_(recs, o.step, o.run)
         if rec2 == null { return "", "", "ReplayMetadataNotFound" }
-        rp2, err2 = replay_one(original2, rec2, script, o.has_script)
+        rp2, err2 = replay_one(original2, rec2, script, o.has_script, outputs_dir)
         if err2 != "" { return "", "", err2 }
         rep2 = rp2 as *Report
         if o.json == 1 {

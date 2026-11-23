@@ -28,6 +28,12 @@ struct Capture {
     bytes: long
     calls: long
     entries: ptr       // list of *Entry, at most MAX_ENTRIES
+    // The whole console stream up to full_limit bytes, kept only once the
+    // output passes `limit` (full_limit 0: never), so a saved copy can be
+    // written; full_truncated when it was cut at a UTF-8 boundary.
+    full_limit: long
+    full: ptr          // strbuilder
+    full_truncated: int
 }
 
 struct Snapshot {
@@ -35,11 +41,16 @@ struct Snapshot {
     entries: ptr       // list of *Entry, gaps filled with merged ranges
     head_bytes: long
     tail_start: long
+    full: string       // "" unless the output passed limit
+    full_truncated: int
 }
 
-new(limit: long) -> ptr {
+new(limit: long, full_limit: long) -> ptr {
     c = heap.new(Capture)
     c.limit = limit
+    c.full_limit = full_limit
+    c.full = strbuilder.new(64)
+    c.full_truncated = 0
     c.head = strbuilder.new(64)
     c.tail = strbuilder.new(64)
     c.bytes = 0
@@ -73,9 +84,36 @@ tail_len_(c: *Capture) -> long {
     return cap
 }
 
+// Adds `text` to the full copy, cutting it at full_limit on a UTF-8 boundary.
+append_full_(c: *Capture, text: string) {
+    n = string.length(text)
+    if n == 0 || c.full_truncated == 1 { return }
+    have = strbuilder.length(c.full) as long
+    rem = c.full_limit - have
+    if rem < 0 { rem = 0 }
+    if (n as long) <= rem {
+        strbuilder.append(c.full, text)
+        return
+    }
+    strbuilder.append(c.full, string.substring(text, 0, rem as int))
+    all = strbuilder.finish(c.full)
+    c.full = strbuilder.new(64)
+    strbuilder.append(c.full, trim_end_utf8(all))
+    c.full_truncated = 1
+}
+
 append(cp: ptr, text: string) {
     c = cp as *Capture
     n = string.length(text) as long
+    if c.full_limit > 0 && c.full_truncated == 0 {
+        if strbuilder.length(c.full) == 0 && c.bytes + n > c.limit {
+            append_full_(c, head_text_(c))
+            if c.full_truncated == 0 { append_full_(c, tail_text_(c)) }
+        }
+        if (strbuilder.length(c.full) > 0 || c.bytes + n > c.limit) && c.full_truncated == 0 {
+            append_full_(c, text)
+        }
+    }
     c.calls = c.calls + 1
     e = new_entry_(c.calls, c.calls, c.bytes, c.bytes + n)
     c.bytes = c.bytes + n
@@ -172,6 +210,15 @@ snapshot(cp: ptr) -> ptr {
     } else {
         s.logs = "${head}${tail}"
     }
+    full_len = strbuilder.length(c.full)
+    s.full = ""
+    if full_len > 0 {
+        all = strbuilder.finish(c.full)
+        c.full = strbuilder.new(64)
+        strbuilder.append(c.full, all)
+        s.full = all
+    }
+    s.full_truncated = c.full_truncated
     out = list.list_new()
     n = list.list_size(c.entries)
     i = 0

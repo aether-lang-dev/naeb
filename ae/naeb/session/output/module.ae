@@ -13,12 +13,18 @@
 import std.string
 import std.strbuilder
 import std.list
+import std.fs
+import std.cryptography
 import naeb.sandbox
 import naeb.sandbox.console
+import naeb.tools.atomic_file
 
-exports(MAX_BYTES, format, format_hook, step_limit_output, format_message, omitted_lines)
+exports(MAX_BYTES, MAX_SAVED_BYTES, format, format_hook, format_saved, format_hook_saved, step_limit_output,
+        format_message, format_message_saved, omitted_lines)
 
 const MAX_BYTES = 16 * 1024
+// The most of one output a saved file holds (upstream max_saved_bytes).
+const MAX_SAVED_BYTES = 16 * 1024 * 1024
 const FAILED_NOTICE = "[Run script failed. Correct the script and continue the task; this error is not a reason to end the Turn.]"
 
 const KIND_CONSOLE = 0
@@ -152,6 +158,98 @@ new_ent_(first: long, last: long, kind: int, text: string, bytes: long, tail: st
     e.tail = tail
     e.keep = -1
     return e
+}
+
+// The text of a Run that does not fit `limit` may be saved whole to a file
+// under `dir` (named by the hash of its bytes, so the same output is the same
+// file): "[full output: <path>]" then ends the shown text. dir "" saves
+// nothing; write 0 only names the file (replay checks the text without
+// writing).
+render_saved_(o: *sandbox.Outcome, limit: long, dir: string, write: int) -> string {
+    logs = trim_newlines_(o.logs)
+    value = o.text
+    if o.ok == 1 && o.text == "undefined" { value = "" }
+    sep = ""
+    if len_(logs) > 0 && len_(value) > 0 { sep = "\n" }
+    label = ""
+    if o.ok == 1 && len_(value) > 0 { label = "result: " }
+    if o.log_truncated == 0 && len_(logs) + len_(value) + len_(sep) + len_(label) <= limit {
+        return render_limit_(o, limit)
+    }
+    footer = ""
+    if dir != "" { footer = save_outcome_(o, dir, write) }
+    if footer != "" && len_(footer) + 2 < limit / 2 {
+        body = render_limit_(o, limit - len_(footer) - 2)
+        nl = "\n"
+        if len_(body) > 0 && string.char_at(body, string.length(body) - 1) == 10 { nl = "" }
+        return "${body}${nl}${footer}\n"
+    }
+    return render_limit_(o, limit)
+}
+
+// The footer of the saved whole console and value of `o`, or "" when there is
+// nothing to save (the console is not truncated and has no full copy) or the
+// file cannot be written.
+save_outcome_(o: *sandbox.Outcome, dir: string, write: int) -> string {
+    raw_logs = ""
+    if len_(o.full_logs) > 0 { raw_logs = o.full_logs }
+    else if o.log_truncated == 0 { raw_logs = o.logs }
+    else { return "" }
+    logs = trim_newlines_(raw_logs)
+    value = o.text
+    if o.ok == 1 && o.text == "undefined" { value = "" }
+    sep = ""
+    if len_(logs) > 0 && len_(value) > 0 { sep = "\n" }
+    label = ""
+    if o.ok == 1 && len_(value) > 0 { label = "result: " }
+    partial = o.full_logs_truncated
+    out = new_writer_()
+    parts = [logs, sep, label, value]
+    i = 0
+    while i < 4 {
+        part = parts[i]
+        if len_(part) > 0 {
+            rem = sat_(MAX_SAVED_BYTES as long, out.len)
+            if len_(part) <= rem {
+                put_(out, part)
+            } else {
+                put_(out, string.substring(part, 0, rem as int))
+                partial = 1
+                break
+            }
+        }
+        i = i + 1
+    }
+    text = strbuilder.finish(out.sb)
+    // Cut at a character boundary when the cap fell inside one.
+    if partial == 1 { text = console.trim_end_utf8(text) }
+    n = string.length(text)
+    if n > 0 && string.char_at(text, n - 1) != 10 && (n as long) < (MAX_SAVED_BYTES as long) { text = "${text}\n" }
+    return save_bytes_(text, dir, write, partial)
+}
+
+// Saves `data` as <dir>/<first 16 bytes of its sha256, hex>.txt (the
+// directory made 0700 and the file 0600 when write is 1, and never rewritten
+// when a file of that size is there); the footer text, or "" on failure.
+save_bytes_(data: string, dir: string, write: int, partial: int) -> string {
+    n = string.length(data)
+    hex, herr = cryptography.sha256_hex(string.bytes(data)[0..n])
+    if herr != "" { return "" }
+    path = "${dir}/${string.substring(hex, 0, 32)}.txt"
+    if write == 1 {
+        ok, kind, _m = fs.create_dir_with_mode(dir, 448)
+        if ok == 0 && kind != fs.KIND_EXISTS {
+            if fs.mkdir_p(dir) != "" { return "" }
+        }
+        st, sk, _sm = fs.stat(path, 1)
+        present = 0
+        if sk == fs.KIND_OK && st.size == (n as long) { present = 1 }
+        if present == 0 {
+            if atomic_file.replace(path, data, 384, 1, 0) != "" { return "" }
+        }
+    }
+    if partial == 1 { return "[full output (first 16 MiB): ${path}]" }
+    return "[full output: ${path}]"
 }
 
 render_limit_(o: *sandbox.Outcome, limit: long) -> string {
@@ -291,6 +389,8 @@ new_plain_(ok: int, text: string) -> *sandbox.Outcome {
     o.log_head_bytes = 0
     o.log_tail_start = 0
     o.log_truncated = 0
+    o.full_logs = ""
+    o.full_logs_truncated = 0
     o.tool_bytes = 0
     o.stopped = ""
     return o
@@ -300,16 +400,26 @@ new_plain_(ok: int, text: string) -> *sandbox.Outcome {
 // the correction notice; stopped Runs end with their stopped line, in both
 // cases inside the budget.
 format(op: ptr, limit: long) -> string {
-    return format_hook(op, "", limit)
+    return format_hook_saved(op, "", limit, "", 0)
+}
+
+// As format(), saving the whole output of a truncated Run under `dir` (see
+// render_saved_; "" saves nothing, write 0 only names the file).
+format_saved(op: ptr, limit: long, dir: string, write: int) -> string {
+    return format_hook_saved(op, "", limit, dir, write)
 }
 
 // As format(), with a hook's payload (upstream Outcome.hook) after the body:
 // body gets half the budget, the payload the rest.
 format_hook(op: ptr, hook: string, limit: long) -> string {
+    return format_hook_saved(op, hook, limit, "", 0)
+}
+
+format_hook_saved(op: ptr, hook: string, limit: long, dir: string, write: int) -> string {
     o = op as *sandbox.Outcome
     if len_(hook) > 0 {
-        body = format_hook(op, "", limit / 2)
-        payload = render_limit_(new_plain_(1, hook), limit - len_(body) - 1)
+        body = format_hook_saved(op, "", limit / 2, dir, write)
+        payload = render_saved_(new_plain_(1, hook), limit - len_(body) - 1, dir, write)
         return "${body}\n${payload}"
     }
     suffix = ""
@@ -318,9 +428,9 @@ format_hook(op: ptr, hook: string, limit: long) -> string {
     } else if o.ok == 0 {
         suffix = FAILED_NOTICE
     } else {
-        return render_limit_(o, limit)
+        return render_saved_(o, limit, dir, write)
     }
-    body = render_limit_(o, limit - len_(suffix) - 1)
+    body = render_saved_(o, limit - len_(suffix) - 1, dir, write)
     return "${body}\n${suffix}"
 }
 
@@ -334,6 +444,33 @@ step_limit_output(output: string, remaining: long) -> string {
 // A background Run's message: `prefix`, then the JSON result cut to what is
 // left of the budget.
 format_message(prefix: string, json: string, limit: long) -> string {
-    payload = render_limit_(new_plain_(0, json), limit - len_(prefix))
+    return format_message_saved(prefix, json, limit, "", 0, "")
+}
+
+// As format_message(); when the JSON does not fit, `raw_full` (the task's
+// plain output, else the JSON itself) is saved whole under `dir` and its
+// footer ends the message.
+format_message_saved(prefix: string, json: string, limit: long, dir: string, write: int, raw_full: string) -> string {
+    budget = limit - len_(prefix)
+    if len_(json) <= budget { return "${prefix}${json}" }
+    footer = ""
+    if dir != "" {
+        full = raw_full
+        if full == "" { full = json }
+        partial = 0
+        slice = full
+        if len_(full) > (MAX_SAVED_BYTES as long) {
+            partial = 1
+            slice = console.trim_end_utf8(string.substring(full, 0, MAX_SAVED_BYTES))
+        }
+        footer = save_bytes_(slice, dir, write, partial)
+    }
+    if footer != "" && len_(footer) + 2 < budget / 2 {
+        payload = render_limit_(new_plain_(0, json), budget - len_(footer) - 2)
+        nl = "\n"
+        if len_(payload) > 0 && string.char_at(payload, string.length(payload) - 1) == 10 { nl = "" }
+        return "${prefix}${payload}${nl}${footer}\n"
+    }
+    payload = render_limit_(new_plain_(0, json), budget)
     return "${prefix}${payload}"
 }

@@ -13,7 +13,7 @@ main() {
             chunks = ["AB", "CDE", "FG", "HI", "J", "K", "LMN", "OPQR", "STUVWXYZ", "0", "123456789"]
             limit = 0
             while limit < 20 {
-                cap = console.new(limit as long)
+                cap = console.new(limit as long, 0)
                 original = ""
                 k = 0
                 while k < 11 {
@@ -43,7 +43,7 @@ main() {
             ci = 0
             while ci < 4 {
                 calls = counts[ci] as long
-                cap = console.new(7)
+                cap = console.new(7, 0)
                 expected_end = 0 as long
                 i = 0 as long
                 while i < calls {
@@ -84,6 +84,24 @@ main() {
                 }
                 ci = ci + 1
             }
+        }
+        // f7ed5ea
+        spec.it("full_limit spills only past limit and caps at a valid UTF-8 boundary") callback {
+            cap = console.new(8, 20)
+            console.append(cap, "1234")
+            console.append(cap, "5678")
+            s1 = console.snapshot(cap) as *console.Snapshot
+            spec.assert_str_eq(s1.full, "", "nothing past the limit yet")
+            spec.assert_eq(s1.full_truncated, 0, "not truncated")
+            console.append(cap, "90你")
+            s2 = console.snapshot(cap) as *console.Snapshot
+            spec.assert_str_eq(s2.full, "1234567890你", "everything once past the limit")
+            spec.assert_eq(s2.full_truncated, 0, "still whole")
+            console.append(cap, "你你你")
+            s3 = console.snapshot(cap) as *console.Snapshot
+            spec.assert_eq(s3.full_truncated, 1, "truncated")
+            spec.assert_true(string.length(s3.full) <= 20, "at most full_limit bytes")
+            spec.assert_str_eq(s3.full, "1234567890你你你", "cut on a character boundary")
         }
     }
     return spec.run_summary(fw)
