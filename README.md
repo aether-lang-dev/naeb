@@ -62,8 +62,10 @@ port is renamed to match.
 - **No prebuilt binary yet.** Build from source, below.
 - **Benchmarks.** Upstream's speed, cost and memory numbers were measured on
   its Zig build and are not claimed for naeb.
-- **Behind upstream.** The port is ported through upstream 0.13.0 (a2dd439);
-  upstream's head is 0.20.0 (e6b1cb4, 2026-11-20). PORT_STATUS.md lists, file by
+- **Behind upstream.** Upstream's head, 0.20.0 (e6b1cb4, 2026-11-20), is merged
+  here, but the port is ported through 0.13.0 (a2dd439) plus the individual
+  upstream commits after it that PORT_STATUS.md marks ported (it has the table of
+  all 48, with what is still to do). PORT_STATUS.md also lists, file by
   file, the upstream commit each Aether module is ported through. A port of an
   upstream change is done in the matching `ae/naeb/` module with tests, checked
   against upstream's own tests.

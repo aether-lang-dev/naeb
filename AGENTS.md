@@ -41,8 +41,10 @@ each Aether module ports, through which upstream commit, and what is left) and
 
 ## Porting an upstream change
 
-How far behind: the port is ported through upstream 0.13.0 (a2dd439, per-file
-commits in PORT_STATUS); upstream's head is 0.20.0 (e6b1cb4, 2026-11-20). To port
+How far behind: upstream's head, 0.20.0 (e6b1cb4, 2026-11-20), is merged, but the
+port is ported through 0.13.0 (a2dd439) plus the commits PORT_STATUS's table
+"Upstream 0.13.0 to 0.20.0" marks ported (per-file commits are in its Status
+table); the failing files of `ae/tests/upstream-e2e.sh` are the to-do list. To port
 a change: fast-forward `main` to upstream and merge it here (the Zig sources and
 renamed docs/tests come across), run `tools/upstream-diff.sh` to see what changed
 in each ported file, port the change into the matching `ae/naeb/` module with its

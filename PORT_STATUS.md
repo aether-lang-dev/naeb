@@ -5,10 +5,12 @@ This branch (`aether-port`) ports [yyydddkkk/nib-code](https://github.com/yyyddd
 It tracks upstream: `main` in this repository is a mirror of `upstream/main`
 and is never committed to; the port follows it.
 
-Ported through upstream commit: **a2dd439** (Release 0.13.0) for the files listed with it below.
-`main` was fast-forwarded to upstream **7788541** on 2026-11-12; that delta touches only
-`src/tui/view.zig` and docs (TUI slice), so every row here is current with it. Since then
-`main` follows upstream to **a6917c6** (2026-11-13; docs only: ADR 0026, CONTEXT.md).
+Ported through upstream commit: **a2dd439** (Release 0.13.0) for the files listed with it
+below, plus the individual upstream commits after it that the table "Upstream 0.13.0 to 0.20.0"
+lists as ported. `main` was fast-forwarded to upstream **e6b1cb4** (Release 0.20.0,
+2026-11-20) on 2026-11-23 and merged into `aether-port`; the port is therefore
+**not** current with it: that table is the to-do list, and `ae/tests/upstream-e2e.sh`'s
+failing files are its tests.
 
 ## How the tracking works
 
@@ -55,6 +57,59 @@ header carries `naeb_version` and `mode`; the system prompt opens "You are
 naeb". Upstream's `scripts/stats.py` is edited the same way (`naeb_version`,
 "refused by naeb").
 
+## Upstream 0.13.0 to 0.20.0 (merged 2026-11-23)
+
+The merge brought upstream's Zig sources, docs and tests as upstream wrote them (`tests/`
+and `scripts/stats.py` differ from `main` only by the renamed words, which
+`ae/tests/check_tests_vs_main.py` proves; AGENTS.md and README.md stay the port's own;
+the new docs `plugins.md`, `developing.md`, `ci.md`, `read-streaming.md`,
+`recording-data-path.md` still say nib). Right after the merge, before any of these
+ports, `ae/tests/upstream-e2e.sh` gave **11 passed, 19 failed**, and the Aether suites
+(`aeb .tests.ae` without the red-team script) failed only in the three TUI snapshot
+specs (upstream's `layout_snapshots.txt` and `simple_snapshots.txt` changed with
+cf751b3) and in `ae/tests/tui_e2e.sh` for the same reason.
+
+Two oracle facts to know: `tests/test_session.py` asserts that the log header's
+`naeb_version` equals `build.zig.zon`'s version, which is now 0.20.0 while the port
+reports 0.13.0 (`ae/naeb/build_info`'s VERSION moves to 0.20.0 only when a whole release is
+covered), so that file keeps failing at its first assertion and hides the rest of it until
+then. The Zig tests of upstream's new files (`tests/test_plugins.py`, `test_stats_db.py`,
+`test_ci.py`) are not in the e2e list: plugins, the SQLite index and upstream's CI are
+out (below).
+
+| Upstream | What it changes | Status |
+|---|---|---|
+| 7788541 | blank row under the activity line (TUI) | ported earlier |
+| dd82e39, 8537d53 | `max_output` for custom services | ported earlier |
+| 0ee9f18, fe65cb4, b916949, a6917c6, 3d6c41f | Tuning: `delivery=tool` (tool results carry background results and interjections; `tools.wait`), `NAEB_TUNE`, DeepSeek defaults, log header `tuning` | **not yet**: `session/tuning`, `tools/wait`, the inbox fold, the prompt rewrite; fails `test_background_run` (tool delivery cases), `test_interjections`, `test_agent_fork`'s two wait cases |
+| 933696d | source line for every failed Run; a `tool_calls` finish with no call is invalid | ported (ab16e73), turns `test_providers.test_chat_completion_consistency` green |
+| 5460f8c | Run details hide result and script of edit-only Runs | session half ported (e1da9c7: the tool summary's `failures`, turns `test_limits` green); TUI half not yet |
+| e5e024b | installable plugin packages (default off) | **not ported**, deprioritised: new surface (`naeb plugin`, `/plugins`, MCP and skill sources); `tests/test_plugins.py` is not in the e2e list |
+| d71bdb6 | exact patch reruns (`rerun` tool for failed Run sources) | **not yet**: fails `test_replay`'s patch-rerun cases |
+| e487898 | `/model` lists models across configured providers | **not yet**: fails `test_model` |
+| 5ade2c5, cf751b3, 5f801fe | TUI: change-first Run details, quiet footers (only the duration), input layout, shared detail-row layout | **not yet**: the bill is now only the elapsed time (a file-changes line may share it); fails every pseudo-terminal file that waits for a turn (`test_tui_*`, `test_undo`, `test_prediction`, `test_hooks`' TUI case, `test_interjections`, terminal cases of `test_background_*`) and the three Aether snapshot specs |
+| 5f0343c, e672092, 6e998b3, 0e6a0e7, b9cce60, d1f73ba, e6b1cb4, 144ee34, 00d03df | release preparation, README measurements, charts | not applicable (release metadata; the port's version string moves when a whole release is covered) |
+| 7757af0 | rebuildable SQLite index for session metrics (`scripts/stats_db.py`) | **not ported**, deprioritised: a Python script over the logs; `tests/test_stats_db.py` is not in the e2e list |
+| 7872a32 | tool sidecar recording is opt-in (`NAEB_RECORD=on`) | ported (a1ac0be), most of `test_replay` green |
+| ca62140 | paginated reads stream through a fixed buffer | ported (6fba759); the descriptor stat is the path's stat (no fstat in std.fs) |
+| 7d9ea17 | encode recordings directly into the Run buffer; Run ownership on OOM | performance only (the port's recorder builds its own text); its test (`test_large_result_is_complete_in_js_but_recording_and_replay_stay_bounded`) is in `test_replay`; not a separate port |
+| b60552f | model-free native tool scheduling benchmark | not applicable (a Zig benchmark harness) |
+| e327dbb | GPT-6.2 models, OpenAI default | ported (3d6b5df) for the openai service; the Codex catalog part is out by policy |
+| c93d0cb | GPT-6.2+ system prompts sent as developer input | **not yet** (Responses encoder) |
+| 9a9a2cf, 3cc339a, eda8313 | upstream CI scheduling and `nib-dev` install | not applicable (upstream's CI and install scripts) |
+| bda9d03 | session resume after switching models (reasoning data tagged by model) | **not yet**: fails `test_model`'s resume case |
+| 8f8a2a0 | unified provider credential resolution | **not yet**: touches `auth`, `config`, `main`, `tui/providers`; its test (`test_provider_login.py`) is out by policy |
+| 9bf5e6a | Step deliveries committed with Run results | **not yet**: fails `test_background_run` (`test_resume_after_fold_commit`, folded-run replay), `test_replay`'s pending-source case |
+| 8e854a4 | no per-key redraw during bracketed paste | **not yet** |
+| cd2d797 | every matching skill in the completion menu | ported (ed73b28), turns `test_skill_mentions` green |
+| 9a0d6db, a597350 | model-family profiles, shared prompt footprint | **not yet** (the port has `session/profile`; upstream's profile resolution, `applies_to` patches and `prompt_footprint` are not ported) |
+| 019eefc | retained Profile shown in status after resume | **not yet** |
+| 8bf2b98 | `tools.wait` guidance and execution in forked sessions | **not yet** (needs the tuning port) |
+| b44af92 | Codex fast mode | out by policy (Codex) |
+| b673d15 | config and log split into modules, edit hints, `/compact focus` | **not yet**: the module split is Zig structure (not ported as such); the edit hints and `/compact` focus are behaviour |
+| f7ed5ea | full truncated Run and background outputs saved to session files | ported (76376fb) |
+| 0540bfe | grep prefilter by required literal | ported (99b68ad) |
+
 ## Release readiness
 
 Before any release the full red-team suite (`ae/tests/redteam/run.sh`, 0 holes,
@@ -94,7 +149,7 @@ run: f1a1d1a, 2026-11-22, 200 checks, 0 holes).
 | `src/sandbox/scheduler.zig` | 296 | `ae/naeb/sandbox/module.ae` | a2dd439 | virtual selection in jobs_; concurrency 8, completion order, timers, drain, stopped calls; Host.poll's role is a 20 ms Session ticker (session) |
 | `src/sandbox/native.zig` | 163 | `ae/naeb/sandbox/module.ae` | a2dd439 | __log/__host as contrib.quickjs host functions with a `hide` veto line; installVirtual (__replayEpoch/Time/Random, "replay diverged"); the virtual stop interrupts JS through contrib.quickjs's stop cell |
 | `src/sandbox/timer.zig` | 18 | `ae/naeb/sandbox/module.ae` | a2dd439 |  |
-| `src/sandbox/console.zig` | 181 | `ae/naeb/sandbox/console/module.ae` | a2dd439 |  |
+| `src/sandbox/console.zig` | 181 | `ae/naeb/sandbox/console/module.ae` | e6b1cb4 |  |
 | `src/sandbox/timing.zig` | 168 | `ae/naeb/sandbox/timing/module.ae` | a2dd439 | Execution epoch times live on process.Result |
 | `src/sandbox/timer_test.zig` | 237 | `ae/tests/timer_test.ae` | a2dd439 |  |
 | `src/sandbox/record.zig` | 510 | `ae/naeb/sandbox/record/module.ae` | a2dd439 | file via std.fs (flock, pwrite, ftruncate, fsync); dedup keys are sha256 hex |
@@ -107,7 +162,7 @@ run: f1a1d1a, 2026-11-22, 200 checks, 0 holes).
 | `src/tools/changes.zig` | 253 | `ae/naeb/tools/changes/module.ae` | a2dd439 | Tracker per Run scope; Recovery |
 | `src/tools/diff.zig` | 195 | `ae/naeb/tools/diff/module.ae` | a2dd439 |  |
 | `src/tools/search.zig` | 173 | `ae/naeb/tools/search/module.ae` | a2dd439 |  |
-| `src/tools/grep.zig` | 509 | `ae/naeb/tools/grep/module.ae` | a2dd439 | one scanning thread (upstream 8); JS RegExp in a private QuickJS runtime; a running regex is bounded at 10 s, not interruptible by cancel |
+| `src/tools/grep.zig` | 509 | `ae/naeb/tools/grep/module.ae` | e6b1cb4 | one scanning thread (upstream 8); JS RegExp in a private QuickJS runtime; a running regex is bounded at 10 s, not interruptible by cancel |
 | `src/tools/regex.zig` | 106 | `ae/naeb/tools/grep/module.ae` | a2dd439 | libregexp via JS RegExp |
 | `src/tools/walk.zig` | 385 | `ae/naeb/tools/walk/module.ae` | a2dd439 |  |
 | `src/tools/policy.zig` | 698 | `ae/naeb/tools/policy/module.ae` | a2dd439 | rule for rule, same texts |
@@ -133,12 +188,12 @@ run: f1a1d1a, 2026-11-22, 200 checks, 0 holes).
 | `src/session/run.zig` | 236 | `ae/naeb/session/module.ae` | a2dd439 | execute + executeTimed: every Run on its own thread (RunJob) with its own timing, merged into the Step's; the waiting flag is the sandbox Host's `waiting` cell |
 | `src/session/run_job.zig` | 116 | `ae/naeb/session/module.ae` | a2dd439 | RunJob; its recorder is a fork of the Session's (begin at start, finish before done) |
 | `src/session/log.zig` | 1402 | `ae/naeb/session/log/module.ae` | a2dd439 | records are JSON text; tool summaries travel on the logged tool messages (the TUI reads them on resume); background ids and bash replacements are restored onto replayed messages, as upstream restoreToolSummaries |
-| `src/session/output.zig` | 596 | `ae/naeb/session/output/module.ae` | a2dd439 |  |
+| `src/session/output.zig` | 596 | `ae/naeb/session/output/module.ae` | e6b1cb4 |  |
 | `src/session/prompt.zig` | 322 | `ae/naeb/session/prompt/module.ae` | a2dd439 |  |
 | `src/session/profile.zig` | 58 | `ae/naeb/session/profile/module.ae` | a2dd439 |  |
 | `src/session/instructions.zig` | 49 | `ae/naeb/session/instructions/module.ae` | a2dd439 |  |
 | `src/session/compact.zig` | 175 | `ae/naeb/session/compact/module.ae` | a2dd439 | withoutImages is `without_images` |
-| `src/session/tool_summary.zig` | 249 | `ae/naeb/session/tool_summary/module.ae` | a2dd439 | annotateViews takes the images as JSON text |
+| `src/session/tool_summary.zig` | 249 | `ae/naeb/session/tool_summary/module.ae` | e6b1cb4 | annotateViews takes the images as JSON text |
 | `src/session/events.zig` | 182 | `ae/naeb/session/module.ae` | a2dd439 | events are the NDJSON text they print as |
 | `src/session/inbox.zig` | 278 | `ae/naeb/tools/background/module.ae` | a2dd439 | bash results, FIFO, detached kept; user interjections (`enqueue_user`/`take_users`, kind "user") inserted before the next Step |
 | `src/session/history.zig` | 130 | `ae/naeb/session/fork_history/module.ae` | a2dd439 | renamed; messages are JSON texts, copies are fresh strings |
