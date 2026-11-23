@@ -43,6 +43,39 @@ read_(p: string) -> string {
     return s
 }
 
+// The page by whole-file slicing (what read did before ca62140), as the
+// result JSON.
+ref_page_(data: string, offset: long, limit: long) -> string {
+    n = string.length(data)
+    start = 0
+    line = 1 as long
+    while line < offset && start < n {
+        nl = string.index_of_from(data, "\n", start)
+        if nl < 0 { start = n } else { start = nl + 1 }
+        line = line + 1
+    }
+    end = start
+    k = 0 as long
+    while k < limit && end < n {
+        nl = string.index_of_from(data, "\n", end)
+        if nl < 0 { end = n } else { end = nl + 1 }
+        k = k + 1
+    }
+    next = "null"
+    if end < n { next = "${line + k}" }
+    return "{\"text\":${jsonx.quote(string.substring(data, start, end))},\"next_offset\":${next}}"
+}
+
+rep_(text: string, count: int) -> string {
+    sb = strbuilder.new(string.length(text) * count + 8)
+    i = 0
+    while i < count {
+        strbuilder.append(sb, text)
+        i = i + 1
+    }
+    return strbuilder.finish(sb)
+}
+
 ok_(s: ptr, name: string, args: string) -> int { return call_(s, name, args).ok }
 
 contains_(s: string, part: string) -> int {
@@ -250,6 +283,42 @@ main() {
                 spec.assert_str_eq(r.text, expected, "case ${i}")
                 i = i + 1
             }
+            fs.remove_tree(d)
+        }
+        // ca62140: streamed reads match whole-file slicing across buffer boundaries
+        spec.it("read streaming matches whole-file slicing across buffer boundaries and long lines") callback {
+            d = tmp_()
+            s = tools.new_scope(new_tools_(d), 1)
+            path = "${d}/f"
+            data = "${rep_("x", 16382)}中文\r\n${rep_("x", 40000)}\n\n${rep_("y", 20000)}\n${rep_("z", 7)}"
+            fs.write(path, data)
+            offs = [0, 1, 2, 3, 4, 5, 100]
+            lims = [0, 1, 2, 3, 2000]
+            i = 0
+            while i < 7 {
+                j = 0
+                while j < 5 {
+                    r = call_(s, "read", pargs_(path, "\"offset\":${offs[i]},\"limit\":${lims[j]}"))
+                    spec.assert_str_eq(r.text, ref_page_(data, offs[i] as long, lims[j] as long), "offset ${offs[i]} limit ${lims[j]}")
+                    j = j + 1
+                }
+                i = i + 1
+            }
+            fs.remove_tree(d)
+        }
+        spec.it("read preserves the inclusive size boundary for small and empty pages") callback {
+            d = tmp_()
+            s = tools.new_scope(new_tools_(d), 1)
+            path = "${d}/f"
+            pad = rep_("b", 16 * 1024 * 1024 + 1 - 2)
+            fs.write(path, "a\n${pad}")
+            r = call_(s, "read", pargs_(path, "\"limit\":1"))
+            spec.assert_eq(r.ok, 1, "16 MiB + 1 byte reads")
+            spec.assert_str_eq(r.text, "{\"text\":\"a\\n\",\"next_offset\":2}", "first line, more after")
+            fs.write(path, "a\n${pad}b")
+            r2 = call_(s, "read", pargs_(path, "\"limit\":1"))
+            spec.assert_eq(r2.ok, 0, "16 MiB + 2 bytes is refused")
+            spec.assert_true(contains_(r2.text, "StreamTooLong"), "StreamTooLong")
             fs.remove_tree(d)
         }
         spec.it("change tracking excludes other writers between and after calls") callback {

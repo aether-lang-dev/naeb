@@ -8,6 +8,7 @@ import std.string
 import std.strbuilder
 import std.list
 import std.sync
+import std.io
 import naeb.jsonx
 import naeb.fserr
 import naeb.tools.atomic_file
@@ -112,6 +113,86 @@ find_nl_(data: string, from: int) -> int {
     return string.index_of_from(data, "\n", from)
 }
 
+// A read's inclusive input cap: 16 MiB + 1 byte (upstream's boundary, which
+// the whole-file read had as .limited(file_limit + 1)).
+const READ_FILE_LIMIT = 16 * 1024 * 1024 + 1
+const READ_BUFFER = 16384
+
+// The page of `fd` from line `offset` (1-based) of at most `limit` lines,
+// read through a fixed 16 KiB buffer so memory is the page, not the file
+// (upstream readPage, ca62140): (text, next_offset, "") where next_offset is
+// 0 at EOF, or (_, 0, error name). known_size is the file's size when it is
+// regular and non-empty, else -1: a stream of unknown size is read to EOF so
+// the same cap holds.
+read_page_(fd: int, offset: long, limit: long, known_size: long) -> (string, long, string) {
+    sb = strbuilder.new(1024)
+    total = 0 as long
+    line = 1 as long
+    remaining = limit
+    next_off = 0 as long
+    while true {
+        cap = READ_BUFFER
+        if line >= offset && remaining == 0 && next_off == 0 { cap = 1 }
+        room = (READ_FILE_LIMIT as long) + 1 - total
+        if (cap as long) > room { cap = room as int }
+        part, n, err = io.fd_read_n(fd, cap)
+        if err != "" { return "", 0, "AccessDenied" }
+        if n == 0 { break }
+        total = total + (n as long)
+        if total > (READ_FILE_LIMIT as long) { return "", 0, "StreamTooLong" }
+        pos = 0
+        while pos < n && next_off == 0 {
+            if line >= offset && remaining == 0 {
+                next_off = line
+                break
+            }
+            nl = find_nl_(part, pos)
+            end = n
+            if nl >= 0 && nl < n { end = nl + 1 }
+            if line >= offset { strbuilder.append(sb, string.substring(part, pos, end)) }
+            if nl >= 0 && nl < n {
+                if line >= offset { remaining = remaining - 1 }
+                line = line + 1
+            }
+            pos = end
+        }
+        if next_off != 0 && known_size >= 0 && total <= known_size { break }
+    }
+    return strbuilder.finish(sb), next_off, ""
+}
+
+// One page of the file at `path` (canonical), opened and checked as opened:
+// (text, next_offset or 0, "", 0), or ("", 0, error text, fenced) where fenced
+// is 1 when the text is the fence's or a credential's refusal as a whole.
+// before is the file's Stat from before the open; a size, inode or mtime
+// that moved while the page was read fails as FileChangedDuringRead.
+read_paged_(c: *Ctx, path: string, offset: long, limit: long, before: fs.Stat) -> (string, long, string, int) {
+    fd, real, fold, oerr = atomic_file.open_verified(path, atomic_file.WANT_FILE)
+    if oerr != "" { return "", 0, oerr, 0 }
+    why = read_refused_(c, real, fold)
+    if why != "" {
+        atomic_file.close_fd(fd)
+        return "", 0, why, 1
+    }
+    size, sk, _sm = fs.fd_size(fd)
+    if sk == fs.KIND_OK && size > (READ_FILE_LIMIT as long) {
+        atomic_file.close_fd(fd)
+        return "", 0, "StreamTooLong", 0
+    }
+    known = -1 as long
+    if sk == fs.KIND_OK && size > 0 { known = size }
+    text, next_off, rerr = read_page_(fd, offset, limit, known)
+    atomic_file.close_fd(fd)
+    if rerr != "" { return "", 0, rerr, 0 }
+    after, ak, _am = fs.stat(path, 1)
+    if ak != fs.KIND_OK { return "", 0, fserr.errname(ak), 0 }
+    if after.size > (READ_FILE_LIMIT as long) { return "", 0, "StreamTooLong", 0 }
+    if after.ino != before.ino || after.size != before.size || after.mtime_ns != before.mtime_ns {
+        return "", 0, "FileChangedDuringRead", 0
+    }
+    return text, next_off, "", 0
+}
+
 read(cp: ptr, args: string) -> (int, string) {
     c = cp as *Ctx
     a = jsonx.parse(args)
@@ -131,30 +212,15 @@ read(cp: ptr, args: string) -> (int, string) {
         file_state.unlock(fd)
         return 0, "${raw}: ${fserr.errname(sk)}"
     }
-    data, rerr, fenced = read_file_(c, path)
+    text, next_off, rerr, fenced = read_paged_(c, path, offset, limit, st)
     if rerr != "" {
         file_state.unlock(fd)
         if fenced == 1 { return 0, rerr }
         return 0, "${raw}: ${rerr}"
     }
-    n = string.length(data)
-    start = 0
-    line = 1 as long
-    while line < offset && start < n {
-        nl = find_nl_(data, start)
-        if nl < 0 { start = n } else { start = nl + 1 }
-        line = line + 1
-    }
-    end = start
-    k = 0 as long
-    while k < limit && end < n {
-        nl = find_nl_(data, end)
-        if nl < 0 { end = n } else { end = nl + 1 }
-        k = k + 1
-    }
     next = "null"
-    if end < n { next = "${line + k}" }
-    result = "{\"text\":${jsonx.quote(string.substring(data, start, end))},\"next_offset\":${next}}"
+    if next_off != 0 { next = "${next_off}" }
+    result = "{\"text\":${jsonx.quote(text)},\"next_offset\":${next}}"
     file_state.remember_stat(c.state, path, st)
     file_state.unlock(fd)
     return 1, result
