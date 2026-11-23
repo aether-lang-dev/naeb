@@ -1,69 +1,117 @@
-# nibcode
+# naeb
 
-A coding agent written in Zig 0.17, with command name `nib`.
+naeb is a coding agent written in Aether: a port of [nib-code](https://github.com/yyydddkkk/nib-code),
+the Zig agent by jackyyy (GitHub: yyydddkkk, MIT). The design is theirs: the
+model gets one tool, `run(code)`, writes one JavaScript script per step that
+reads, edits and checks the project, and sees the result. naeb runs that agent
+on Aether, with the scripts on QuickJS, and adds a project fence (below).
+Upstream's original source tree (`src/`, `build.zig`) is kept in the branch
+untouched, for reference and for merges; it is not built here.
 
-## Common commands
+The port's own status is in [PORT_STATUS.md](PORT_STATUS.md) (which upstream file
+each Aether module ports, through which upstream commit, and what is left) and
+[TODO.md](TODO.md). Terminology (Session, Turn, Step, Run) is in
+[CONTEXT.md](CONTEXT.md); decisions are in [docs/adr/](docs/adr/) (upstream's) and
+[docs/naeb/adr/](docs/naeb/adr/) (the fence).
 
-- Build: `zig build`; tests: `zig build test --summary all`; end-to-end (local mocks, no real keys): after `zig build`, run `python3 tests/test_skills.py`, `python3 tests/test_skill_mentions.py`, `python3 tests/test_mcp.py`, `python3 tests/test_session.py`, `python3 tests/test_agent.py`, `python3 tests/test_agent_reuse.py`, `python3 tests/test_agent_fork.py`, `python3 tests/test_background_agent.py`, `python3 tests/test_background_bash.py`, `python3 tests/test_background_run.py`, `python3 tests/test_codex.py`, `python3 tests/test_providers.py`, `python3 tests/test_codex_websocket.py`, `python3 tests/test_llm.py`, `python3 tests/test_stats.py`, `python3 tests/test_effort.py`, `python3 tests/test_interjections.py`, `python3 tests/test_limits.py`, `python3 tests/test_replay.py`, `python3 tests/test_stream_idle.py`, `python3 tests/test_files.py`, `python3 tests/test_cli.py`, `python3 tests/test_undo.py`, `python3 tests/test_tui_mouse.py`, `python3 tests/test_at_files.py`, `python3 tests/test_model.py`, `python3 tests/test_provider_login.py`, `python3 tests/test_tui_stream.py`, `python3 tests/test_sandbox.py`, `python3 tests/test_images.py`, `python3 tests/test_hooks.py`, `python3 tests/test_update.py`, `python3 tests/test_web_search.py`, `python3 tests/test_prediction.py`
-- Parallel e2e: after `zig build`, run `scripts/test-all.sh [N]` locally (default 4 workers); it reads the list above, prints only failures and a summary, and retains failing logs. Tests use isolated temporary homes and dynamic ports.
-- Install to `~/.local/bin/nib`: `zig build -Doptimize=ReleaseFast --prefix ~/.local`; version in `build.zig.zon`; view with `nib --version`.
-- TUI `/provider` picks a service and signs in (masked key, ChatGPT browser/device login, `Add endpoint…`; `/provider logout <id>`); `/model` picks a model of the current service. Both save the choice and start a new Session if Steps already exist. CLI: `nib login [service] [--device]`, `nib logout <service>`. Credentials live in `$NIB_HOME/auth.json` ([ADR 0022](docs/adr/0022-provider-sign-in.md)).
-- TUI Simple mode: `/simple` or Ctrl+S toggles a persisted reading view; `ui = "simple" | "normal"` in config.toml. Ctrl+Shift+S also works when delivered by the terminal.
-- Run: `./zig-out/bin/nib` (TUI), `nib ask '<prompt>'`, `nib js '<code>'`; use `/compact` in the TUI to compact context manually.
-- Resume: `nib -c` / `nib --continue`; `nib --resume <32-character-lowercase-hex-ID>`. Also supported by `ask`; options may precede or follow the prompt.
-- Statistics: `python3 scripts/stats.py [log-file-or-directory] [--since YYYY-MM-DD] [--cwd directory] [--group-by version|system|patches|profile] [--json]`.
-- Reflection: TUI `/reflect [focus]` (requires `NIB_ISSUE_REPO=owner/name`; publishes issues automatically; see [docs/reflect.md](docs/reflect.md) for the switch and safety boundaries).
-- Release: update the version and release notes, then push a tag; see [docs/releasing.md](docs/releasing.md).
+## Branches
 
-## Workflow
+- `aether-port` is the port and the default branch. Commit straight to it; no
+  other branches, no pull requests. `git pull --rebase` before each push; never
+  force-push.
+- `main` mirrors upstream (`upstream` remote, `yyydddkkk/nib-code`) and is never
+  committed to. Move it with `git fetch upstream && git checkout main && git
+  merge --ff-only upstream/main`, then merge `main` into `aether-port`.
+- Expect conflicts only where this branch edited upstream's files: `tests/*.py`
+  and `scripts/stats.py` (renamed words only), the user-facing docs under `docs/`
+  (renamed words), `CONTEXT.md`, `README*.md`, `LICENSE`. Resolve by taking
+  upstream's text and re-applying the renames. `ae/tests/check_tests_vs_main.py`
+  (run by `ae/tests/upstream-e2e.sh`) must pass afterwards: it reverses the
+  renames in `tests/` and `scripts/stats.py` and requires the result to equal
+  `main`.
+- The port follows upstream: a changed upstream file that the port covers is
+  ported (`tools/upstream-diff.sh` lists what upstream changed in each ported
+  file since the commit PORT_STATUS records), with its tests, and the row in
+  PORT_STATUS moves.
 
-- Test only the code you change locally: matching unit tests through `zig build test` (use filters if supported) and 1–3 related e2e scripts. GitHub Actions runs unit tests on Linux/macOS and the full e2e suite on Linux (portable scripts also on macOS) on every push, pull request, or manual dispatch: push a feature branch (`feat/…`, `fix/…`, `docs/…`, `ci/…`), wait for CI to pass before merging to main, and delete the remote branch after merging. Use the parallel local runner only when CI is unavailable.
-- Pushing feature branches is allowed. Pushing or merging to main, tags/releases, editing GitHub releases, and closing or merging PRs require the maintainer's explicit approval.
-- Everything published on GitHub is English: docs, ADRs, comments, and prompts. Two exceptions: `README.zh-CN.md`, and release notes (`docs/releases/<version>.md`, from 0.9.0), which carry English first, then `---` and the same notes in Chinese.
-- Never tune nib for benchmark tasks. Judge speed against other agents using the same model, effort, and service tier.
+## Layout
 
-## References as needed
+```
+ae/naeb_main.ae      the program's entry; its name, naeb, is set once, in .build.ae
+ae/naeb/<concept>/   one Aether module per upstream file or concept, imported as naeb.<concept>
+ae/term/             the TUI's terminal layer (standalone: imports std only); its own README and tests
+ae/policy_lib/       what a project's naeb.ae imports (naeb.policy, naeb_templates.*)
+ae/tests/            std.spec suites (*_test.ae), the e2e harness (upstream-e2e.sh, run_upstream.py,
+                     check_tests_vs_main.py, naeb-unfenced), redteam/ (the fence's attack suite)
+tools/               check_layers.sh (which module may import which), upstream-diff.sh, tui_tests.sh
+asks/                what the port needs from Aether, written up for Aether's maintainers
+tests/, scripts/     upstream's Python end-to-end tests and mock providers; stats.py and charts.py
+docs/                upstream's docs (user-facing ones use naeb's names); docs/naeb/ is the fence's
+.build.ae, .tests.ae aeb build and test definitions
+pins                 the Aether (AE_PIN) and aeb (AEB_REF) versions last verified
+```
 
-- Before adding a feature or changing user-facing behavior, read [docs/principles.md](docs/principles.md).
-- Skill discovery, format, precedence, `$name` mentions, and resume behavior: [docs/skills.md](docs/skills.md).
+Names: environment variables are `NAEB_*`, state is in `~/.naeb`, project skills
+in `.naeb/skills`, hook commands receive `NAEB_EVENT`, `NAEB_FILES` and
+`NAEB_TURN_STATUS`, and the Session log header carries `naeb_version` and `mode`.
+Upstream's docs that are not user-facing references (ADRs, release notes,
+benchmarks) still say nib.
 
-- Before changing the TUI, CLI help, or fixed text, read [docs/ui-style.md](docs/ui-style.md).
+## Build and test
 
-- Providers, credentials, effort, configuration, and environment variables: [docs/config.md](docs/config.md), [docs/providers.md](docs/providers.md), [docs/codex.md](docs/codex.md), [ADR 0011](docs/adr/0011-provider-wire-protocols.md).
-- NDJSON format for `ask --json`: [docs/ask-json.md](docs/ask-json.md).
-- Session logs, resume/cancellation semantics, timing fields, and measurement definitions: [docs/session-log.md](docs/session-log.md).
-- `tools.search({ query, count = 10 }) → { ok, answer?, results: [{ title, url, date?, summary }] }` or `{ ok:false, error }`: web search with the current Session's provider credentials (codex, openai, anthropic, deepseek; others return `ok:false`); see [run-output.md](docs/run-output.md#web-search) and [providers.md](docs/providers.md#web-search).
-- `tools.view({ path }) → { ok, path, width, height, bytes }` or `{ ok:false, error }` (the image is attached to the Run result, max 4 per Run: [run-output.md](docs/run-output.md#images-toolsview)); `tools.llm({ prompt, input, schema, model, effort }) → { text, data, usage }`; `tools.agent({ prompt, resume?: string, fork?: boolean, timeout_ms, model, effort, background }) → { ok, id, text, usage, changes, error? }` (resume uses an agent task id from the current parent Session, e.g. `a1`; continuation keeps `a1` without allocating a new id; foreground results, background starts/completions, and progress/tree all use that id. Only one in-flight call per agent; busy, missing, or foreign-Session agents return `ok:false`. Internal child-Session IDs are not exposed. Child-Session failures are data; only argument errors/user cancellation reject. usage/changes cover this call only; changes include only edit/write). With `background: true`, agent and bash return `{ id }` immediately after successful registration; results arrive as messages in later Steps, with the same id for agent results: [interfaces, limits, usage, and cancellation](docs/tool-delegation.md).
+Toolchain: `ae` and `aeb`, installed with aeb's `get.sh` at the versions in `pins`
+(`. ./pins` sets `AE_PIN` and `AEB_REF`); `ae version doctor` checks it. Also a C
+compiler, OpenSSL 3 and `python3`.
 
-## Code map
+```sh
+aeb .build.ae                 # target/build/bin/naeb
+aeb .tests.ae                 # 89 targets: 85 std.spec suites plus workspace.sh, redteam/run.sh,
+                              # tui_e2e.sh and tools/check_layers.sh
+ae/tests/upstream-e2e.sh      # upstream's Python tests against the built binary (the oracle)
+ae/tests/redteam/run.sh       # the fence's attack suite alone
+tools/tui_tests.sh            # the TUI suites alone; ae/term/run-tests.sh for the terminal layer
+```
 
-Directories follow the concepts in [CONTEXT.md](CONTEXT.md). `x.zig` is a concept's entry point and public interface; `x/` holds its internals. Put new code in its concept's directory rather than adding files at the top of `src/`.
+- The oracle is `tests/test_*.py`. They drive `ae/tests/naeb-unfenced`, which runs
+  `naeb --mode unfenced`, because their mock providers are on loopback and the
+  fence allows no egress. `tests/` and `scripts/stats.py` may differ from `main`
+  only by renamed words. Do not change an assertion to make a test pass; fix the
+  port, or write the gap up in `asks/` and leave the case out in
+  `ae/tests/upstream-e2e.sh` with its reason. Left out by policy: the Codex
+  classes (no Codex sign-in or WebSocket) and `test_update.py`, `test_install.py`.
+  Last known: 29 of 30 files pass; `test_effort.py` fails in its Codex half.
+- The red-team suite makes unix sockets under the checkout, so it fails from a
+  long path (the limit is 107 bytes). Run the whole thing from a checkout whose
+  path is short (about 30 characters), and run `ae/tests/redteam/run.sh` alone if
+  `aeb .tests.ae` fails there under load. It must report 0 holes.
+- A regression test is shown failing on the old code before it is trusted on the new.
 
-- `src/main.zig`: CLI entry point; dispatches to TUI, `ask`, `js`, and `replay`.
-- `src/replay.zig`: `nib replay`, locating Runs in the main log and calls recordings for offline replay (see [docs/replay.md](docs/replay.md)).
-- `src/image.zig`: image formats, header probing, content-hash storage under the Session, base64 wire parts, pasted-path detection (see [ADR 0021](docs/adr/0021-images.md)). Messages carry `images` references; `provider/` encoders read them at request time; `tools/view.zig` is `tools.view`; `tui/clipboard.zig` reads the system clipboard image; the editor holds `[Image #N]` blocks.
-- `src/config.zig`: parses `NIB_HOME/config.toml`, merges environment configuration, resolves the user directory, atomically persists effort, skill and model/endpoint choices, and picks the startup service (`load`, `applyStore`, `credentialed`).
-- `src/auth.zig`: credentials and what the UI says about them (service list/status, key precedence, sign-out). In `auth/`: `store.zig` (`auth.json` read/write, 0600, atomic), `oauth.zig` (PKCE, token and device-code requests, JWT claims), `codex.zig` (Codex login load, refresh, write-back), `login.zig` (browser callback server and device flow), `models.zig` (`/models` listing), `cli.zig` (`nib login`/`logout`).
-- `src/session.zig`: Session engine (Turn/Step loop, model requests, cancellation). In `session/`: `prompt.zig` (system template, prompt patches, experiment tags, Step-budget text, run tool schema), `compact.zig` (context compaction and token estimates), `run.zig` (executes one Run and forwards events), `profile.zig` (Profile: model-family resolution from the model name; prompt patches carry an `applies_to` set), `hooks.zig` (sandboxed after-edit and root Turn-end commands), `run_job.zig` (independent Run execution state, held by Background after tool waits exceed the threshold), `skills.zig` (skill discovery, frontmatter, system index), plus logs, instruction assembly, events, and Run output formatting.
-- `src/provider.zig`: Provider interface and configuration. In `provider/`, `responses.zig` shares Responses and Codex authentication/WS extensions, `openai.zig` implements Chat Completions, and `anthropic.zig` implements Messages. Others include SSE parsing, `codex_ws.zig` (Session continuation state), and `websocket.zig` (frames and connections). Codex defaults to WebSocket and falls back to SSE for the Session after handshake/protocol failure. `provider/timing.zig` only samples run-argument arrival progress; Session reuses Sink.onData to record the first receive activity.
-- `src/sandbox.zig`: public types, JS prelude, and `eval`. `sandbox/scheduler.zig` schedules Runs (tool threads, native `tools.sleep(ms)` timers, settlement exit; semantics in [docs/run-output.md](docs/run-output.md)); `sandbox/native.zig` registers native functions with QuickJS and converts JS values; `sandbox/console.zig` captures bounded console head/tail; `sandbox/timing.zig` records tool-call durations and result bytes during native scheduling/completion; `sandbox/record.zig` records tool arguments/results at the same settlement exit; `sandbox/replay.zig` + `sandbox/virtual.zig` substitute recorded results for real tool execution.
-- `src/mcp.zig`: Session-owned opt-in MCP clients; `mcp/` holds config types, compact schema/index rendering, stdio/Streamable HTTP transports and modern/legacy protocol detection. `src/tools/mcp.zig` exposes `tools.mcp` and `tools.mcp_schema`; see [docs/mcp.md](docs/mcp.md).
-- `src/tools.zig`: tool table (central JS descriptions for the model), shared `Tools` state, and dispatch. One entry file per tool family under `tools/`, with function names matching tool names: `files.zig` (read/edit/write), `search.zig` (grep/glob), `web.zig` (fetch), `web_search.zig` (search), `bash.zig` + `bash/registry.zig` + `bash/jail.zig` (OS write sandbox: writable roots, Landlock via the hidden `nib __jail` helper that restricts itself then execs bash, macOS `sandbox-exec` profile; edit/write use the same roots; rerunning identical command/cwd after changes in the same Session supersedes active bash from earlier Runs, returning `{superseded_by}`), `stop.zig` (stops background tasks by id and reason), `agent.zig`, `llm.zig` (in-process single-step pure model calls and centralized limits), `background.zig` (Session-owned background agent/bash/Run tasks surviving across Runs); others support these modules. To add a tool, write its entry function in `tools/` and add one table row.
-- `src/tui.zig`: TUI event loop (keys, Session events, rendering). In `tui/`: `turn.zig` (runs Turn or `/compact` on a background thread, converts Session events to UI events), `transcript.zig` (conversation model; `transcript/` holds entry drawing, titles/previews, diff text), `agent_tree.zig` (subagent/background task status tree below Runs), `viewport.zig` (scroll anchoring), `view.zig` (frame layout/drawing), `status.zig` (activity line and bottom-border metadata), `menu.zig` (`/` completion menu, pinned lists), `providers.zig` + `provider_flow.zig` (`/provider`: service menu, masked key entry, add-endpoint form, sign-in and listing workers), `commands.zig` (command table, parsing, execution), `reflect.zig` + `reflect.md` (/reflect prompt, reflections.md appending, automatic issue publication), `prediction.zig` (ghost-text prediction of the next message: small-model request on a background thread, generation-checked state), `editor.zig` (input, atomic paste blocks, in-process draft history), `long_text.zig` (long-text thresholds/counts), `open.zig` (clickable file paths: token detection, `open` template, detached launch), `title.zig` (empty-screen title line, git branch), `markdown.zig`, `selection.zig` (mouse selection, highlighting, clipboard copying).
-- `tests/`: end-to-end tests and mock servers; `scripts/`: helper scripts.
+## Hard rules
 
-## Tool and code conventions
+- API keys only (OpenAI, Anthropic, DeepSeek, Grok, or a custom endpoint). No
+  Codex subscription sign-in.
+- Never call a real model provider or a real host. Tests use the mock providers
+  in `tests/` and fixtures on loopback or `.invalid`; no recorded provider
+  traffic is kept. Never put a real key in a file or a test.
+- The fence must never weaken. `naeb` is fenced by default; the project's
+  `naeb.ae` can only widen it through `naeb build`, which shows the diff and asks
+  the person. Unfenced mode is selected only by `--mode unfenced` as the first two
+  command-line arguments of the person starting naeb: no environment variable,
+  config key, project file, skill, hook, tool or sub-agent can select it, a
+  sub-agent of a fenced naeb is started fenced, and it is announced on stderr and
+  in the Session log. Any change near `ae/naeb/fence/`, `tools/jail`, `tools/egress`,
+  `app` (mode and start-up) or the sub-agent launch needs `ae/tests/redteam/run.sh`
+  with 0 holes, and a new case that fails against the weakened code first.
+- Tools return complete data to scripts; nothing is silently truncated.
+- `ae/term` imports only `std`; `tools/check_layers.sh` pins every module's imports,
+  and a wider import is a reviewed change to that file.
+- No back-compat shims: change the API and update every caller. No shared mutable
+  global state: give instances their own state and pass it explicitly.
 
-`tools.mcp("server.tool", args)` returns `{ok, content, structured?, error?}`; `tools.mcp_schema("server.tool")` returns its full input JSON Schema. Only enabled servers enter context; switches apply to new Sessions. Server failures are data, argument errors reject. MCP images share the view per-Run cap; calls share recording/replay.
+## Aether
 
-Tools return complete data to JS. Never silently truncate it or insert notices into content to protect model context: `read → JS replacement → write` would write truncation markers back into files, corrupting data. The whole Run shares a model-side display budget (default 16 KiB, configurable), without changing data inside the Run. See [docs/run-output.md](docs/run-output.md) for explicit tool pagination/bounds, console capture limits, and Run execution timeouts.
-
-Prefer tools.grep/tools.glob for searches rather than rg/find/grep in bash. For file/command text containing backticks, `${`, or backslashes, use JSON-escaped double-quoted JS strings, not template strings or String.raw; sandbox tests verify tool-table examples byte for byte.
-
-**Agents are the code's readers.** Avoid comments that restate code, explain thought processes, or record change history; stale comments mislead models more than absent comments. Write one line only where code cannot express information whose absence would cause incorrect changes: external limits, protocol quirks, memory ownership, concurrency invariants. Convey meaning through names, types, and tests; put explanations for people in `docs/`.
-
-Terminology: [CONTEXT.md](CONTEXT.md); decision records: [docs/adr/](docs/adr/).
-
-**Documentation is reference, not rules.** If an ADR conflicts with code, measurements, or a better solution, identify the conflict and update the documentation; do not bend code to fit docs. See [docs/README.md](docs/README.md).
-
-New Sessions assemble system from base instructions, global `$NIB_HOME/AGENTS.md` (default `~/.nib/AGENTS.md`), then project `AGENTS.md`; later instructions take precedence. The project directory is the first ancestor of cwd with a `.git` marker, or cwd if none exists. Read only `AGENTS.md`. Resumed Sessions retain the original system from the log; subsequent instruction-file changes affect new Sessions only.
+The port tracks the latest Aether release; `pins` records what was last verified,
+and a bump is its own commit saying what it re-verified (a tracking-only bump says
+so). A gap in Aether is written up as `asks/<topic>.md` (motivation, a minimal
+repro, what it blocks); when a fix lands the ask is updated to say so, not deleted.
+Work around the gap in the meantime and mark the workaround.
