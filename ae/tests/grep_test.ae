@@ -319,6 +319,36 @@ main() {
             grep.release(s)
             fs.remove_tree(root)
         }
+        // 0540bfe: grep prefilters only required case-sensitive literals
+        spec.it("grep prefilters only required case-sensitive literals") callback {
+            root = tmp_dir_()
+            put_("${root}/text", "中文\npub fn findThing(\nSessionState\nSession\nSESSION\nbeta\nalph\n")
+            spec.assert_str_eq(grep.required_literal("^pub fn find[A-Za-z_]*\\(", 0, 0), "pub fn find", "anchored prefix")
+            spec.assert_str_eq(grep.required_literal("\\bSession\\b", 0, 0), "Session", "whole word")
+            spec.assert_str_eq(grep.required_literal("\\bMissing\\b", 0, 0), "Missing", "missing word")
+            spec.assert_str_eq(grep.required_literal("\\bsession\\b", 1, 0), "", "ignore case")
+            spec.assert_str_eq(grep.required_literal("^alpha|beta", 0, 0), "", "alternation")
+            spec.assert_str_eq(grep.required_literal("^alpha?", 0, 0), "", "optional last letter")
+            spec.assert_str_eq(grep.required_literal("^alpha{0,2}", 0, 0), "", "repetition")
+            s1 = run_(root, "^pub fn find[A-Za-z_]*\\(", 0, 0, 0, 100, "")
+            spec.assert_eq(count_(s1), 1, "anchored")
+            spec.assert_eq(match_at_(s1, 0).line, 2, "anchored line")
+            grep.release(s1)
+            s2 = run_(root, "\\bSession\\b", 0, 0, 0, 100, "")
+            spec.assert_eq(count_(s2), 1, "word")
+            spec.assert_eq(match_at_(s2, 0).line, 4, "word line")
+            grep.release(s2)
+            s3 = run_(root, "\\bMissing\\b", 0, 0, 0, 100, "")
+            spec.assert_eq(count_(s3), 0, "missing")
+            grep.release(s3)
+            s4 = run_(root, "\\bsession\\b", 1, 0, 0, 100, "")
+            spec.assert_eq(count_(s4), 2, "ignore case")
+            grep.release(s4)
+            s5 = run_(root, "^alpha?", 0, 0, 0, 100, "")
+            spec.assert_eq(match_at_(s5, 0).line, 7, "optional last letter")
+            grep.release(s5)
+            fs.remove_tree(root)
+        }
         // regex.zig
         spec.it("JS regex over Latin-1 and UTF-16 text, with per-line anchors") callback {
             m, err = grep.matcher_new("^fn \\w+\\(", 0, 0, null)
