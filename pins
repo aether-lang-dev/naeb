@@ -64,4 +64,9 @@ AE_PIN=0.936.0
 # block and never reports PASS for tests that did not run (v0.344 printed PASS
 # with 71 of 82 test programs built). Verified: installed with get.sh at this
 # pin, aeb .build.ae and aeb .tests.ae 86/86 on macOS arm64.
-AEB_REF=v0.347
+# v0.349 (2026-11-23): v0.347 fails to link when a newer Aether than the one it
+# was built against is on PATH, which made the pin harmful; v0.349 does not.
+# Verified: installed with get.sh at AEB_REF=v0.349 into its own prefix, aeb
+# .build.ae and aeb .tests.ae on cachyos and aeb .build.ae on macOS arm64 (see
+# the commit that moved it).
+AEB_REF=v0.349
