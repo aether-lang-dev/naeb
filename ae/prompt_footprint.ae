@@ -1,0 +1,83 @@
+// prompt-footprint: dumps the fixed prompt fixtures as JSON lines without
+// contacting a model (upstream scripts/prompt_footprint.zig, `zig build
+// prompt-footprint`). The first line is the shared baseline (the system text
+// every request shares); each further line is one service and model with the
+// family and profile it resolves to, the full system text (base and the
+// instruction-precedence notice) and the tool definitions its wire protocol
+// sends. scripts/prompt_footprint.py counts tokens in this output:
+//
+//   aeb .build.ae && target/build/bin/prompt-footprint | python3 scripts/prompt_footprint.py
+//
+// The Codex case upstream measures is not here (naeb has no Codex sign-in):
+// OpenAI's own Responses stand in for it.
+
+import std.json
+import std.list
+import std.string
+import naeb.jsonx
+import naeb.msg
+import naeb.tools
+import naeb.provider.types
+import naeb.provider.responses
+import naeb.provider.anthropic
+import naeb.provider.openai
+import naeb.session.prompt
+import naeb.session.profile
+import naeb.session.tuning
+import naeb.session.instructions
+
+// The `tools` member of the request body the service's protocol sends.
+wire_tools_(cp: ptr, messages: ptr) -> string {
+    protocol = types.protocol(cp)
+    body = ""
+    err = ""
+    if protocol == "responses" {
+        body, err = responses.request_body(cp, "footprint", messages, prompt.TOOLS_JSON, -1)
+    } else if protocol == "anthropic_messages" {
+        body, err = anthropic.request_body(cp, messages, prompt.TOOLS_JSON, -1)
+    } else {
+        body, err = openai.request_body(cp, messages, prompt.TOOLS_JSON, -1)
+    }
+    if err != "" {
+        println("prompt-footprint: ${err}")
+        return "null"
+    }
+    root = jsonx.parse(body)
+    tv = jsonx.field(root, "tools")
+    out = "null"
+    if tv != null { out = jsonx.encode(tv) }
+    return out
+}
+
+line_(provider: string, custom: int, model: string) {
+    cwd = "/work"
+    cp = types.new_config(provider, "https://example.invalid", "", model)
+    c = cp as *types.Config
+    if custom == 1 {
+        c.custom_provider = "custom"
+        c.custom_protocol = "chat_completions"
+    }
+    family = profile.family_for_model(model)
+    prof = profile.for_family(family)
+    resolved = tuning.for_profile(prof)
+    t = tools.new(cwd)
+    tools.set_config(t, cp, "footprint")
+    (t as *tools.Tools).delivery_tool = 0
+    if resolved.delivery == tuning.DELIVERY_TOOL { (t as *tools.Tools).delivery_tool = 1 }
+    mode = tuning.background_mode(resolved, true)
+    base = prompt.render_system(cwd, tools.docs(t), 16384 as long, "", prof, resolved.validation, mode)
+    system = "${base}${instructions.PRECEDENCE_NOTICE}"
+    messages = list.list_new()
+    list.list_add(messages, msg.system(system))
+    list.list_add(messages, msg.user("Hello"))
+    println("{\"provider\":${jsonx.quote(types.name(cp))},\"model\":${jsonx.quote(model)},\"family\":${jsonx.quote(profile.family_name(family))},\"profile\":${jsonx.quote(profile.name(prof))},\"system\":${jsonx.quote(system)},\"tools\":${wire_tools_(cp, messages)}}")
+}
+
+main() {
+    println("{\"system\":${jsonx.quote(prompt.render_common("/work", tools.common_docs()))}}")
+    line_("openai", 0, "gpt-6.2-sol")
+    line_("anthropic", 0, "claude-sonnet-5-5")
+    line_("deepseek", 0, "deepseek-flash")
+    line_("custom", 1, "gemini-3-flash")
+    line_("custom", 1, "unknown-model")
+}

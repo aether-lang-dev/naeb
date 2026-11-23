@@ -38,6 +38,11 @@ aeb(cap) {
             lib("ae")
             output("naeb")
         }
+        aether.program() {
+            source("ae/prompt_footprint.ae")
+            lib("ae")
+            output("prompt-footprint")
+        }
         return 0
     }
 }

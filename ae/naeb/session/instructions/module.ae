@@ -6,7 +6,9 @@ import std.string
 import std.fs
 import std.strbuilder
 
-exports(project_root, append)
+exports(PRECEDENCE_NOTICE, project_root, append)
+
+const PRECEDENCE_NOTICE = "\n\nInstructions below apply in order; later instructions take priority.\n"
 
 // std.fs.path.dirname: "" when there is no parent ("/", "a").
 dirname_(p: string) -> string {
@@ -46,7 +48,7 @@ project_root(cwd: string) -> string {
 append(base: string, global: string, project: string) -> (string, string) {
     b = strbuilder.new(string.length(base) + 256)
     strbuilder.append(b, base)
-    strbuilder.append(b, "\n\nInstructions below apply in order; later instructions take priority.\n")
+    strbuilder.append(b, PRECEDENCE_NOTICE)
     paths = [global, project]
     i = 0
     while i < 2 {
