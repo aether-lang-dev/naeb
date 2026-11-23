@@ -189,8 +189,8 @@ rank_(r: *RankCtx, entries: ptr[]) {
     }
 }
 
-// Lists discovered skills whose names start with `query`; they reuse the
-// `@` rows.
+// Lists every discovered skill whose name starts with `query` (not only the
+// first few: the menu scrolls, cd2d797); they reuse the `@` rows.
 sync_skills_(m: *Menu, query: string) {
     if m.mention != MENTION_SKILL {
         m.mention = MENTION_SKILL
@@ -206,9 +206,6 @@ sync_skills_(m: *Menu, query: string) {
         n = list.list_size(m.skill_list)
         ql = string.to_lower(query)
         for i in 0..n {
-            if out.len == paths.MAX_HITS {
-                break
-            }
             sk = list.list_get_raw(m.skill_list, i) as *skills.Skill
             if string.length(query) > string.length(sk.name) || string.starts_with(string.to_lower(sk.name), ql) == 0 {
                 continue
