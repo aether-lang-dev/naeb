@@ -31,6 +31,9 @@ struct File {
 struct Summary {
     counts: ptr     // list of *Count
     omitted: long
+    // Calls of the Run that did not succeed; -1 (upstream null) for a summary
+    // not built from a Run, which then leaves the field out of its JSON.
+    failures: long
     files: ptr      // list of *File
 }
 
@@ -38,6 +41,7 @@ empty() -> *Summary {
     s = heap.new(Summary)
     s.counts = list.list_new()
     s.omitted = 0
+    s.failures = -1
     s.files = list.list_new()
     return s
 }
@@ -47,11 +51,13 @@ empty() -> *Summary {
 init(run: ptr, run_index: int, omitted: long) -> *Summary {
     s = empty()
     s.omitted = omitted
+    s.failures = 0
     n = timing.count(run)
     i = 0
     while i < n {
         c = timing.entry(run, i) as *timing.Call
         if c.dispatched == 1 && c.run_index == run_index {
+            if c.ok == 0 { s.failures = s.failures + 1 }
             found = 0
             j = 0
             while j < list.list_size(s.counts) {
@@ -134,6 +140,7 @@ annotate_views(s: *Summary, images: string) {
 clone(s: *Summary) -> *Summary {
     out = empty()
     out.omitted = s.omitted
+    out.failures = s.failures
     i = 0
     while i < list.list_size(s.counts) {
         item = list.list_get_raw(s.counts, i) as *Count
@@ -157,7 +164,7 @@ clone(s: *Summary) -> *Summary {
     return out
 }
 
-// {"counts":[{"name":..,"count":..}],"omitted":N,"files":[{"tool":..,"path":..[,"duration_ms":..,"failed":..]}]}
+// {"counts":[{"name":..,"count":..}],"omitted":N[,"failures":N],"files":[{"tool":..,"path":..[,"duration_ms":..,"failed":..]}]}
 to_json(s: *Summary) -> string {
     b = strbuilder.new(128)
     strbuilder.append(b, "{\"counts\":[")
@@ -168,7 +175,9 @@ to_json(s: *Summary) -> string {
         strbuilder.append(b, "{\"name\":${jsonx.quote(item.name)},\"count\":${item.count}}")
         i = i + 1
     }
-    strbuilder.append(b, "],\"omitted\":${s.omitted},\"files\":[")
+    strbuilder.append(b, "],\"omitted\":${s.omitted}")
+    if s.failures >= 0 { strbuilder.append(b, ",\"failures\":${s.failures}") }
+    strbuilder.append(b, ",\"files\":[")
     i = 0
     while i < list.list_size(s.files) {
         file = list.list_get_raw(s.files, i) as *File
