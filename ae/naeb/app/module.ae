@@ -1,7 +1,7 @@
 // app: the whole program, upstream src/main.zig. `naeb` runs with the
 // project's fence (docs/naeb/adr/0001: naeb.ae through naeb.fence.policy, else the
 // default fence), plus `naeb build [-y]`; `naeb --mode unfenced ...` runs with
-// no fence, as upstream does, and says so on stderr and in the Session log. This slice has `naeb ask [--json] [-c|--resume <id>]
+// no fence, as upstream does, and says so on a terminal's stderr and in the Session log. This slice has `naeb ask [--json] [-c|--resume <id>]
 // [--effort <level>] <prompt|->`, `naeb js '<code>'`, `naeb login`/`logout`
 // (API keys only), `--help` and `--version`, and the hidden
 // `naeb __jail [-w <root>]... -- <command>...` helper the Linux write sandbox
@@ -44,7 +44,7 @@ import naeb.tui.clock
 
 exports(run)
 
-const HELP = "naeb · a coding agent whose unit of work is a Run\n\nUsage:\n  naeb [options]                        Open the TUI\n  naeb ask [options] <prompt|->         Ask once; - reads stdin\n  naeb js <code>                        Run sandbox JavaScript\n  naeb login [service] [--device]       Sign in or store a key; no service lists them\n  naeb update [version]                 Upgrade in place\n  naeb logout <service>                 Remove naeb's stored credential\n  naeb replay <session-id> --all [--json] Replay recorded Runs offline\n\nOptions:\n  -h, --help            Show help\n  -V, --version         Show version\n  -c, --continue        Continue this directory's latest session\n  --resume <id>         Resume a session (32 lowercase hex characters)\n  --effort <level>      Set reasoning effort; /effort lists levels\n  --json                Stream NDJSON events (ask only)\n  --mode <mode>         fenced (default) or unfenced; first argument only; unfenced runs with no\n                        project fence and is announced on stderr and in the Session log\n\nTUI: Enter sends · Shift+Enter adds a line · Esc cancels · Ctrl+O opens latest details · click a Run\nType / for commands, /help for keys, /status for timing and cache details.\nFirst run: naeb, then /provider to sign in; /model picks a model.\nSetup: see README.md and docs/config.md.\n"
+const HELP = "naeb · a coding agent whose unit of work is a Run\n\nUsage:\n  naeb [options]                        Open the TUI\n  naeb ask [options] <prompt|->         Ask once; - reads stdin\n  naeb js <code>                        Run sandbox JavaScript\n  naeb login [service] [--device]       Sign in or store a key; no service lists them\n  naeb update [version]                 Upgrade in place\n  naeb logout <service>                 Remove naeb's stored credential\n  naeb replay <session-id> --all [--json] Replay recorded Runs offline\n\nOptions:\n  -h, --help            Show help\n  -V, --version         Show version\n  -c, --continue        Continue this directory's latest session\n  --resume <id>         Resume a session (32 lowercase hex characters)\n  --effort <level>      Set reasoning effort; /effort lists levels\n  --json                Stream NDJSON events (ask only)\n  --mode <mode>         fenced (default) or unfenced; first argument only; unfenced runs with no\n                        project fence and is announced on a terminal's stderr and always in the Session log\n\nTUI: Enter sends · Shift+Enter adds a line · Esc cancels · Ctrl+O opens latest details · click a Run\nType / for commands, /help for keys, /status for timing and cache details.\nFirst run: naeb, then /provider to sign in; /model picks a model.\nSetup: see README.md and docs/config.md.\n"
 
 // Bare `naeb`: the TUI (upstream tui.run) on the controlling terminal, over
 // a Session with undo on; -c/--resume reopen one.
@@ -486,7 +486,7 @@ run_(envp: @keep ptr, fence: @keep ptr) {
         eprint_(rerrs)
         return
     }
-    if fence == null { eprint_("${UNFENCED_NOTICE}\n") }
+    if fence == null && io.is_terminal(2) { eprint_("${UNFENCED_NOTICE}\n") }
     if n >= 3 && arg_(1) == "js" {
         home_dir = env.get(envp, "HOME")
         if home_dir == "" { home_dir = "/" }

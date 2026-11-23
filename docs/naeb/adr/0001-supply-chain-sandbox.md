@@ -65,7 +65,7 @@ the same checks.
 the default one (the project only, no egress) and a one-line notice. There
 is no environment variable, config key or project file that turns the fence
 off. The one way is `naeb --mode unfenced ...`, the first two arguments of the
-command line of the person starting naeb, announced on stderr and recorded as
+command line of the person starting naeb, announced on a terminal's stderr and always recorded as
 `"mode":"unfenced"` in the Session log header; a sub-agent of a fenced naeb is
 started fenced, and of an unfenced one unfenced, as its parent. (It was a
 second binary until the two were merged: nothing about the

@@ -118,7 +118,7 @@ tools/tui_tests.sh            # the TUI suites alone; ae/term/run-tests.sh for t
   the person. Unfenced mode is selected only by `--mode unfenced` as the first two
   command-line arguments of the person starting naeb: no environment variable,
   config key, project file, skill, hook, tool or sub-agent can select it, a
-  sub-agent of a fenced naeb is started fenced, and it is announced on stderr and
+  sub-agent of a fenced naeb is started fenced, and it is announced on a terminal's stderr and
   in the Session log. Any change near `ae/naeb/fence/`, `tools/jail`, `tools/egress`,
   `app` (mode and start-up) or the sub-agent launch needs `ae/tests/redteam/run.sh`
   with 0 holes, and a new case that fails against the weakened code first.

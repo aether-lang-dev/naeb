@@ -10,7 +10,7 @@ person could get a naeb without its fence, and requires the run to stay fenced.
   sub-agent    a sub-agent of a fenced naeb (also a Run's tools.agent)
   nested       a command a fenced Run runs starts `naeb --mode unfenced` itself:
                the kernel's confinement, inherited, still holds
-  announce     --mode unfenced is announced on stderr and in the Session log
+  announce     --mode unfenced is announced on a terminal's stderr and always in the Session log
 
 "Fenced" is observed as tools.fence being a function in a Run; an unfenced naeb
 has no tools.fence. Local only: fixture HOME, the mock provider of tests/.
@@ -23,6 +23,8 @@ import atexit
 import glob
 import json
 import os
+import pty
+import select
 import shutil
 import subprocess
 import sys
@@ -157,7 +159,23 @@ def main():
     mock = Mock("chat_completions", code="console.log('hi')")
     menv = dict(env, NAEB_PROVIDER="chat_completions", NAEB_API_KEY=mock.key, NAEB_BASE_URL=mock.url)
     p = run(["--mode", "unfenced", "ask", "--json", "probe"], menv, timeout=300)
-    check("announce-stderr", "UNFENCED" in p.stderr, "stderr was %r" % p.stderr[-300:])
+    check("quiet-when-piped", "UNFENCED" not in p.stderr, "stderr was %r" % p.stderr[-300:])
+    # On a terminal the notice is on stderr.
+    master, slave = pty.openpty()
+    subprocess.run([NAEB, "--mode", "unfenced", "js", "1"], cwd=proj, env=env, stdin=subprocess.DEVNULL,
+                   stdout=subprocess.DEVNULL, stderr=slave, timeout=120)
+    os.close(slave)
+    seen = b""
+    while select.select([master], [], [], 0.2)[0]:
+        try:
+            chunk = os.read(master, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        seen += chunk
+    os.close(master)
+    check("announce-stderr-tty", b"UNFENCED" in seen, "the terminal saw %r" % seen[-300:])
     mock.close()
     logs = glob.glob(os.path.join(naeb_home, "sessions", "*.jsonl"))
     modes = set()

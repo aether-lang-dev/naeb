@@ -52,7 +52,7 @@ port is renamed to match.
   supply-chain attacks (below), which upstream does not have.
   `naeb --mode unfenced ...` runs it with no fence, as upstream's `nib` does;
   it is chosen only by those first two arguments on the command line, announced
-  on stderr and recorded in the Session log, and it is what upstream's own tests
+  on a terminal's stderr and always recorded in the Session log, and it is what upstream's own tests
   are run with.
 - **API keys only.** OpenAI, Anthropic, DeepSeek, Grok (xAI) and your own
   Responses or Chat Completions endpoint. The Codex subscription sign-in, its
@@ -141,7 +141,7 @@ naeb --mode unfenced ask '...'   # no project fence, as upstream's nib behaves
 ```
 
 `naeb` is fenced by default (see below); `--mode unfenced` must be the first two
-arguments and is announced on stderr. Run the installed `naeb` from your project:
+arguments and is announced on a terminal's stderr. Run the installed `naeb` from your project:
 it refuses to start from a binary inside a directory the fence lets commands write.
 
 On first run, start `naeb` and use `/provider` to choose a service and paste
@@ -174,7 +174,7 @@ the person starting naeb can: it must be the first two arguments of the command
 line, no environment variable, config key, project file, skill, hook or
 sub-agent can set it, a sub-agent of a fenced naeb is always fenced, and a naeb
 started from inside a fenced Run is still inside that Run's OS jail. Unfenced
-runs say so on stderr and in the Session log header (`"mode":"unfenced"`).
+runs say so on a terminal's stderr and always in the Session log header (`"mode":"unfenced"`).
 
 The project says what it needs in `naeb.ae` at its root, in Aether:
 
