@@ -19,6 +19,11 @@ each Aether module ports, through which upstream commit, and what is left) and
 - `aether-port` is the port and the default branch. Commit straight to it; no
   other branches, no pull requests. `git pull --rebase` before each push; never
   force-push.
+- Upstream is a respectful divergence, not a collaboration: nothing is sent
+  back to nib-code (no pull requests, no patches). The port tracks upstream's
+  changes and ports those that make sense; one day it may have diverged too far
+  to, and that is accepted. Upstream's Zig tree stays in this branch as the
+  reference to port from.
 - `main` mirrors upstream (`upstream` remote, `yyydddkkk/nib-code`) and is never
   committed to. Move it with `git fetch upstream && git checkout main && git
   merge --ff-only upstream/main`, then merge `main` into `aether-port`.
@@ -33,6 +38,20 @@ each Aether module ports, through which upstream commit, and what is left) and
   ported (`tools/upstream-diff.sh` lists what upstream changed in each ported
   file since the commit PORT_STATUS records), with its tests, and the row in
   PORT_STATUS moves.
+
+## Porting an upstream change
+
+How far behind: the port is ported through upstream 0.13.0 (a2dd439, per-file
+commits in PORT_STATUS); upstream's head is 0.20.0 (e6b1cb4, 2026-11-20). To port
+a change: fast-forward `main` to upstream and merge it here (the Zig sources and
+renamed docs/tests come across), run `tools/upstream-diff.sh` to see what changed
+in each ported file, port the change into the matching `ae/naeb/` module with its
+`ae/tests/*_test.ae` cases (upstream's inline Zig tests are ported by name), bring
+upstream's Python tests across (they are the oracle, with renamed words only),
+show a new test failing before the port and passing after, run the three suites
+below, and move the file's row in PORT_STATUS to the new commit. A change that
+makes no sense here (the Codex sign-in, the self-updater) is left out and the
+reason is written in PORT_STATUS.
 
 ## Layout
 

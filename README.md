@@ -33,6 +33,10 @@ the original, go to
 This repository is a fork of nib-code that has diverged on purpose, and the
 port is renamed to match.
 
+- **Respectful divergence.** Nothing here is sent back to nib-code: no pull
+  requests, no patches. naeb tracks upstream's changes and ports the ones that
+  make sense; one day it may have diverged so far that it cannot, and that is
+  accepted.
 - **Branches.** `main` mirrors upstream's `main` and is never committed to.
   `aether-port` (the default branch) is the port; everything described here
   is on it. The Zig sources (`src/`, `build.zig`), upstream's Python end-to-end
@@ -58,9 +62,11 @@ port is renamed to match.
 - **No prebuilt binary yet.** Build from source, below.
 - **Benchmarks.** Upstream's speed, cost and memory numbers were measured on
   its Zig build and are not claimed for naeb.
-- **Behind upstream.** The port is current with upstream through the commits
-  listed in [PORT_STATUS.md](PORT_STATUS.md), which is behind upstream's
-  latest release.
+- **Behind upstream.** The port is ported through upstream 0.13.0 (a2dd439);
+  upstream's head is 0.20.0 (e6b1cb4, 2026-11-20). PORT_STATUS.md lists, file by
+  file, the upstream commit each Aether module is ported through. A port of an
+  upstream change is done in the matching `ae/naeb/` module with tests, checked
+  against upstream's own tests.
 - **Names.** Everything the port names itself is `naeb`: the command, the
   `NAEB_*` environment variables (upstream's `NIB_*`), `~/.naeb` (upstream's
   `~/.nib`), `.naeb/skills` in a project, the hook variables `NAEB_EVENT`,
