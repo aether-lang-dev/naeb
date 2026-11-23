@@ -32,6 +32,10 @@ import naeb.tui.port
 import naeb.tui.clock
 import naeb.tui.app_queue
 import naeb.tui.entry
+import naeb.tui.sel_history
+import naeb.tui.run_details
+import naeb.tui.turn_changes
+import naeb.tools.diff
 import naeb.tui.transcript
 import naeb.tui.editor
 import naeb.tui.selection
@@ -106,6 +110,21 @@ repeat_(s: string, n: int) -> string {
     sb = strbuilder.new(64)
     for i in 0..n { strbuilder.append(sb, s) }
     return strbuilder.finish(sb)
+}
+
+change_(path: string, added: int, removed: int, text: string) -> ptr {
+    c = heap.new(diff.Change)
+    c.path = path
+    c.added = added
+    c.removed = removed
+    c.created = 0
+    c.diff = text
+    return c as ptr
+}
+
+click_at_(r: *Rig, row: int) {
+    tui.handle_input(r.a, input.Mouse { col: 7, row: row, button: input.BUTTON_LEFT, mods: 0, kind: input.MOUSE_PRESS })
+    tui.handle_input(r.a, input.Mouse { col: 7, row: row, button: input.BUTTON_NONE, mods: 0, kind: input.MOUSE_RELEASE })
 }
 
 main() {
@@ -497,8 +516,79 @@ main() {
             spec.assert_true(transcript.at(a.transcript, 0).open != 0, "summary click opens")
             tui.click_entry(a, 0, rows)
             spec.assert_true(transcript.at(a.transcript, 0).open != 0, "details click does not close")
-            tui.handle_input(a, input.Mouse { col: 3, row: 7, button: input.BUTTON_NONE, mods: 0, kind: input.MOUSE_MOTION })
+            tui.handle_input(a, input.Mouse { col: 3, row: 8, button: input.BUTTON_NONE, mods: 0, kind: input.MOUSE_MOTION })
             spec.assert_eq(a.hovered, -1, "below: none")
+        }
+        spec.it("scrolled Run layout drives wrapped heading hover and click but leaves bodies selectable") callback {
+            widths = [60, 120, 160]
+            heading_rows = [3, 2, 1]
+            color = screen.color_rgb(18, 18, 18)
+            for wi in 0..3 {
+                width = widths[wi]
+                r = rig_(width, 24)
+                a = r.a
+                a.hover_bg = color
+                top_row = 3 + heading_rows[wi] - 1
+                a.scroll.has_top = 1
+                a.scroll.top_entry = 0
+                a.scroll.top_row = top_row
+                transcript.start_run(a.transcript, "script-body")
+                two = list.list_new()
+                list.list_add_raw(two, change_("src/part-界-part-界-part-界-part-界-part-界-part-界-part-界-part-界-part-界-part-界-part-界-part-界-part-界-part-界-part-界-part-界-last-file.zig", 1, 0, "+first-body\n"))
+                list.list_add_raw(two, change_("b.zig", 1, 0, "+second-body\n"))
+                transcript.end_run(a.transcript, true, "result-body", 1, turn_changes.change_text_new(two))
+                later = ""
+                for i in 0..30 { later = "${later}later\n" }
+                transcript.add(a.transcript, entry.KIND_INFO, later)
+                e = transcript.at(a.transcript, 0)
+                e.open = 1
+                tui.render(a)
+                spec.assert_eq(a.body.top.row, top_row, "pinned top, width ${width}")
+                tui.handle_input(a, input.Mouse { col: 7, row: 0, button: input.BUTTON_NONE, mods: 0, kind: input.MOUSE_MOTION })
+                spec.assert_eq(a.hovered, 0, "hovered")
+                spec.assert_eq(a.hovered_row, 3, "hovered row")
+                tui.render(a)
+                surf = term.surface(r.t)
+                hc, _ok0 = screen.read_cell(surf, width - 2, 0)
+                bc, _ok1 = screen.read_cell(surf, width - 2, 1)
+                spec.assert_eq(hc.style.bg, color, "heading highlighted")
+                spec.assert_eq(bc.style.bg, screen.DEFAULT, "body not highlighted")
+                spec.assert_contains(screen.row_text(surf, 0), "last-file.zig", "wrapped heading's last row is on top")
+                click_at_(r, 0)
+                spec.assert_true(e.open != 0, "Run stays open")
+                spec.assert_eq((e.changes.files[0] as *turn_changes.FileDiff).open, 1, "first file open")
+                spec.assert_eq((e.changes.files[1] as *turn_changes.FileDiff).open, turn_changes.UNSET, "second file untouched")
+                tui.render(a)
+                tui.handle_input(a, input.Mouse { col: 7, row: 1, button: input.BUTTON_NONE, mods: 0, kind: input.MOUSE_MOTION })
+                spec.assert_eq(a.hovered, -1, "a body is not hovered")
+                tui.handle_input(a, input.Mouse { col: 7, row: 1, button: input.BUTTON_LEFT, mods: 0, kind: input.MOUSE_PRESS })
+                tui.handle_input(a, input.Mouse { col: 17, row: 1, button: input.BUTTON_LEFT, mods: 0, kind: input.MOUSE_DRAG })
+                spec.assert_eq(a.selection.dragged, 1, "dragged")
+                copied = selection.text_in_history(a.selection, surf, a.body, a.has_body != 0, a.transcript.entries)
+                spec.assert_str_eq(copied, "+first-body", "the body is selectable")
+                selection.clear(a.selection)
+                click_at_(r, 1)
+                spec.assert_eq((e.changes.files[0] as *turn_changes.FileDiff).open, 1, "a body click toggles nothing")
+                click_at_(r, 3)
+                tui.render(a)
+                click_at_(r, 4)
+                tui.render(a)
+                click_at_(r, 6)
+                spec.assert_true(e.details.open == 1 && e.details.result_open == 1 && e.details.script_open != 0, "Details, Result and Script opened by their headings")
+                a.scroll.has_top = 1
+                a.scroll.top_entry = 0
+                a.scroll.top_row = 0
+                tui.render(a)
+                click_at_(r, 0)
+                spec.assert_eq(e.open, 0, "the Run folds from its title")
+                c = a.cfg as *types.Config
+                c.simple = 1
+                tui.render(a)
+                click_at_(r, 0)
+                tui.render(a)
+                spec.assert_true(e.open != 0 && (e.changes.files[0] as *turn_changes.FileDiff).open == 1, "reopened in Simple with the file choice kept")
+                spec.assert_true(e.details.open == 1 && e.details.result_open == 1 && e.details.script_open != 0, "nested choices kept")
+            }
         }
         spec.it("hover uses neutral eighteen-level contrast and scheme fallback") callback {
             spec.assert_eq(tui.hover_background(0, 0, 0), screen.color_rgb(18, 18, 18), "dark")
@@ -584,7 +674,8 @@ main() {
             port.emit(r.s, "{\"done\":{}}")
             tui.settle(r.a)
             driver.expect_no_row_contains(r.t, "Generating response")
-            driver.expect_row_contains(r.t, "1 step · 2s · 1.2k tokens")
+            driver.expect_row_contains(r.t, "2s")
+            driver.expect_no_row_contains(r.t, "tokens")
             spec.assert_eq(r.a.has_turn, 0, "Turn over")
         }
         spec.it("a Run block: running, then its result folded into a summary that a click opens") callback {
@@ -602,6 +693,12 @@ main() {
             spec.assert_true(row >= 0, "Run summary shown")
             driver.expect_no_row_contains(r.t, "file contents")
             driver.click(r.t, 4, row)
+            tui.settle(r.a)
+            // a successful Run opens to its Details heading; the result stays behind it
+            driver.expect_row_contains(r.t, "▸ Details")
+            driver.expect_no_row_contains(r.t, "file contents")
+            drow = driver.find_row(r.t, "Details")
+            driver.click(r.t, 6, drow)
             tui.settle(r.a)
             driver.expect_row_contains(r.t, "file contents")
         }
@@ -711,7 +808,7 @@ main() {
             spec.assert_eq(term.rows(r.t), 16, "rows")
             driver.expect_cell(r.t, 0, 15, "╰")
             driver.expect_cell(r.t, 59, 15, "╯")
-            driver.expect_cursor(r.t, 2, 14)
+            driver.expect_cursor(r.t, 3, 14)
         }
         spec.it("upstream snapshot: the app's first frame on 80x12 is layout_snapshots.txt's \"normal\"") callback {
             r = rig_(80, 12)

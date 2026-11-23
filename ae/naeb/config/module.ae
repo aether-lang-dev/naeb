@@ -23,6 +23,7 @@ import std.string
 import std.list
 import std.fs
 import naeb.jsonx
+import naeb.session.tuning
 import naeb.config.env
 import naeb.provider.types
 import naeb.auth.store
@@ -1238,6 +1239,10 @@ resolve(envp: ptr, text: string, path: string) -> (ptr, string, string) {
         if n2 < (16384 as long) || n2 > (16777216 as long) { return null, "InvalidConfig", "NAEB_RUN_OUTPUT_BYTES: expected 16384..16777216 bytes" }
         lim = c.limits as *types.Limits
         lim.run_output_bytes = n2 as int
+    }
+    if env.has(envp, "NAEB_TUNE") == 1 {
+        _tuned, tune_err = tuning.override(tuning.defaults(), env.get(envp, "NAEB_TUNE"))
+        if tune_err != "" { return null, "InvalidTuning", tune_err }
     }
     if env.has(envp, "NAEB_THINKING") == 0 && env.has(envp, "NAEB_REASONING_EFFORT") == 0 {
         if file.effort_set == 1 { types.set_effort(cp, file.effort) }

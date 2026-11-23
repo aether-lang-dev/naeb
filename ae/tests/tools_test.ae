@@ -240,7 +240,7 @@ main() {
             }
             spec.assert_eq(blocks, 15, "every tool has a block")
             names = tools.tool_names()
-            spec.assert_eq(list.list_size(names), 15, "table size")
+            spec.assert_eq(list.list_size(names), 16, "table size (wait is documented only under tool delivery)")
             spec.assert_eq(contains_(docs, "  async llm("), 1, "llm documented")
             spec.assert_eq(contains_(docs, "  async agent("), 1, "agent documented")
         }

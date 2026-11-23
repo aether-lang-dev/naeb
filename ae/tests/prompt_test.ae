@@ -16,6 +16,7 @@ import naeb.sandbox
 import naeb.tools
 import naeb.provider.types
 import naeb.session.prompt
+import naeb.session.tuning
 import naeb.session.profile
 import naeb.session.instructions
 import naeb.session.compact
@@ -37,7 +38,7 @@ host_docs_() -> string {
 }
 
 render_(model: string) -> string {
-    return prompt.render_system("/work", host_docs_(), 16384 as long, "", model)
+    return prompt.render_system("/work", host_docs_(), 16384 as long, "", model, tuning.VALIDATION_SINGLE, false)
 }
 
 string_at_(l: ptr, i: int) -> string {
@@ -87,6 +88,38 @@ pick_(m: ptr, order: int[], n: int) -> ptr {
 main() {
     fw = spec.init()
     spec.describe(fw, "session.prompt") {
+        spec.it("tool delivery rewrites every wait-by-ending-the-response sentence") callback {
+            docs = "${tools.all_docs()}  async wait(ids) {},\n"
+            user = prompt.render_system("/work", docs, 16384 as long, "", "deepseek-flash", tuning.VALIDATION_SINGLE, false)
+            from = prompt.tool_delivery_from()
+            for i in 0..from.len {
+                spec.assert_true(has_(user, from[i]), "user prompt has: ${from[i]}")
+            }
+            spec.assert_false(has_(user, "tools.wait"), "no tools.wait without tool delivery")
+            tool = prompt.render_system("/work", docs, 16384 as long, "", "deepseek-flash", tuning.VALIDATION_SINGLE, true)
+            for i in 0..from.len {
+                spec.assert_false(has_(tool, from[i]), "tool prompt lacks: ${from[i]}")
+            }
+            spec.assert_false(has_(tool, "Session waits"), "Session waits")
+            spec.assert_false(has_(tool, "reply without tools"), "reply without tools")
+            spec.assert_true(has_(tool, "async wait(ids)"), "wait documented")
+        }
+        spec.it("validation variants preserve delivery and remove only validation guidance") callback {
+            docs = "${tools.all_docs()}  async wait(ids) {},\n"
+            variants = [tuning.VALIDATION_SINGLE, tuning.VALIDATION_EXISTING_ONLY, tuning.VALIDATION_NONE]
+            for d in 0..2 {
+                for vi in 0..3 {
+                    v = variants[vi]
+                    system = prompt.render_system("/work", docs, 16384 as long, "", "deepseek-flash", v, d == 1)
+                    spec.assert_eq(has_(system, "then build and test"), v == tuning.VALIDATION_SINGLE, "build and test ${v}")
+                    spec.assert_eq(has_(system, "known regression tests, expected results/fixtures"), v == tuning.VALIDATION_SINGLE, "regression ${v}")
+                    spec.assert_eq(has_(system, "do not write new test scripts or install toolchains"), v == tuning.VALIDATION_EXISTING_ONLY, "existing-only ${v}")
+                    spec.assert_true(has_(system, "async wait(ids)"), "docs kept")
+                    spec.assert_true(has_(system, "Fix it and continue the task"), "script rule kept")
+                    spec.assert_false(has_(system, "{s}"), "no marker left")
+                }
+            }
+        }
         spec.it("system prompt documents every tool in JavaScript") callback {
             prompt_text = render_("gpt-6.1-sol")
             spec.assert_true(has_(prompt_text, "```js\n"), "js fence")
@@ -113,24 +146,24 @@ main() {
             spec.assert_true(has_(prompt_text, "You are naeb, a coding agent working in /work.\n"), "cwd")
             // Upstream-complete documentation: every tool is checked against
             // tools.all_docs().
-            full = prompt.render_system("/work", tools.all_docs(), 16384 as long, "", "gpt-6.1-sol")
+            full = prompt.render_system("/work", tools.all_docs(), 16384 as long, "", "gpt-6.1-sol", tuning.VALIDATION_SINGLE, false)
             spec.assert_true(has_(full, "1800000 (30 min)"), "bash timeout")
             spec.assert_true(has_(full, "resume:a1 after completion; busy:wait, don't retry/replace"), "agent resume")
             names = tools.tool_names()
             i = 0
             while i < list.list_size(names) {
                 n = string_at_(names, i)
-                if string.starts_with(n, "mcp") == 0 {
+                if string.starts_with(n, "mcp") == 0 && n != "wait" {
                     spec.assert_true(has_(full, "async ${n}("), "documents ${n}")
                 }
                 i = i + 1
             }
         }
         spec.it("system prompt renders configured Run display budget") callback {
-            system = prompt.render_system("/work", host_docs_(), 32768 as long, "", "m")
+            system = prompt.render_system("/work", host_docs_(), 32768 as long, "", "m", tuning.VALIDATION_SINGLE, false)
             spec.assert_true(has_(system, "share 32 KiB per Run"), "KiB")
             spec.assert_true(has_(system, "known regression tests, expected results/fixtures and formatting"), "validation line")
-            odd = prompt.render_system("/work", host_docs_(), 1000 as long, "", "m")
+            odd = prompt.render_system("/work", host_docs_(), 1000 as long, "", "m", tuning.VALIDATION_SINGLE, false)
             spec.assert_true(has_(odd, "share 1000 bytes per Run"), "bytes when not a KiB multiple")
         }
         spec.it("system prompt never mentions run effort") callback {

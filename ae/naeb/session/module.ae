@@ -52,6 +52,7 @@ import naeb.session.log
 import naeb.session.output
 import naeb.session.prompt
 import naeb.session.profile
+import naeb.session.tuning
 import naeb.session.instructions
 import naeb.session.compact
 import naeb.session.tool_summary
@@ -84,6 +85,7 @@ struct Options {
     resume_id: string
     continue_latest: int
     patches_off: string      // NAEB_PATCHES_OFF
+    tune: string             // NAEB_TUNE, validated at start-up
     self_exe: string
     record: int              // 1: write the full tool sidecar (NAEB_RECORD, config.record_tools)
     undo_enabled: int        // the TUI's /undo (naeb ask has none, as upstream)
@@ -121,6 +123,8 @@ struct Session {
     output_bytes: long
     llm_calls: long
     agent_calls: long
+    tuning_delivery: int     // session.tuning variants, fixed when the Session starts
+    tuning_validation: int
     pending_background_bytes: long
     compact_backoff: long
     run_id: int
@@ -154,6 +158,7 @@ new_options(home: string, user_home: string) -> ptr {
     o.resume_id = ""
     o.continue_latest = 0
     o.patches_off = ""
+    o.tune = ""
     o.self_exe = ""
     o.record = 0
     o.undo_enabled = 0
@@ -356,6 +361,8 @@ init(cp: @keep ptr, op: @keep ptr) -> (ptr, string, string) {
         c.mcp_servers = logged
         attach_mcp_(s, logged)
         s.pending_background_bytes = l.pending_background_bytes
+        // A resumed Session keeps the variants it logged (an old log: the defaults).
+        set_tuning_(s, tuning.from_log(jsonx.parse(l.tuning)))
         s.cache_key = l.cache_key
         if s.cache_key == "" { s.cache_key = s.id }
         s.parent_session_id = l.parent_session_id
@@ -431,10 +438,12 @@ initialize_fork_(s: *Session, fp: ptr, cwd: string) -> string {
     tools.import_versions(s.tools, f.file_versions)
     msgs, herr = fork_history.inherit(f.history, f.message_count, f.id, f.session)
     if herr != "" { return herr }
+    terr = resolve_tuning_(s)
+    if terr != "" { return terr }
     members = ",\"mcp_servers\":${agent_input.mcp_servers_json(c.mcp_servers)},\"cwd\":${jsonx.quote(cwd)},\"provider\":${jsonx.quote(c.provider)}"
     if c.custom_provider != "" { members = "${members},\"custom_provider\":${jsonx.quote(c.custom_provider)}" }
     members = "${members},\"model\":${jsonx.quote(c.model)},\"parent_session_id\":${jsonx.quote(s.parent_session_id)},\"cache_key\":${jsonx.quote(s.cache_key)}"
-    members = "${members},\"forked_from\":{\"session\":${jsonx.quote(f.session)},\"message_count\":${f.message_count}},\"naeb_version\":${jsonx.quote(build_info.naeb_version())},\"mode\":${jsonx.quote(mode_name_(s.tools))}"
+    members = "${members},\"forked_from\":{\"session\":${jsonx.quote(f.session)},\"message_count\":${f.message_count}},\"naeb_version\":${jsonx.quote(build_info.naeb_version())},\"tuning\":${tuning.to_log(tuning.Resolved { delivery: s.tuning_delivery, validation: s.tuning_validation })},\"mode\":${jsonx.quote(mode_name_(s.tools))}"
     tokens = compact.estimate_tokens(msgs, 0, list.list_size(msgs))
     return log.commit(s.log, s.history, 0, msgs, tokens, members, 1)
 }
@@ -483,11 +492,33 @@ json_list_(l: ptr) -> string {
     return "${out}]"
 }
 
+// Fixes the tuning variants of a new Session: the model's profile, then NAEB_TUNE.
+// (NAEB_TUNE is validated at start-up, so a failure here is not user-facing.)
+resolve_tuning_(s: *Session) -> string {
+    c = s.cfg as *types.Config
+    o = s.options as *Options
+    r, err = tuning.resolve(profile.for_model(c.model), o.tune)
+    if err != "" { return err }
+    set_tuning_(s, r)
+    return ""
+}
+
+// A Session's variants also configure its tools (tools.wait, the validation prompt).
+set_tuning_(s: *Session, r: tuning.Resolved) {
+    s.tuning_delivery = r.delivery
+    s.tuning_validation = r.validation
+    t = s.tools as *tools.Tools
+    t.delivery_tool = if r.delivery == tuning.DELIVERY_TOOL { 1 } else { 0 }
+    t.validation = r.validation
+}
+
 initialize_history_(s: *Session, cwd: string) -> string {
     c = s.cfg as *types.Config
     o = s.options as *Options
     l = c.limits as *types.Limits
-    template = prompt.render_system(cwd, tools.docs(s.tools), l.run_output_bytes as long, o.patches_off, c.model)
+    terr = resolve_tuning_(s)
+    if terr != "" { return terr }
+    template = prompt.render_system(cwd, tools.docs(s.tools), l.run_output_bytes as long, o.patches_off, c.model, s.tuning_validation, tools.wait_enabled(s.tools) == 1)
     base = prompt.step_limit_prompt(template, l.max_steps as long)
     global = atomic_file.join(o.home, "AGENTS.md")
     root = instructions.project_root(cwd)
@@ -504,6 +535,7 @@ initialize_history_(s: *Session, cwd: string) -> string {
     off = prompt.disabled_patches(o.patches_off)
     if list.list_size(off) > 0 { members = "${members},\"patches_off\":${json_list_(off)}" }
     members = "${members},\"profile\":${jsonx.quote(profile.name(profile.for_model(c.model)))}"
+    members = "${members},\"tuning\":${tuning.to_log(tuning.Resolved { delivery: s.tuning_delivery, validation: s.tuning_validation })}"
     members = "${members},\"mode\":${jsonx.quote(mode_name_(s.tools))}"
     msgs = list.list_new()
     list.list_add(msgs, msg.system(system))
@@ -964,7 +996,7 @@ execute_(s: *Session, tc: *types.ToolCall, sk: ptr, cancel: @keep ptr, run: @kee
                 last_tool = active
             }
             poll_(s, sk)
-            if attempted == 0 && canceled_(cancel) == 0 && timing.elapsed(j.timing) >= (l.run_background_after_ms as long) && sync.atomic_load(j.waiting) == 1 {
+            if attempted == 0 && canceled_(cancel) == 0 && timing.elapsed(j.timing) >= (l.run_background_after_ms as long) && sync.atomic_load(j.waiting) == 1 && tools.blocked_in_wait(j.scope) == 0 {
                 attempted = 1
                 if background.active_runs(t.background) < background.RUN_LIMIT {
                     return background_run_(s, j, sk, started) as ptr
@@ -1013,6 +1045,10 @@ background_run_(s: *Session, j: *RunJob, sk: ptr, started: long) -> *Executed {
     background.adopt_run(t.background, j.id, rs.id, j.cancel, j.done, j as ptr)
     list.list_add(s.bg_runs, j as ptr)
     notice = "Run still executing after ${l.run_background_after_ms} ms; continuing in background as ${j.id}. Its captured output is preserved and will arrive automatically as a message when it finishes. Continue useful work meanwhile; no ps, cat/tail logs, sleep, empty Runs or timeout reruns to check/wait. Do not read its redirected logs before completion. If no independent work remains, end the model response immediately with a brief text reply and no run/tool call (not even console.log); Session waits locally, delivers the result and continues the Turn. After edit/write changes, rerun the same command/cwd directly: older Run bash stops with {superseded_by}, not failure. Do not wait for the stale result."
+    if tools.wait_enabled(s.tools) == 1 {
+        notice = string.replace_all(notice, "will arrive automatically as a message when it finishes", "will arrive appended to the output of your next Run when it finishes")
+        notice = string.replace_all(notice, "end the model response immediately with a brief text reply and no run/tool call (not even console.log); Session waits locally, delivers the result and continues the Turn.", "call await tools.wait() (optionally after other work in the same Run); it returns the results when the tasks finish.")
+    }
     text = output.step_limit_output(notice, remaining_steps_(s))
     sj = tool_summary.to_json(tool_summary.empty())
     emit_(sk, "{\"run_end\":{\"background_id\":${jsonx.quote(j.id)},\"ok\":true,\"output\":${jsonx.quote(text)},\"changes\":[],\"tool_summary\":${sj}}}")
@@ -1060,7 +1096,7 @@ poll_runs_(s: *Session) {
         hn = ""
         if j2.hook_notice != "" { hn = "\"hook_notice\":${jsonx.quote(j2.hook_notice)}," }
         completion = "{${hn}\"execution\":{\"start_ms_epoch\":${j2.exec_start},\"end_ms_epoch\":${j2.exec_end}},\"step\":${j2.step},\"run_index\":${j2.run_index},\"ok\":${okt},\"output\":${jsonx.quote(out_text)},\"run_ms\":${j2.elapsed_ms},\"tool_bytes\":${timing.tool_bytes(j2.timing)},\"calls\":${calls_json_(j2.timing)},\"calls_omitted\":${timing.omitted(j2.timing)},\"changes\":${changes_json_(changes)}}"
-        background.enqueue_run(t.background, j2.id, o2.ok, "[background run ${j2.id} finished]\n${out_text}", completion, j2.exec_start, j2.exec_end)
+        background.enqueue_run(t.background, j2.id, o2.ok, "[background run ${j2.id} finished]\n${out_text}", completion, j2.exec_start, j2.exec_end, (j2.scope as *tools.RunScope).id)
         k = k + 1
     }
     kept = list.list_new()
@@ -1187,6 +1223,63 @@ insert_background_(s: *Session, pending: ptr, sk: ptr, include_detached: int) ->
         k = k + 1
     }
     return ""
+}
+
+// The `background` event of a queued result, as the log and the sink carry it.
+background_event_(it: *background.Item) -> string {
+    event = "{\"id\":${jsonx.quote(it.id)},\"kind\":${jsonx.quote(it.kind)},\"state\":${jsonx.quote(it.state)}"
+    if it.ok >= 0 {
+        okt = "false"
+        if it.ok == 1 { okt = "true" }
+        event = "${event},\"ok\":${okt}"
+    }
+    if it.completion != "" { event = "${event},\"completion\":${it.completion}" }
+    if it.exec_end > 0 { event = "${event},\"execution\":{\"start_ms_epoch\":${it.exec_start},\"end_ms_epoch\":${it.exec_end}}" }
+    return "${event}}"
+}
+
+// A result reached the model (or the person's user message did): mark the
+// task delivered and tell the sink (upstream announceDelivered).
+announce_background_(s: *Session, it: *background.Item, sk: ptr) {
+    t = s.tools as *tools.Tools
+    if it.kind == "user" {
+        activity_(sk, "user_inserted", it.id)
+        return
+    }
+    background.delivered(t.background, it.id, it.invocation)
+    emit_(sk, "{\"background\":${background_event_(it)}}")
+}
+
+// Delivery `tool`: queued results and user messages ride on the last tool
+// message instead of becoming user messages (upstream foldInbox). Returns
+// the `background` events of the folded results, for the log, and the bytes
+// of those results (billed to the next complete Step).
+fold_inbox_(s: *Session, pending: ptr, sk: ptr) -> (ptr, long) {
+    t = s.tools as *tools.Tools
+    events = list.list_new()
+    bytes = 0 as long
+    items = background.take_items(t.background, 1)
+    n = list.list_size(items)
+    if n == 0 { return events, bytes }
+    last = list.list_size(pending) - 1
+    target, _g = list.get_string(pending, last)
+    text = msg.content(target)
+    for i in 0..n {
+        it = list.list_get_raw(items, i) as *background.Item
+        text = "${text}\n\n"
+        if it.kind == "user" { text = "${text}[user message]\n" }
+        text = "${text}${it.text}"
+    }
+    list.list_set(pending, last, msg.set_raw(target, "content", jsonx.quote(text)))
+    for j in 0..n {
+        it2 = list.list_get_raw(items, j) as *background.Item
+        announce_background_(s, it2, sk)
+        if it2.kind != "user" {
+            list.list_add(events, background_event_(it2))
+            bytes = bytes + (string.length(it2.text) as long)
+        }
+    }
+    return events, bytes
 }
 
 // The model call, with retries; deltas forwarded (buffered while
@@ -1398,6 +1491,7 @@ run_steps_(s: *Session, pending: ptr, sk: @keep ptr, cancel: @keep ptr) -> (stri
     lim = c.limits as *types.Limits
     t = s.tools as *tools.Tools
     step_index = 0
+    held = 0
     while true {
         if canceled_(cancel) == 1 { return "Canceled", "" }
         if lim.max_steps >= 0 && step_index >= lim.max_steps {
@@ -1413,8 +1507,11 @@ run_steps_(s: *Session, pending: ptr, sk: @keep ptr, cancel: @keep ptr) -> (stri
         }
         if canceled_(cancel) == 1 { return "Canceled", "" }
         poll_(s, sk)
-        berr = insert_background_(s, pending, sk, 1)
-        if berr != "" { return berr, "" }
+        // Under tool delivery the Step just run already carried the queue.
+        if held == 0 {
+            berr = insert_background_(s, pending, sk, 1)
+            if berr != "" { return berr, "" }
+        }
         poll_(s, sk)
         background.set_turn_step(t.background, s.steps + 1)
         background_output_bytes = s.pending_background_bytes
@@ -1524,6 +1621,19 @@ run_steps_(s: *Session, pending: ptr, sk: @keep ptr, cancel: @keep ptr) -> (stri
             list.list_set(pending, assistant_index, msg.set_raw(am, "waiting", "true"))
             emit_(sk, "{\"notice\":\"Waiting for background results.\"}")
         }
+        carried_bytes = 0 as long
+        folded = list.list_new()
+        held = 0
+        if s.tuning_delivery == tuning.DELIVERY_TOOL && ncalls > 0 && waiting == 0 {
+            held = 1
+            poll_(s, sk)
+            folded, carried_bytes = fold_inbox_(s, pending, sk)
+        }
+        waited_items = background.take_waited_all(t.background)
+        for wi in 0..list.list_size(waited_items) {
+            wit = list.list_get_raw(waited_items, wi) as *background.Item
+            announce_background_(s, wit, sk)
+        }
         u = r.usage as *types.Usage
         tokens = u.prompt_tokens + u.completion_tokens + output_tokens
         ms = os.now_monotonic_ms() - step_started
@@ -1541,7 +1651,15 @@ run_steps_(s: *Session, pending: ptr, sk: @keep ptr, cancel: @keep ptr) -> (stri
         members = ",\"model\":${jsonx.quote(c.model)}${members}"
         e = log.commit(s.log, s.history, list.list_size(s.history), pending, tokens, members, 0)
         if e != "" { return e, "" }
-        s.pending_background_bytes = 0 as long
+        s.pending_background_bytes = carried_bytes
+        for wi2 in 0..list.list_size(waited_items) {
+            wit2 = list.list_get_raw(waited_items, wi2) as *background.Item
+            log.background(s.log, background_event_(wit2), s.steps)
+        }
+        for fi2 in 0..list.list_size(folded) {
+            fe2, _fg2 = list.get_string(folded, fi2)
+            log.background(s.log, fe2, s.steps + 1)
+        }
         s.model_ms = s.model_ms + model_ms
         s.run_ms = s.run_ms + run_ms
         s.tool_bytes = s.tool_bytes + timing.tool_bytes(run)

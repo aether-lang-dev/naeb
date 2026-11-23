@@ -1,0 +1,149 @@
+// session.tuning: the variant of every tuning (upstream src/session/tuning.zig,
+// ADR 0026). A tuning is a field of Resolved, its variants a set of ints whose
+// first value is the default. The profile picks the variants; NAEB_TUNE
+// replaces some (`<tuning>=<variant>[,...]`); a Session keeps the variants it
+// logged, and a log that names an unknown tuning or variant (from a newer
+// naeb) falls back to the default.
+//
+// Differences from upstream: no comptime reflection, so the tuning names,
+// their variant names and the log record are written out here; the
+// NIB_TUNE of upstream's messages is NAEB_TUNE; a log record is the JSON
+// object text (to_log) and read from a parsed object (from_log).
+
+import std.string
+import std.json
+import naeb.jsonx
+import naeb.session.profile
+
+exports(DELIVERY_USER, DELIVERY_TOOL, VALIDATION_SINGLE, VALIDATION_EXISTING_ONLY, VALIDATION_NONE,
+        BG_USER, BG_TOOL, BG_TOOL_WITHOUT_WAIT, Resolved, defaults, for_profile, background_mode,
+        folds_results, override, resolve, from_log, to_log, delivery_name, validation_name)
+
+// How background completions and mid-Turn user messages reach the model:
+// `user` inserts user messages at the next Step; `tool` appends them to the
+// next tool result.
+const DELIVERY_USER = 0
+const DELIVERY_TOOL = 1
+
+const VALIDATION_SINGLE = 0
+const VALIDATION_EXISTING_ONLY = 1
+const VALIDATION_NONE = 2
+
+// What the delivery means for one Session: tool delivery without `wait`
+// (a Session that cannot expose it) falls back to a user message.
+const BG_USER = 0
+const BG_TOOL = 1
+const BG_TOOL_WITHOUT_WAIT = 2
+
+struct Resolved {
+    delivery: int
+    validation: int
+}
+
+defaults() -> Resolved {
+    return Resolved { delivery: DELIVERY_USER, validation: VALIDATION_SINGLE }
+}
+
+delivery_name(v: int) -> string {
+    if v == DELIVERY_TOOL { return "tool" }
+    return "user"
+}
+
+validation_name(v: int) -> string {
+    if v == VALIDATION_EXISTING_ONLY { return "existing-only" }
+    if v == VALIDATION_NONE { return "none" }
+    return "single"
+}
+
+// The variant `name` of delivery, -1 for none.
+delivery_of_(name: string) -> int {
+    if name == "user" { return DELIVERY_USER }
+    if name == "tool" { return DELIVERY_TOOL }
+    return -1
+}
+
+validation_of_(name: string) -> int {
+    if name == "single" { return VALIDATION_SINGLE }
+    if name == "existing-only" { return VALIDATION_EXISTING_ONLY }
+    if name == "none" { return VALIDATION_NONE }
+    return -1
+}
+
+background_mode(r: Resolved, can_wait: bool) -> int {
+    if r.delivery == DELIVERY_USER { return BG_USER }
+    if can_wait { return BG_TOOL }
+    return BG_TOOL_WITHOUT_WAIT
+}
+
+folds_results(mode: int) -> bool {
+    return mode != BG_USER
+}
+
+for_profile(profile: int) -> Resolved {
+    if profile == profile_deepseek_() {
+        return Resolved { delivery: DELIVERY_TOOL, validation: VALIDATION_NONE }
+    }
+    return defaults()
+}
+
+profile_deepseek_() -> int { return profile.DEEPSEEK }
+
+trim_(s: string) -> string {
+    return string.trim(s)
+}
+
+// `base` with `spec` (`<tuning>=<variant>[,...]`) applied: (result, "") or
+// (base, the NAEB_TUNE message).
+override(base: Resolved, spec: string) -> (Resolved, string) {
+    result = base
+    n = string.length(spec)
+    start = 0
+    while start <= n {
+        comma = string.index_of_from(spec, ",", start)
+        stop = comma
+        if comma < 0 { stop = n }
+        entry = trim_(string.substring(spec, start, stop))
+        start = stop + 1
+        if string.length(entry) == 0 { continue }
+        eq = string.index_of(entry, "=")
+        if eq < 0 {
+            return base, "NAEB_TUNE: expected <tuning>=<variant>, got '${entry}'"
+        }
+        name = trim_(string.substring(entry, 0, eq))
+        variant = trim_(string.substring(entry, eq + 1, string.length(entry)))
+        if name == "delivery" {
+            v = delivery_of_(variant)
+            if v < 0 { return base, "NAEB_TUNE: delivery has no variant '${variant}'; variants: user, tool" }
+            result.delivery = v
+        } else if name == "validation" {
+            v = validation_of_(variant)
+            if v < 0 { return base, "NAEB_TUNE: validation has no variant '${variant}'; variants: single, existing-only, none" }
+            result.validation = v
+        } else {
+            return base, "NAEB_TUNE: unknown tuning '${name}'; tunings: delivery, validation"
+        }
+    }
+    return result, ""
+}
+
+// The variants for `profile` with the NAEB_TUNE text applied ("" for none).
+resolve(profile: int, spec: string) -> (Resolved, string) {
+    return override(for_profile(profile), spec)
+}
+
+// From the log header's `tuning` object (a parsed JSON value, null for none);
+// unknown tunings and variants keep their default.
+from_log(record: ptr) -> Resolved {
+    result = defaults()
+    if record == null { return result }
+    d = delivery_of_(jsonx.str_or(record, "delivery", ""))
+    if d >= 0 { result.delivery = d }
+    v = validation_of_(jsonx.str_or(record, "validation", ""))
+    if v >= 0 { result.validation = v }
+    return result
+}
+
+// The header's `tuning` member: every tuning and its variant.
+to_log(r: Resolved) -> string {
+    return "{\"delivery\":\"${delivery_name(r.delivery)}\",\"validation\":\"${validation_name(r.validation)}\"}"
+}

@@ -63,11 +63,34 @@ The merge brought upstream's Zig sources, docs and tests as upstream wrote them 
 and `scripts/stats.py` differ from `main` only by the renamed words, which
 `ae/tests/check_tests_vs_main.py` proves; AGENTS.md and README.md stay the port's own;
 the new docs `plugins.md`, `developing.md`, `ci.md`, `read-streaming.md`,
-`recording-data-path.md` still say nib). Right after the merge, before any of these
-ports, `ae/tests/upstream-e2e.sh` gave **11 passed, 19 failed**, and the Aether suites
-(`aeb .tests.ae` without the red-team script) failed only in the three TUI snapshot
-specs (upstream's `layout_snapshots.txt` and `simple_snapshots.txt` changed with
-cf751b3) and in `ae/tests/tui_e2e.sh` for the same reason.
+`recording-data-path.md` still say nib). Run on cachyos (Linux: some of upstream's
+tests read `/proc`, so on macOS `test_agent`, `test_agent_reuse` and
+`test_background_agent` fail for that reason alone), `ae/tests/upstream-e2e.sh` gave:
+
+- right after the merge (0137250), before any of these ports: **14 passed, 16 failed**
+  (providers, session, effort, limits, agent_fork, background_bash, background_run,
+  replay, tui_stream, tui_mouse, model, undo, interjections, prediction, hooks,
+  skill_mentions failed);
+- on the head that recorded this table: **17 passed, 13 failed** (the same list less
+  providers, limits, skill_mentions; effort is the Codex half, out by policy).
+
+After the TUI redesign (21cfb75) and the tuning port (823c6fa), measured by file on cachyos
+(not a full run of the suite since the table above): passing `test_tui_stream`, `test_tui_mouse`,
+`test_undo`, `test_prediction`, `test_hooks`, `test_interjections`; still failing
+`test_background_run` (9 cases: `deliveries` records and the final prompt wording), `test_agent_fork`
+(1 case: the final prompt wording, `backgroundDelivery`/`backgroundWait`), `test_background_bash`
+(1 failure, 1 error: `deliveries`), `test_model`, `test_replay`, `test_session` (version), `test_effort`
+(Codex, policy). The Aether suites minus the red-team script were 87 of 88 at the redesign head, the
+one failure being `check_layers.sh` flagging an unpinned new module in the synced copy (pinned in
+the next commit; the gate is otherwise green).
+
+Version: no upstream release between 0.13.0 and 0.20.0 is fully covered (plugins, from 0.14.0, are
+out), so `build_info` stays at 0.13.0.
+
+The Aether suites (`aeb .tests.ae` without the red-team script) failed only, before the redesign, in the three
+TUI snapshot specs (upstream's `layout_snapshots.txt` and `simple_snapshots.txt` changed
+with cf751b3), which sit inside `ae/tests/tui_e2e.sh`: 87 of 88 targets pass on the
+head, the merge itself broke nothing else.
 
 Two oracle facts to know: `tests/test_session.py` asserts that the log header's
 `naeb_version` equals `build.zig.zon`'s version, which is now 0.20.0 while the port
@@ -81,13 +104,13 @@ out (below).
 |---|---|---|
 | 7788541 | blank row under the activity line (TUI) | ported earlier |
 | dd82e39, 8537d53 | `max_output` for custom services | ported earlier |
-| 0ee9f18, fe65cb4, b916949, a6917c6, 3d6c41f | Tuning: `delivery=tool` (tool results carry background results and interjections; `tools.wait`), `NAEB_TUNE`, DeepSeek defaults, log header `tuning` | **not yet**: `session/tuning`, `tools/wait`, the inbox fold, the prompt rewrite; fails `test_background_run` (tool delivery cases), `test_interjections`, `test_agent_fork`'s two wait cases |
+| 0ee9f18, fe65cb4, b916949, 8bf2b98, a6917c6, 3d6c41f | Tuning: `delivery=tool` (results and interjections fold into the last tool message; `tools.wait`), `validation` variants, `NAEB_TUNE`, DeepSeek defaults, log header `tuning` | ported in part: `session/tuning`, `tools.wait` (with the claim list in `tools/background`), the prompt rewrite and validation text, the fold in the Step loop, the header record, `NAEB_TUNE` validated at start-up; turns `test_interjections` green and fixes 2 of `test_background_run`'s tool-delivery cases. Not yet: 9bf5e6a's `deliveries` records (below) and the run message / prompt wording details `test_agent_fork` and `test_background_run` still assert |
 | 933696d | source line for every failed Run; a `tool_calls` finish with no call is invalid | ported (ab16e73), turns `test_providers.test_chat_completion_consistency` green |
-| 5460f8c | Run details hide result and script of edit-only Runs | session half ported (e1da9c7: the tool summary's `failures`, turns `test_limits` green); TUI half not yet |
+| 5460f8c | Run details hide result and script of edit-only Runs | ported: session half e1da9c7 (the tool summary's `failures`), TUI half in the TUI redesign commit (`entry.changes_only`, the failure count read from the `run_end` event) |
 | e5e024b | installable plugin packages (default off) | **not ported**, deprioritised: new surface (`naeb plugin`, `/plugins`, MCP and skill sources); `tests/test_plugins.py` is not in the e2e list |
 | d71bdb6 | exact patch reruns (`rerun` tool for failed Run sources) | **not yet**: fails `test_replay`'s patch-rerun cases |
 | e487898 | `/model` lists models across configured providers | **not yet**: fails `test_model` |
-| 5ade2c5, cf751b3, 5f801fe | TUI: change-first Run details, quiet footers (only the duration), input layout, shared detail-row layout | **not yet**: the bill is now only the elapsed time (a file-changes line may share it); fails every pseudo-terminal file that waits for a turn (`test_tui_*`, `test_undo`, `test_prediction`, `test_hooks`' TUI case, `test_interjections`, terminal cases of `test_background_*`) and the three Aether snapshot specs |
+| 5ade2c5, cf751b3, 5f801fe | TUI: change-first Run details, quiet footers (only the duration, shared with the changes line), input layout, shared detail-row layout | ported (`run_details` module, entry/turn_changes/view/bill/app); the three Aether snapshot specs match upstream's new snapshots; `test_tui_stream`, `test_tui_mouse`, `test_undo`, `test_prediction`, `test_hooks` green on cachyos |
 | 5f0343c, e672092, 6e998b3, 0e6a0e7, b9cce60, d1f73ba, e6b1cb4, 144ee34, 00d03df | release preparation, README measurements, charts | not applicable (release metadata; the port's version string moves when a whole release is covered) |
 | 7757af0 | rebuildable SQLite index for session metrics (`scripts/stats_db.py`) | **not ported**, deprioritised: a Python script over the logs; `tests/test_stats_db.py` is not in the e2e list |
 | 7872a32 | tool sidecar recording is opt-in (`NAEB_RECORD=on`) | ported (a1ac0be), most of `test_replay` green |
@@ -99,7 +122,7 @@ out (below).
 | 9a9a2cf, 3cc339a, eda8313 | upstream CI scheduling and `nib-dev` install | not applicable (upstream's CI and install scripts) |
 | bda9d03 | session resume after switching models (reasoning data tagged by model) | **not yet**: fails `test_model`'s resume case |
 | 8f8a2a0 | unified provider credential resolution | **not yet**: touches `auth`, `config`, `main`, `tui/providers`; its test (`test_provider_login.py`) is out by policy |
-| 9bf5e6a | Step deliveries committed with Run results | **not yet**: fails `test_background_run` (`test_resume_after_fold_commit`, folded-run replay), `test_replay`'s pending-source case |
+| 9bf5e6a | Step deliveries committed with Run results (`deliveries` records, `source_reference`, `run_results[].output`, claims per Run scope) | **not yet**: the claim list per Run scope is in `tools/background` (`take_for_wait`, `take_waited`), but the Step commit still writes separate `background` records; fails `test_background_run` (fold, wait, resume-after-fold, folded-run replay cases) and `test_background_bash`'s metadata case |
 | 8e854a4 | no per-key redraw during bracketed paste | **not yet** |
 | cd2d797 | every matching skill in the completion menu | ported (ed73b28), turns `test_skill_mentions` green |
 | 9a0d6db, a597350 | model-family profiles, shared prompt footprint | **not yet** (the port has `session/profile`; upstream's profile resolution, `applies_to` patches and `prompt_footprint` are not ported) |
@@ -212,13 +235,15 @@ run: f1a1d1a, 2026-11-22, 200 checks, 0 holes).
 | `src/main.zig` | 311 | `ae/naeb_main.ae` | a2dd439 | ask, js, login/logout, help, version, __jail; bare `naeb` opens the TUI (`run_tui_`); `naeb replay` with its three error texts; no update |
 | `src/replay.zig` | 541 | `ae/naeb/run_replay/module.ae` | a2dd439 | renamed (basename `replay` is the core's) |
 | `src/image.zig` | 324 | `ae/naeb/image/module.ae` | a2dd439 | images are JSON texts (the log's `images` entries); binary-safe reads; SHA-256 hash name; Attached/Target for the Run's images; pastedPath, and read_pasted for the TUI's stat-then-read |
-| `src/tui.zig` | 1911 | `ae/naeb/tui/module.ae` | 7788541 | the App; takes term, Session port and clock; app events through `naeb.tui.app_queue`; the Ticker is the poll timeout; the clipboard reader is an instance field (upstream's test override) |
-| `src/tui/view.zig` | 744 | `ae/naeb/tui/tui_view/module.ae` | 7788541 | renamed (basename `view`); both snapshot files match cell for cell |
-| `src/tui/transcript.zig`, `transcript/entry.zig`, `transcript/changes.zig`, `transcript/intraline.zig`, `transcript/label.zig` | 2634 | `ae/naeb/tui/transcript`, `entry`, `turn_changes` (renamed), `intraline`, `label` | 7788541 | replayed tool summaries are read from the messages' `tool_summary` members |
+| `src/tui.zig` | 1911 | `ae/naeb/tui/module.ae` | 5f801fe | the App; takes term, Session port and clock; app events through `naeb.tui.app_queue`; the Ticker is the poll timeout; the clipboard reader is an instance field (upstream's test override); owes 8e854a4, 8f8a2a0 (credential resolution, deprioritised); e5e024b's plugin commands and b44af92's Fast are not ported |
+| `src/tui/view.zig` | 744 | `ae/naeb/tui/tui_view/module.ae` | cd2d797 | renamed (basename `view`); both snapshot files (as changed by cf751b3) match cell for cell; b44af92's Fast marker is Codex, out |
+| `src/tui/transcript/entry.zig`, `transcript/changes.zig`, `transcript/run_details.zig` | 1100 | `ae/naeb/tui/entry`, `turn_changes` (renamed), `run_details` | 5f801fe | Run details as independent disclosures; `run_details.draw` takes the facts it needs (Facts) where upstream takes the Entry, placements are heap boxes; optionals are ints (UNSET) |
+| `src/tui/transcript.zig`, `transcript/intraline.zig`, `transcript/label.zig` | 2634 | `ae/naeb/tui/transcript`, `intraline`, `label` | 7788541 | replayed tool summaries are read from the messages' `tool_summary` members |
 | `src/tui/editor.zig` | 657 | `ae/naeb/tui/editor/module.ae` | 7788541 | image blocks hold naeb.image Images (JSON text); sent_images is their JSON array |
-| `src/tui/markdown.zig`, `syntax.zig` | 1472 | `ae/naeb/tui/markdown`, `syntax` | 7788541 | |
+| `src/tui/markdown.zig`, `syntax.zig` | 1472 | `ae/naeb/tui/markdown`, `syntax` | cf751b3 | headings in the default foreground |
 | `src/tui/viewport.zig`, `selection.zig`, `selection/history.zig` | 595 | `ae/naeb/tui/viewport`, `selection`, `sel_history` (renamed) | 7788541 | the local clipboard tool is a closure the app supplies (tui/clipboard's copier: ours adds pbcopy on macOS, see "Ours: pbcopy") |
-| `src/tui/status.zig`, `bill.zig`, `title.zig`, `format.zig`, `frames.zig`, `smooth.zig`, `long_text.zig`, `mode.zig` | 1076 | `ae/naeb/tui/<same>`, `turn_summary` | 7788541 | times are ms from the app's clock |
+| `src/tui/bill.zig` | 77 | `ae/naeb/tui/bill/module.ae` | cf751b3 | the footer is only the elapsed time; `details` takes the Run count |
+| `src/tui/status.zig`, `title.zig`, `format.zig`, `frames.zig`, `smooth.zig`, `long_text.zig`, `mode.zig` | 1076 | `ae/naeb/tui/<same>`, `turn_summary` | 7788541 | times are ms from the app's clock |
 | `src/tui/commands.zig`, `menu.zig`, `providers.zig` | 1133 | `ae/naeb/tui/commands`, `menu`, `module.ae` | 7788541 | execute/select/providers live in the app; `/provider` is key entry only |
 | `src/tui/provider_flow.zig` | 658 | `ae/naeb/tui/provider_flow/module.ae` | 7788541 | API keys only: the Codex sign-in steps are not ported |
 | `src/tui/prediction.zig`, `reflect.zig` | 798 | `ae/naeb/tui/prediction`, `reflect` | 7788541 | the model call and gh are closures (specs replace them) |

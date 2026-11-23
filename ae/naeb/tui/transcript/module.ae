@@ -123,7 +123,8 @@ add(t: *Transcript, kind: int, text: string) {
     t.entries.push(e as ptr)
 }
 
-// The line under a Turn footer; a TurnChanges with an empty head (what
+// The Turn's changes line, which also carries the elapsed time of the
+// footer that was just before it; a TurnChanges with an empty head (what
 // turn_changes returns for no changed files) adds nothing.
 add_changes(t: *Transcript, c: turn_changes.TurnChanges) {
     if string.length(c.head) == 0 { return }
@@ -132,7 +133,13 @@ add_changes(t: *Transcript, c: turn_changes.TurnChanges) {
     e.use_cache = 1
     e.label = string.copy(c.head)
     e.text = string.copy(c.rows)
+    // The Turn's footer, when it is the last entry, becomes the elapsed
+    // time on the changes line's first row.
+    bill_index = -1
+    if t.entries.len > 0 && last_(t).kind == entry.KIND_BILL { bill_index = t.entries.len - 1 }
+    if bill_index >= 0 { e.turn_time = string.copy(at(t, bill_index).text) }
     t.entries.push(e as ptr)
+    if bill_index >= 0 { remove_at_(t, bill_index) }
 }
 
 // ---------------------------------------------------------------- JSON reads
@@ -729,7 +736,7 @@ end_run_with_summary(t: *Transcript, ok: bool, output: string, elapsed_ms: long,
     t.revision = t.revision + 1
     idx = last_running_(t)
     if idx < 0 {
-        heap.free(changes)
+        turn_changes.change_text_free(changes)
         return
     }
     e = at(t, idx)
@@ -740,7 +747,7 @@ end_run_with_summary(t: *Transcript, ok: bool, output: string, elapsed_ms: long,
         e.run = entry.RUN_OK
     }
     e.elapsed_ms = elapsed_ms
-    heap.free(e.changes)
+    turn_changes.change_text_free(e.changes)
     e.changes = changes
     if summary != null {
         if e.has_tool_summary != 0 { heap.free(e.tool_summary) }
@@ -777,7 +784,7 @@ update_background_run(t: *Transcript, id: string, output: string, changes: *turn
         en = at(t, i)
         if en.kind != entry.KIND_RUN || en.task_id != id { continue }
         en.output = string.copy(output)
-        heap.free(en.changes)
+        turn_changes.change_text_free(en.changes)
         en.changes = turn_changes.change_text_clone(changes)
         if en.has_tool_summary != 0 { heap.free(en.tool_summary) }
         en.tool_summary = tool_summary.clone(summary)
@@ -847,6 +854,9 @@ summary_from_json(v: ptr) -> *tool_summary.Summary { return summary_from_json_(v
 summary_from_json_(v: ptr) -> *tool_summary.Summary {
     s = tool_summary.empty()
     s.omitted = jsonx.long_or(v, "omitted", 0 as long)
+    // A summary not built from a Run has no `failures`: -1 (upstream null).
+    s.failures = -1
+    if jsonx.kind(v, "failures") == json.JSON_NUMBER { s.failures = jsonx.long_or(v, "failures", 0 as long) }
     cv = jsonx.field(v, "counts")
     if cv != null && json.json_type(cv) == json.JSON_ARRAY {
         for i in 0..json.json_array_size(cv) {

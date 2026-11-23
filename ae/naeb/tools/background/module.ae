@@ -19,7 +19,8 @@ import naeb.jsonx
 exports(Background, Job, Item, BASH_LIMIT, new, set_log, set_turn_step, begin_turn, start, stop_task,
         finish_turn, stop_all, take_inbox, take_items, inbox_size, active_bash, set_result, poll, start_agent, agent_message, stop_task_from, active_runs, adopt_run, take_done_runs, enqueue_run, RUN_LIMIT,
         pending, any_pending, pending_names, delivered, enqueue_lost, enqueue_finished,
-        enqueue_user, take_users, snapshot_json, waiting_json)
+        enqueue_user, take_users, snapshot_json, waiting_json,
+        pending_ids, outstanding, take_waited_all, take_for_wait, take_waited, discard_aborted_waits)
 
 const BASH_LIMIT = 8
 const RUN_LIMIT = 8
@@ -57,12 +58,18 @@ struct Item {
     detached: int
     exec_start: long
     exec_end: long
+    // A background Run's result: the Run scope that executed it (-1: none), so
+    // what that Run itself waited for follows its result.
+    run_scope: int
+    // Taken by tools.wait: the Run scope that claimed it (-1: not claimed).
+    waited_by: int
 }
 
 struct Background {
     guard: ptr
     jobs: ptr        // list of *Job
     inbox: ptr       // list of *Item
+    waited: ptr      // list of *Item that tools.wait returned, until their Step commits
     stopping: ptr    // std.sync cell: set while the Session tears jobs down
     turn_step: int
     has_log: int
@@ -76,6 +83,7 @@ new() -> ptr {
     b.guard = lock.new()
     b.jobs = list.list_new()
     b.inbox = list.list_new()
+    b.waited = list.list_new()
     b.stopping = sync.atomic_new(0)
     b.turn_step = 0
     b.has_log = 0
@@ -362,6 +370,8 @@ enqueue_finished(bp: ptr, id: string, ok: int, text: string, detached: int, exec
     it.detached = detached
     it.exec_start = exec_start
     it.exec_end = exec_end
+    it.run_scope = -1
+    it.waited_by = -1
     lock.acquire(b.guard)
     list.list_add(b.inbox, it as ptr)
     lock.release(b.guard)
@@ -381,6 +391,8 @@ enqueue_lost(bp: ptr, id: string, kind: string) {
     it.detached = 0
     it.exec_start = 0 as long
     it.exec_end = 0 as long
+    it.run_scope = -1
+    it.waited_by = -1
     lock.acquire(b.guard)
     list.list_add(b.inbox, it as ptr)
     lock.release(b.guard)
@@ -426,6 +438,8 @@ enqueue_user(bp: ptr, text: string) -> long {
     it.detached = 0
     it.exec_start = 0 as long
     it.exec_end = 0 as long
+    it.run_scope = -1
+    it.waited_by = -1
     list.list_add(b.inbox, it as ptr)
     lock.release(b.guard)
     return id
@@ -653,7 +667,7 @@ take_done_runs(bp: ptr) -> ptr {
 
 // A finished background Run's message: text already formatted, completion
 // the run completion object.
-enqueue_run(bp: ptr, id: string, ok: int, text: string, completion: string, exec_start: long, exec_end: long) {
+enqueue_run(bp: ptr, id: string, ok: int, text: string, completion: string, exec_start: long, exec_end: long, scope_id: int) {
     b = bp as *Background
     it = heap.new(Item)
     it.id = id
@@ -666,7 +680,138 @@ enqueue_run(bp: ptr, id: string, ok: int, text: string, completion: string, exec
     it.detached = 0
     it.exec_start = exec_start
     it.exec_end = exec_end
+    it.run_scope = scope_id
+    it.waited_by = -1
     lock.acquire(b.guard)
     list.list_add(b.inbox, it as ptr)
     lock.release(b.guard)
+}
+
+// Ids of undelivered tasks tools.wait() waits for by default (a list of
+// strings): Runs other than the one asking (`own_run`, a scope id), and
+// bash/agent jobs that are not detached.
+pending_ids(bp: ptr, own_run: int) -> ptr {
+    b = bp as *Background
+    out = list.list_new()
+    lock.acquire(b.guard)
+    i = 0
+    while i < list.list_size(b.jobs) {
+        j = list.list_get_raw(b.jobs, i) as *Job
+        if j.delivered == 0 {
+            if j.kind == "run" {
+                if j.scope_id != own_run { list.list_add(out, string.copy(j.id)) }
+            } else if j.detached == 0 {
+                list.list_add(out, string.copy(j.id))
+            }
+        }
+        i = i + 1
+    }
+    lock.release(b.guard)
+    return out
+}
+
+// 1 while task `id` has a result that has not reached the model.
+outstanding(bp: ptr, id: string) -> int {
+    b = bp as *Background
+    n = 0
+    lock.acquire(b.guard)
+    i = 0
+    while i < list.list_size(b.jobs) {
+        j = list.list_get_raw(b.jobs, i) as *Job
+        if j.delivered == 0 && j.id == id { n = 1 }
+        i = i + 1
+    }
+    lock.release(b.guard)
+    return n
+}
+
+// Moves the oldest queued result of task `id` to the claimed list, for Run
+// `run_scope`; null when none is queued. A background Run that had waited
+// itself passes its claims on with its result.
+take_for_wait(bp: ptr, id: string, run_scope: int) -> ptr {
+    b = bp as *Background
+    lock.acquire(b.guard)
+    found = null
+    i = 0
+    while i < list.list_size(b.inbox) {
+        it = list.list_get_raw(b.inbox, i) as *Item
+        if it.kind != "user" && it.id == id {
+            it.waited_by = run_scope
+            list.list_add(b.waited, it as ptr)
+            if it.run_scope >= 0 {
+                k = 0
+                while k < list.list_size(b.waited) {
+                    receipt = list.list_get_raw(b.waited, k) as *Item
+                    if receipt.waited_by == it.run_scope { receipt.waited_by = run_scope }
+                    k = k + 1
+                }
+            }
+            kept = list.list_new()
+            m = 0
+            while m < list.list_size(b.inbox) {
+                if m != i { list.list_add(kept, list.list_get_raw(b.inbox, m)) }
+                m = m + 1
+            }
+            b.inbox = kept
+            found = it as ptr
+            break
+        }
+        i = i + 1
+    }
+    lock.release(b.guard)
+    return found
+}
+
+// The results claimed by Run `run_scope` (a list of *Item), removed.
+take_waited(bp: ptr, run_scope: int) -> ptr {
+    b = bp as *Background
+    out = list.list_new()
+    lock.acquire(b.guard)
+    kept = list.list_new()
+    i = 0
+    while i < list.list_size(b.waited) {
+        it = list.list_get_raw(b.waited, i) as *Item
+        if it.waited_by == run_scope {
+            list.list_add(out, it as ptr)
+        } else {
+            list.list_add(kept, it as ptr)
+        }
+        i = i + 1
+    }
+    b.waited = kept
+    lock.release(b.guard)
+    return out
+}
+
+// After an abort, only claims owned by Runs whose own result is queued can
+// still be committed.
+discard_aborted_waits(bp: ptr) {
+    b = bp as *Background
+    lock.acquire(b.guard)
+    kept = list.list_new()
+    i = 0
+    while i < list.list_size(b.waited) {
+        it = list.list_get_raw(b.waited, i) as *Item
+        queued = 0
+        k = 0
+        while k < list.list_size(b.inbox) {
+            owner = list.list_get_raw(b.inbox, k) as *Item
+            if owner.run_scope == it.waited_by { queued = 1 }
+            k = k + 1
+        }
+        if queued == 1 { list.list_add(kept, it as ptr) }
+        i = i + 1
+    }
+    b.waited = kept
+    lock.release(b.guard)
+}
+
+// Every claimed result (a list of *Item), removed.
+take_waited_all(bp: ptr) -> ptr {
+    b = bp as *Background
+    lock.acquire(b.guard)
+    out = b.waited
+    b.waited = list.list_new()
+    lock.release(b.guard)
+    return out
 }

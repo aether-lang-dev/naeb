@@ -5,7 +5,6 @@
 // TurnSummary is naeb.tui.turn_summary's; runs/width are int.
 
 import std.string
-import std.strbuilder
 import term.screen
 import naeb.tui.format
 import naeb.tui.turn_summary
@@ -17,55 +16,19 @@ plural_(n: long) -> string {
     return "s"
 }
 
-// Appends " · " first when something is already in the line.
-separator_(sb: ptr, wrote: int) {
-    if wrote > 0 { strbuilder.append(sb, " · ") }
+// The quiet footer: only the elapsed time (upstream's Text.format; `format`
+// is also the name of the imported module). Empty when it cannot fit.
+format_footer(summary: turn_summary.TurnSummary, width: int) -> string {
+    if summary.timing.wall_ms == 0 { return "" }
+    return fit(format.duration(summary.timing.wall_ms), width)
 }
 
-// Upstream's Text.format (`format` is also the name of the imported module).
-format_footer(summary: turn_summary.TurnSummary, runs: int, width: int) -> string {
-    sb = strbuilder.new(128)
-    wrote = 0
-    if runs > 0 {
-        strbuilder.append(sb, "${runs} Run${plural_(runs as long)}")
-        wrote = 1
-    }
-    if summary.steps > 0 {
-        separator_(sb, wrote)
-        strbuilder.append(sb, "${summary.steps} step${plural_(summary.steps)}")
-        wrote = 1
-    }
-    if summary.timing.wall_ms > 0 {
-        separator_(sb, wrote)
-        strbuilder.append(sb, format.duration(summary.timing.wall_ms))
-        wrote = 1
-    }
-    total = summary.usage.prompt_tokens + summary.usage.completion_tokens
-    if total > 0 {
-        separator_(sb, wrote)
-        strbuilder.append(sb, "${format.number(total)} tokens")
-        wrote = 1
-    }
-    if summary.timing.tool_bytes > 0 {
-        separator_(sb, wrote)
-        strbuilder.append(sb, "tool data ${format.bytes(summary.timing.tool_bytes)}")
-        if summary.timing.output_bytes > 0 {
-            strbuilder.append(sb, " → ${format.bytes(summary.timing.output_bytes)}")
-        }
-        wrote = 1
-    } else if summary.timing.output_bytes > 0 {
-        separator_(sb, wrote)
-        strbuilder.append(sb, "Run result ${format.bytes(summary.timing.output_bytes)}")
-        wrote = 1
-    }
-    return fit(strbuilder.finish(sb), width)
-}
-
-details(summary: turn_summary.TurnSummary) -> string {
+// The statistics `/status` shows for the last Turn, which the footer leaves out.
+details(summary: turn_summary.TurnSummary, runs: int) -> string {
     denom = summary.usage.prompt_tokens
     if denom < 1 { denom = 1 }
     pct = summary.usage.prompt_cache_hit_tokens * 100 / denom
-    return "Last turn · ${summary.status}\nTotal ${format.duration(summary.timing.wall_ms)} · model ${format.duration(summary.timing.model_ms)} · Run ${format.duration(summary.timing.run_ms)}\nInput ${summary.usage.prompt_tokens} tokens · output ${summary.usage.completion_tokens} tokens\nCache ${summary.usage.prompt_cache_hit_tokens} tokens · ${pct}% of input · writes ${summary.usage.prompt_cache_write_tokens} tokens\nDelegation · llm ${summary.timing.llm_calls} · agent ${summary.timing.agent_calls}"
+    return "Last turn · ${summary.status}\n${runs} Run${plural_(runs as long)} · ${summary.steps} step${plural_(summary.steps)}\nTotal ${format.duration(summary.timing.wall_ms)} · model ${format.duration(summary.timing.model_ms)} · Run ${format.duration(summary.timing.run_ms)}\nInput ${summary.usage.prompt_tokens} tokens · output ${summary.usage.completion_tokens} tokens\nCache ${summary.usage.prompt_cache_hit_tokens} tokens · ${pct}% of input · writes ${summary.usage.prompt_cache_write_tokens} tokens\nTool data ${format.bytes(summary.timing.tool_bytes)} → ${format.bytes(summary.timing.output_bytes)}\nDelegation · llm ${summary.timing.llm_calls} · agent ${summary.timing.agent_calls}"
 }
 
 // Code points in `s` (UTF-8 lead bytes).

@@ -13,6 +13,7 @@ import term.screen
 import term.input
 import naeb.provider.types
 import naeb.tools.changes
+import naeb.tools.diff
 import naeb.tui.entry
 import naeb.tui.markdown
 import naeb.tui.transcript
@@ -24,6 +25,16 @@ import naeb.tui.commands
 import naeb.tui.selection
 import naeb.tui.sel_history
 import naeb.tui.tui_view
+
+change_(path: string, added: int, removed: int, text: string) -> ptr {
+    c = heap.new(diff.Change)
+    c.path = path
+    c.added = added
+    c.removed = removed
+    c.created = 0
+    c.diff = text
+    return c as ptr
+}
 
 mock_cfg_() -> ptr { return types.new_config("custom", "", "", "mock") }
 
@@ -94,7 +105,7 @@ layout_case_(name: string, w: int, h: int, busy: bool, history: bool, menu: bool
     vp.pending = if history { -100 as long } else { 0 as long }
     cands = make([]commands.Candidate, 0)
     if menu {
-        cands.push(commands.Candidate { command: commands.CMD_HELP, has_value: 0, value: "", label: "/help", detail: "show help", is_path: 0 })
+        cands.push(commands.Candidate { command: commands.CMD_HELP, has_value: 0, value: "", label: "/help", detail: "show help", is_path: 0, service: "", has_service: 0 })
     }
     s = status.new(mock_cfg_())
     if busy {
@@ -135,7 +146,7 @@ simple_transcript_() -> *transcript.Transcript {
     e.run = entry.RUN_OK
     entry.refresh_label(e)
     transcript.add(t, entry.KIND_ASSISTANT, "Done.")
-    transcript.add(t, entry.KIND_BILL, "1 Run · 2 steps · 41s · 6.6k tokens")
+    transcript.add(t, entry.KIND_BILL, "41s")
     transcript.add(t, entry.KIND_USER, "Thanks")
     return t
 }
@@ -224,7 +235,7 @@ main() {
             spec.assert_eq(input.top_row, 9, "top row")
             spec.assert_eq(surf.cursor_row, 22, "cursor row")
             spec.assert_true(surf.cursor_vis, "cursor shown")
-            spec.assert_str_eq(cell_(surf, 2, 15).grapheme, "i", "input text")
+            spec.assert_str_eq(cell_(surf, 3, 15).grapheme, "i", "input text")
         }
 
         spec.it("layout snapshots: normal, short, tiny, narrow, menu, busy and history") callback {
@@ -312,7 +323,11 @@ main() {
                         spec.assert_false(string.contains(bottom_row, "mock") != 0, "no bottom model")
                     } else {
                         spec.assert_false(string.contains(top_row, "context") != 0, "no top context")
-                        spec.assert_true(string.starts_with(bottom_row, if context == 0 { "╰─ mock ─" } else { "╰─ mock · context " }) != 0, "footer ${context}: ${bottom_row}")
+                        ends = string.ends_with(bottom_row, " mock ──╯") != 0
+                        if context != 0 {
+                            ends = string.ends_with(bottom_row, " mock · context 79% ──╯") != 0 || string.ends_with(bottom_row, " mock · context 80% ──╯") != 0
+                        }
+                        spec.assert_true(ends, "footer ${context}: ${bottom_row}")
                         spec.assert_true(string.contains(bottom_row, "% ─") != 0 || context == 0, "spaced")
                     }
                 }
@@ -327,15 +342,15 @@ main() {
             editor.paste(ed, "1\n2\n3\n4\n5\n6")
             vp = viewport.new()
             tui_view.draw(win, transcript.new().entries, ed, vp, no_menu_(), 0, status.new(mock_cfg_()))
-            spec.assert_eq(surf.cursor_col, 29, "cursor col")
+            spec.assert_eq(surf.cursor_col, 30, "cursor col")
             spec.assert_eq(surf.cursor_row, 10, "cursor row")
             sel = selection.new()
-            selection.mouse(sel, input.Mouse { col: 28, row: 10, button: input.BUTTON_LEFT, mods: 0, kind: input.MOUSE_PRESS }, surf)
-            selection.mouse(sel, input.Mouse { col: 2, row: 10, button: input.BUTTON_LEFT, mods: 0, kind: input.MOUSE_DRAG }, surf)
-            spec.assert_true(selection.mouse(sel, input.Mouse { col: 2, row: 10, button: input.BUTTON_LEFT, mods: 0, kind: input.MOUSE_RELEASE }, surf), "released")
+            selection.mouse(sel, input.Mouse { col: 29, row: 10, button: input.BUTTON_LEFT, mods: 0, kind: input.MOUSE_PRESS }, surf)
+            selection.mouse(sel, input.Mouse { col: 3, row: 10, button: input.BUTTON_LEFT, mods: 0, kind: input.MOUSE_DRAG }, surf)
+            spec.assert_true(selection.mouse(sel, input.Mouse { col: 3, row: 10, button: input.BUTTON_LEFT, mods: 0, kind: input.MOUSE_RELEASE }, surf), "released")
             spec.assert_str_eq(selection.text(sel, surf), "你[Pasted #1 · 6 lines · 1]", "copied")
             selection.highlight(sel, surf)
-            spec.assert_true(screen.has_attr(cell_(surf, 2, 10).style, screen.REVERSE), "highlighted")
+            spec.assert_true(screen.has_attr(cell_(surf, 3, 10).style, screen.REVERSE), "highlighted")
             spec.assert_false(screen.has_attr(cell_(surf, 0, 10).style, screen.REVERSE), "border not highlighted")
         }
 
@@ -378,12 +393,12 @@ main() {
             for wi in 0..3 {
                 surf = screen.surface(widths[wi], 16)
                 menu = make([]commands.Candidate, 0)
-                menu.push(commands.Candidate { command: commands.CMD_MODEL, has_value: 1, value: "openai/gpt-6.1-sol", label: "openai · gpt-6.1-sol", detail: "current", is_path: 0 })
-                menu.push(commands.Candidate { command: commands.CMD_MODEL, has_value: 1, value: "openai/gpt-6.1-terra", label: "openai · gpt-6.1-terra", detail: "", is_path: 0 })
+                menu.push(commands.Candidate { command: commands.CMD_MODEL, has_value: 1, value: "openai/gpt-6.1-sol", label: "gpt-6.1-sol", detail: "current", is_path: 0, service: "openai", has_service: 1 })
+                menu.push(commands.Candidate { command: commands.CMD_MODEL, has_value: 1, value: "openai/gpt-6.1-terra", label: "gpt-6.1-terra", detail: "", is_path: 0, service: "openai", has_service: 1 })
                 tui_view.draw(screen.window(surf), transcript.new().entries, editor.new(), viewport.new(), menu, 0, status.new(mock_cfg_()))
                 rendered = snap_(surf)
-                spec.assert_contains(rendered, "openai · gpt-6.1-sol", "sol")
-                spec.assert_contains(rendered, "openai · gpt-6.1-terra", "terra")
+                spec.assert_contains(rendered, "gpt-6.1-sol", "sol")
+                spec.assert_contains(rendered, "gpt-6.1-terra", "terra")
                 spec.assert_contains(rendered, "current", "current")
             }
         }
@@ -423,7 +438,7 @@ main() {
             s.hover_bg = color
             frame, _ok = tui_view.draw_frame(win, t.entries, editor.new(), viewport.new(), no_menu_(), 0, s)
             rows = entry.toggle_rows(e, frame.window)
-            spec.assert_true(rows >= 2, "two summary rows")
+            spec.assert_eq(rows, 1, "one summary row")
             for row in 0..rows {
                 for col in 1..79 {
                     spec.assert_eq(cell_(surf, col, row).style.bg, color, "hover ${col},${row}")
@@ -510,7 +525,17 @@ main() {
             t = transcript.new()
             transcript.add(t, entry.KIND_USER, "Check symbols 界 and wrapping")
             transcript.add(t, entry.KIND_ASSISTANT, "# Heading\nA completed **Markdown** line with 界 symbols and enough words to wrap in a narrow terminal.\n```zig\nconst value = 42;\n```\nDone.")
-            transcript.add(t, entry.KIND_RUN, "script")
+            transcript.start_run(t, "secret-script")
+            two = list.list_new()
+            list.list_add_raw(two, change_("src/a.zig", 1, 1, "-old\n+new\n"))
+            list.list_add_raw(two, change_("src/b.zig", 1, 0, "+second\n"))
+            transcript.end_run(t, true, "result text", 1 as long, turn_changes.change_text_new(two))
+            run = at_(t, 2)
+            run.open = 1
+            run.details.open = 1
+            run.details.script_open = 1
+            run.details.result_open = 0
+            (run.changes.files[0] as *turn_changes.FileDiff).open = 1
             transcript.add(t, entry.KIND_BILL, "1 Run · 2 steps")
             transcript.add(t, entry.KIND_USER, "Again")
             input = editor.new()
@@ -535,6 +560,11 @@ main() {
                 fresh_surf = screen.surface(widths[k], 40)
                 tui_view.draw(screen.window(fresh_surf), t.entries, input, viewport.new(), no_menu_(), 0, status.new(cfg))
                 spec.assert_str_eq_diff(snap_(fresh_surf), before, "fresh frame ${k}")
+                spec.assert_true(run.open != 0, "Run stays open")
+                spec.assert_true(run.details.script_open != 0, "Script stays open")
+                spec.assert_eq(run.details.result_open, 0, "Result stays closed")
+                spec.assert_eq((run.changes.files[0] as *turn_changes.FileDiff).open, 1, "first file stays open")
+                spec.assert_eq((run.changes.files[1] as *turn_changes.FileDiff).open, turn_changes.UNSET, "second file untouched")
             }
         }
 
@@ -551,10 +581,10 @@ main() {
             spec.assert_false(string.contains(used, "naeb") != 0, "no title with entries")
         }
 
-        spec.it("changes line sits directly under the footer, opens to file rows and is hidden in Simple mode") callback {
+        spec.it("changes and elapsed time share a footer and are hidden in Simple mode") callback {
             t = transcript.new()
             transcript.add(t, entry.KIND_ASSISTANT, "Done")
-            transcript.add(t, entry.KIND_BILL, "2 Runs · 6 steps · 48s · 120k tokens")
+            transcript.add(t, entry.KIND_BILL, "48s")
             files = list.list_new()
             f1 = heap.new(changes.File)
             f1.path = "src/tui.zig"
@@ -570,13 +600,88 @@ main() {
             spec.assert_true(ok, "changes")
             transcript.add_changes(t, tc)
             closed = draw_text_(t, mock_cfg_(), "", false, 60)
-            spec.assert_true(string.starts_with(closed, " Done\n\n 2 Runs · 6 steps · 48s · 120k tokens\n 2 files changed · +32 −4\n\n") != 0, "closed: ${closed}")
-            at_(t, 2).open = 1
+            spec.assert_eq(t.entries.len, 2, "the footer folded into the changes line")
+            spec.assert_true(string.starts_with(closed, " Done\n\n 2 files changed · +32 −4") != 0, "closed: ${closed}")
+            spec.assert_contains(closed, "48s\n", "elapsed time")
+            at_(t, 1).open = 1
             opened = draw_text_(t, mock_cfg_(), "", false, 60)
-            spec.assert_contains(opened, " 2 files changed · +32 −4\n   src/tui.zig       +30 −4\n   docs/ui-style.md   +2\n", "open")
+            spec.assert_contains(opened, "   src/tui.zig       +30 −4\n   docs/ui-style.md   +2\n", "open")
             simple = draw_text_(t, cfg_with_(1, 0 as long), "", false, 60)
             spec.assert_false(string.contains(simple, "files changed") != 0, "simple hides changes")
-            spec.assert_false(string.contains(simple, "120k") != 0, "simple hides bill")
+            spec.assert_false(string.contains(simple, "48s") != 0, "simple hides the time")
+        }
+
+        spec.it("nested Run hover highlights only its heading and output stays readable") callback {
+            surf = screen.surface(120, 40)
+            win = screen.window(surf)
+            t = transcript.new()
+            transcript.start_run(t, "script-body")
+            transcript.end_run(t, true, "output-body", 1 as long, turn_changes.change_text_empty())
+            e = at_(t, 0)
+            e.open = 1
+            e.details.open = 1
+            e.details.script_open = 1
+            color = screen.color_rgb(18, 18, 18)
+            s = status.new(mock_cfg_())
+            s.hovered = 0
+            s.hovered_row = 2
+            s.hover_bg = color
+            frame, _ok = tui_view.draw_frame(win, t.entries, editor.new(), viewport.new(), no_menu_(), 0, s)
+            spec.assert_eq(cell_(surf, 3, 2).style.bg, color, "Result heading hovered")
+            spec.assert_eq(cell_(surf, 3, 0).style.bg, screen.DEFAULT, "parent not hovered")
+            spec.assert_eq(cell_(surf, 7, 3).style.bg, screen.DEFAULT, "output not hovered")
+            spec.assert_str_eq(cell_(surf, 7, 3).grapheme, "o", "output")
+            spec.assert_false(screen.has_attr(cell_(surf, 7, 3).style, screen.DIM), "output readable")
+            spec.assert_str_eq(cell_(surf, 7, 5).grapheme, "s", "script")
+            spec.assert_false(screen.has_attr(cell_(surf, 7, 5).style, screen.DIM), "script readable")
+            h = sel_history.History { anchor: sel_history.Position { entry: 0, row: 3, col: 7 }, end: sel_history.Position { entry: 0, row: 3, col: 17 } }
+            spec.assert_str_eq(sel_history.text(h, frame, t.entries), "output-body", "copied")
+        }
+
+        spec.it("model menu separates provider and current state from keyboard selection") callback {
+            colors = [screen.DEFAULT, screen.color_rgb(18, 18, 18), screen.color_rgb(237, 237, 237)]
+            widths = [60, 120, 160]
+            for wi in 0..3 {
+                for ci in 0..3 {
+                    surf = screen.surface(widths[wi], 16)
+                    menu = make([]commands.Candidate, 0)
+                    menu.push(commands.Candidate { command: commands.CMD_MODEL, has_value: 1, value: "codex/gpt-6.1-sol", label: "gpt-6.1-sol", detail: "current", is_path: 0, service: "codex", has_service: 1 })
+                    menu.push(commands.Candidate { command: commands.CMD_MODEL, has_value: 1, value: "local/gpt-6.1-sol", label: "gpt-6.1-sol", detail: "", is_path: 0, service: "local", has_service: 1 })
+                    s = status.new(mock_cfg_())
+                    s.hover_bg = colors[ci]
+                    tui_view.draw(screen.window(surf), transcript.new().entries, editor.new(), viewport.new(), menu, 1, s)
+                    image = snap_(surf)
+                    spec.assert_contains(image, "gpt-6.1-sol  codex  current", "current row")
+                    spec.assert_contains(image, "gpt-6.1-sol  local", "local row")
+                    current = cell_(surf, 2, 11)
+                    selected = cell_(surf, 2, 12)
+                    spec.assert_str_eq(current.grapheme, "g", "current row text")
+                    spec.assert_false(screen.has_attr(current.style, screen.BOLD) || screen.has_attr(current.style, screen.REVERSE), "current is plain")
+                    spec.assert_false(screen.has_attr(selected.style, screen.BOLD), "selected is not bold")
+                    if colors[ci] == screen.DEFAULT {
+                        spec.assert_true(screen.has_attr(selected.style, screen.REVERSE), "selected reversed")
+                    } else {
+                        spec.assert_eq(selected.style.bg, colors[ci], "selected background")
+                    }
+                }
+            }
+        }
+
+        spec.it("narrow changes footer puts elapsed time on its own row") callback {
+            t = transcript.new()
+            transcript.add(t, entry.KIND_BILL, "1m40s")
+            files = list.list_new()
+            f1 = heap.new(changes.File)
+            f1.path = "src/a.zig"
+            f1.added = 42
+            f1.removed = 7
+            list.list_add(files, f1 as ptr)
+            tc, ok = turn_changes.turn_changes(files)
+            transcript.add_changes(t, tc)
+            surf = screen.surface(26, 8)
+            e = at_(t, 0)
+            spec.assert_eq(entry.draw(e, screen.window(surf), true), 2, "two rows")
+            spec.assert_true(string.starts_with(snap_(surf), "1 file changed · +42 −7\n                     1m40s\n") != 0, "image: ${snap_(surf)}")
         }
     }
 }

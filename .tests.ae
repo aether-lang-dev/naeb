@@ -13,6 +13,10 @@ import bash (script)
 aeb(cap) {
     bldr.build() {
         aether.program_test() {
+            source("ae/tests/tuning_test.ae")
+            lib("ae")
+        }
+        aether.program_test() {
             source("ae/tests/console_test.ae")
             lib("ae")
         }

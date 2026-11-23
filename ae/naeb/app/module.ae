@@ -63,6 +63,7 @@ run_tui_(envp: @keep ptr, ap: ptr, fence: @keep ptr) {
     o.resume_id = a.resume_id
     o.continue_latest = a.continue_latest
     o.patches_off = env.get(envp, "NAEB_PATCHES_OFF")
+    o.tune = env.get(envp, "NAEB_TUNE")
     o.record = config.record_tools(envp)
     o.self_exe = self_exe_()
     o.fence = fence
@@ -552,6 +553,7 @@ run_(envp: @keep ptr, fence: @keep ptr) {
     o.resume_id = a.resume_id
     o.continue_latest = a.continue_latest
     o.patches_off = env.get(envp, "NAEB_PATCHES_OFF")
+    o.tune = env.get(envp, "NAEB_TUNE")
     o.record = config.record_tools(envp)
     o.parent_session_id = env.get(envp, "NAEB_PARENT_SESSION_ID")
     depth_text = env.get(envp, "NAEB_AGENT_DEPTH")

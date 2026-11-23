@@ -173,12 +173,12 @@ main() {
             expect_lines_("a\n\n```\nx\n\ny\n```\n\nb", ["p", "-", "a", "c", "g", "x", "c", "-", "", "c", "-", "y", "p", "g", "b"])
         }
 
-        spec.it("headings keep bold blue and get one blank row above except first") callback {
+        spec.it("headings keep bold default foreground and get one blank row above except first") callback {
             shot = shot_new_(20)
             spec.assert_eq(draw_text_(shot, "# Top\nintro\n## Title\nbody", plain), 5, "rows")
             expect_rows_(shot, ["Top", "intro", "", "Title", "body"])
             spec.assert_true(bold_(shot, 0, 0), "bold")
-            spec.assert_eq(fg_(shot, 0, 3), screen.color_index(4), "blue")
+            spec.assert_eq(fg_(shot, 0, 3), DEF, "default foreground")
             spec.assert_false(bold_(shot, 0, 1), "intro not bold")
         }
 

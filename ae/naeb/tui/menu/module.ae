@@ -83,7 +83,7 @@ pin(m: *Menu, rows: commands.Candidate[]) {
     out = make([]commands.Candidate, 0)
     for i in 0..rows.len {
         r = rows[i]
-        c = commands.Candidate { command: r.command, has_value: r.has_value, value: string.copy(r.value), label: string.copy(r.label), detail: string.copy(r.detail), is_path: r.is_path }
+        c = commands.Candidate { command: r.command, has_value: r.has_value, value: string.copy(r.value), label: string.copy(r.label), detail: string.copy(r.detail), is_path: r.is_path, service: string.copy(r.service), has_service: r.has_service }
         out.push(c)
     }
     m.pinned = out
@@ -180,7 +180,7 @@ rank_(r: *RankCtx, entries: ptr[]) {
         en = entries[hits[i].index] as *paths.Entry
         value = paths.insertion(en.path, en.dir)
         label = if en.dir != 0 { "${en.path}/" } else { en.path }
-        c = commands.Candidate { command: commands.CMD_HELP, has_value: 1, value: value, label: label, detail: "", is_path: 1 }
+        c = commands.Candidate { command: commands.CMD_HELP, has_value: 1, value: value, label: label, detail: "", is_path: 1, service: "", has_service: 0 }
         out.push(c)
     }
     m.file_buf = out
@@ -213,7 +213,7 @@ sync_skills_(m: *Menu, query: string) {
             nl = string.index_of(sk.description, "\n")
             line = if nl >= 0 { string.substring(sk.description, 0, nl) } else { sk.description }
             value = "\$${sk.name} "
-            c = commands.Candidate { command: commands.CMD_HELP, has_value: 1, value: value, label: sk.name, detail: line, is_path: 1 }
+            c = commands.Candidate { command: commands.CMD_HELP, has_value: 1, value: value, label: sk.name, detail: line, is_path: 1, service: "", has_service: 0 }
             out.push(c)
         }
     }
@@ -227,7 +227,7 @@ sync_skills_(m: *Menu, query: string) {
 selected(m: *Menu, input: string) -> (commands.Candidate, bool) {
     list_ = items(m, input)
     if list_.len == 0 {
-        return commands.Candidate { command: 0, has_value: 0, value: "", label: "", detail: "", is_path: 0 }, false
+        return commands.Candidate { command: 0, has_value: 0, value: "", label: "", detail: "", is_path: 0, service: "", has_service: 0 }, false
     }
     i = if m.sel < list_.len - 1 { m.sel } else { list_.len - 1 }
     c = list_[i]

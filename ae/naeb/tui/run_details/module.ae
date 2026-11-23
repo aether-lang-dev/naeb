@@ -1,0 +1,390 @@
+// tui.run_details: the expanded part of a Run: Changes (a heading per file,
+// each with its own diff), then Details with its Result and Script, each an
+// independent disclosure; what it drew is measured, so a click can be mapped
+// to the row it hit (upstream src/tui/transcript/run_details.zig).
+//
+// Differences from upstream:
+//  - Upstream's draw takes the Entry (`anytype`); the Entry imports this
+//    module, so draw takes the facts it needs (Facts) instead: the
+//    ChangeText, the Run's result and script, whether the Run is edit-only
+//    (`changes_only`) and whether it needs attention (a failure or warning).
+//  - Optionals are ints: UNSET (-1), 0 or 1 in State.open, result_open and
+//    the files' `open`. Actions are ACT_* ints, a file action with its index
+//    in Hit.file. A State is a heap box (`new_state`).
+//  - Placements (Rows) are heap boxes in the State, so the painter can be
+//    handed one to fill in; the label buffers upstream keeps because vaxis
+//    retains printed slices are not needed (strings own themselves).
+//  - Rows, FileDiff, line_count and the file's default openness live in
+//    naeb.tui.turn_changes (a circular import otherwise).
+
+import std.string
+import term.screen
+import naeb.tui.intraline
+import naeb.tui.turn_changes
+
+exports(ACT_DETAILS, ACT_RESULT, ACT_FULL_RESULT, ACT_SCRIPT, ACT_FILE, UNSET, Facts, Hit, State,
+        new_state, free_state, hit, expanded, result_expanded, toggle, draw)
+
+const ACT_DETAILS = 0
+const ACT_RESULT = 1
+const ACT_FULL_RESULT = 2
+const ACT_SCRIPT = 3
+const ACT_FILE = 4
+
+const UNSET = -1
+
+// What the drawing needs to know of a Run.
+struct Facts {
+    changes: *turn_changes.ChangeText
+    output: string
+    script: string
+    // A successful Run of edit and write calls only: Changes alone is shown.
+    changes_only: int
+    // A failure, a warning or a failed file: Result opens by itself.
+    attention: int
+}
+
+struct Hit {
+    action: int
+    file: int
+    first: int
+    count: int
+}
+
+struct Layout {
+    added_end: int
+    removed_start: int
+    end: int
+    changes: *turn_changes.Rows
+    details: *turn_changes.Rows
+    result: *turn_changes.Rows
+    preview: *turn_changes.Rows
+    output: *turn_changes.Rows
+    full_result: *turn_changes.Rows
+    script: *turn_changes.Rows
+    script_body: *turn_changes.Rows
+}
+
+struct State {
+    open: int
+    result_open: int
+    full_result: int
+    script_open: int
+    layout: Layout
+}
+
+new_state() -> *State {
+    s = heap.new(State)
+    s.open = UNSET
+    s.result_open = UNSET
+    s.layout = Layout {
+        added_end: 0, removed_start: 0, end: 0,
+        changes: heap.new(turn_changes.Rows), details: heap.new(turn_changes.Rows),
+        result: heap.new(turn_changes.Rows), preview: heap.new(turn_changes.Rows),
+        output: heap.new(turn_changes.Rows), full_result: heap.new(turn_changes.Rows),
+        script: heap.new(turn_changes.Rows), script_body: heap.new(turn_changes.Rows)
+    }
+    return s
+}
+
+// Releases a State and its placements.
+free_state(s: *State) {
+    heap.free(s.layout.changes)
+    heap.free(s.layout.details)
+    heap.free(s.layout.result)
+    heap.free(s.layout.preview)
+    heap.free(s.layout.output)
+    heap.free(s.layout.full_result)
+    heap.free(s.layout.script)
+    heap.free(s.layout.script_body)
+    heap.free(s)
+}
+
+min_(a: int, b: int) -> int { return if a < b { a } else { b } }
+max_(a: int, b: int) -> int { return if a > b { a } else { b } }
+sat_(a: int) -> int { return if a < 0 { 0 } else { a } }
+
+rows_end_(r: *turn_changes.Rows) -> int { return r.first + r.count }
+
+rows_contains_(r: *turn_changes.Rows, row: int) -> bool {
+    return row >= r.first && row < rows_end_(r)
+}
+
+reset_(r: *turn_changes.Rows) {
+    r.first = 0
+    r.count = 0
+}
+
+reset_layout_(s: *State) {
+    reset_(s.layout.changes)
+    reset_(s.layout.details)
+    reset_(s.layout.result)
+    reset_(s.layout.preview)
+    reset_(s.layout.output)
+    reset_(s.layout.full_result)
+    reset_(s.layout.script)
+    reset_(s.layout.script_body)
+}
+
+// The disclosure the row belongs to, and whether there is one.
+hit(s: *State, files: ptr[], row: int) -> (Hit, bool) {
+    nothing = Hit { action: 0, file: 0, first: 0, count: 0 }
+    if rows_contains_(s.layout.details, row) {
+        return Hit { action: ACT_DETAILS, file: 0, first: s.layout.details.first, count: s.layout.details.count }, true
+    }
+    if rows_contains_(s.layout.result, row) {
+        return Hit { action: ACT_RESULT, file: 0, first: s.layout.result.first, count: s.layout.result.count }, true
+    }
+    if rows_contains_(s.layout.full_result, row) {
+        return Hit { action: ACT_FULL_RESULT, file: 0, first: s.layout.full_result.first, count: s.layout.full_result.count }, true
+    }
+    if rows_contains_(s.layout.script, row) {
+        return Hit { action: ACT_SCRIPT, file: 0, first: s.layout.script.first, count: s.layout.script.count }, true
+    }
+    for i in 0..files.len {
+        f = files[i] as *turn_changes.FileDiff
+        if row < f.heading.first { break }
+        if rows_contains_(f.heading, row) {
+            return Hit { action: ACT_FILE, file: i, first: f.heading.first, count: f.heading.count }, true
+        }
+    }
+    return nothing, false
+}
+
+// Details is open when the person opened it, or by default when the Run needs attention.
+expanded(s: *State, f: Facts) -> bool {
+    if s.open != UNSET { return s.open != 0 }
+    return f.attention != 0
+}
+
+result_expanded(s: *State, f: Facts) -> bool {
+    if s.result_open != UNSET { return s.result_open != 0 }
+    return f.changes.file_count == 0 || f.attention != 0
+}
+
+toggle(s: *State, f: Facts, action: int, file: int) {
+    if action == ACT_DETAILS {
+        s.open = if expanded(s, f) { 0 } else { 1 }
+    } else if action == ACT_RESULT {
+        s.result_open = if result_expanded(s, f) { 0 } else { 1 }
+    } else if action == ACT_FULL_RESULT {
+        s.full_result = if s.full_result != 0 { 0 } else { 1 }
+    } else if action == ACT_SCRIPT {
+        s.script_open = if s.script_open != 0 { 0 } else { 1 }
+    } else if action == ACT_FILE {
+        fd = f.changes.files[file] as *turn_changes.FileDiff
+        fd.open = if turn_changes.file_expanded(fd, f.changes.files.len == 1) { 0 } else { 1 }
+    }
+}
+
+// The first PREVIEW_LINES lines of `text`.
+preview_(text: string) -> string {
+    end = 0
+    for _i in 0..turn_changes.PREVIEW_LINES {
+        next = string.index_of_from(text, "\n", end)
+        if next < 0 { return text }
+        end = next + 1
+    }
+    stop = end
+    while stop > 0 && text[stop - 1] == 10 { stop = stop - 1 }
+    return string.substring(text, 0, stop)
+}
+
+trim_nl_(text: string) -> string {
+    end = string.length(text)
+    while end > 0 && text[end - 1] == 10 { end = end - 1 }
+    return string.substring(text, 0, end)
+}
+
+struct Painter {
+    win: screen.Window
+    commit: int
+    row: int
+}
+
+dim_() -> screen.Style { return screen.style(attrs: screen.DIM) }
+
+// Prints `segs` at `row` (`height` -1: to the bottom of the window).
+print_line_(p: *Painter, row: int, height: int, indent: int, segs: screen.Segment[]) -> screen.PrintResult {
+    x = min_(indent, sat_(p.win.width - 1))
+    return screen.draw(screen.child(p.win, x_off: x, y_off: row, height: height), segs, wrap: screen.WRAP_GRAPHEME, commit: p.commit != 0)
+}
+
+// Named blocks keep their measured placement even when the paint window clips them.
+line_(p: *Painter, indent: int, segs: screen.Segment[], placement: *turn_changes.Rows) {
+    if p.commit != 0 && placement != null {
+        print_line_(p, placement.first, placement.count, indent, segs)
+        p.row = rows_end_(placement)
+        return
+    }
+    first = p.row
+    r = print_line_(p, first, -1, indent, segs)
+    extra = if r.col > 0 { 1 } else { 0 }
+    count = max_(1, r.row + extra)
+    if placement != null {
+        placement.first = first
+        placement.count = count
+    }
+    p.row = p.row + count
+}
+
+heading_(p: *Painter, text: string, open: bool, placement: *turn_changes.Rows, indent: int) {
+    mark = if open { "▾ " } else { "▸ " }
+    a = screen.seg(mark, dim_())
+    b = screen.seg(text, dim_())
+    line_(p, indent, [a, b], placement)
+}
+
+file_(p: *Painter, s: *State, f: *turn_changes.FileDiff, open: bool) {
+    path = string.substring(f.header, 0, f.path_len)
+    leaf = 0
+    i = f.path_len
+    while i > 0 {
+        i = i - 1
+        if path[i] == 47 {
+            leaf = i + 1
+            break
+        }
+    }
+    added = if f.added > 0 { "+${f.added}" } else { "" }
+    removed = if f.removed > 0 { "−${f.removed}" } else { "" }
+    aligned = s.layout.end <= p.win.width
+    mark = if open { "▾ " } else { "▸ " }
+    new_ = if f.created != 0 { " (new)" } else { "" }
+    gap1 = if !aligned && string.length(added) + string.length(removed) > 0 { " " } else { "" }
+    a_shown = if aligned { "" } else { added }
+    gap2 = if !aligned && string.length(added) > 0 && string.length(removed) > 0 { " " } else { "" }
+    r_shown = if aligned { "" } else { removed }
+    s0 = screen.seg(mark, dim_())
+    s1 = screen.seg(string.substring(path, 0, leaf), dim_())
+    s2 = screen.seg(string.substring(path, leaf, string.length(path)))
+    s3 = screen.seg(new_, dim_())
+    s4 = screen.seg(gap1)
+    s5 = screen.seg(a_shown, screen.style(fg: screen.color_index(2)))
+    s6 = screen.seg(gap2)
+    s7 = screen.seg(r_shown, screen.style(fg: screen.color_index(1)))
+    line_(p, 4, [s0, s1, s2, s3, s4, s5, s6, s7], f.heading)
+    if aligned && p.commit != 0 {
+        row = screen.child(p.win, y_off: f.heading.first, height: 1)
+        if string.length(added) > 0 {
+            screen.draw_segment(screen.child(row, x_off: s.layout.added_end - screen.win_gwidth(row, added)), screen.seg(added, screen.style(fg: screen.color_index(2))), wrap: screen.WRAP_NONE, commit: true)
+        }
+        if string.length(removed) > 0 {
+            screen.draw_segment(screen.child(row, x_off: s.layout.removed_start), screen.seg(removed, screen.style(fg: screen.color_index(1))), wrap: screen.WRAP_NONE, commit: true)
+        }
+    }
+}
+
+diff_(p: *Painter, text: string) {
+    lines = intraline.lines_new(text)
+    while p.row < p.win.height {
+        item, ok = intraline.next(lines)
+        if !ok { break }
+        line = item.line
+        c = line[0]
+        st = screen.style(attrs: screen.BOLD | screen.DIM)
+        if c == 43 {
+            st = screen.style(fg: screen.color_index(2))
+        } else if c == 45 {
+            st = screen.style(fg: screen.color_index(1))
+        } else if c == 32 {
+            st = dim_()
+        }
+        if item.has_emphasis != 0 {
+            strong = st
+            strong.attrs = strong.attrs | screen.BOLD
+            x0 = screen.seg(string.substring(line, 0, item.emphasis.start), st)
+            x1 = screen.seg(string.substring(line, item.emphasis.start, item.emphasis.end), strong)
+            x2 = screen.seg(string.substring(line, item.emphasis.end, string.length(line)), st)
+            line_(p, 6, [x0, x1, x2], null)
+        } else {
+            x0 = screen.seg(line, st)
+            line_(p, 6, [x0], null)
+        }
+    }
+    heap.free(lines)
+}
+
+// Display columns of the path and of the +N and −N counts, so the counts of
+// all the files line up.
+measure_columns_(win: screen.Window, s: *State, files: ptr[]) {
+    path = 0
+    added = 0
+    removed = 0
+    for i in 0..files.len {
+        f = files[i] as *turn_changes.FileDiff
+        extra = if f.created != 0 { 6 } else { 0 }
+        path = max_(path, screen.win_gwidth(win, string.substring(f.header, 0, f.path_len)) + extra)
+        if f.added > 0 { added = max_(added, 1 + string.length(string.from_int(f.added))) }
+        if f.removed > 0 { removed = max_(removed, 1 + string.length(string.from_int(f.removed))) }
+    }
+    added_end = 6 + path + 2 + added
+    gap = if added > 0 && removed > 0 { 1 } else { 0 }
+    s.layout.added_end = added_end
+    s.layout.removed_start = added_end + gap
+    s.layout.end = added_end + gap + removed
+}
+
+// Draws the details below `prefix_rows` rows already taken; returns the Run's
+// total rows. With commit false it measures and records the placements.
+draw(s: *State, f: Facts, win: screen.Window, commit: bool, prefix_rows: int) -> int {
+    p = heap.new(Painter)
+    p.win = win
+    p.commit = if commit { 1 } else { 0 }
+    p.row = prefix_rows
+    rows = draw_(p, s, f, win, commit)
+    heap.free(p)
+    return rows
+}
+
+draw_(p: *Painter, s: *State, f: Facts, win: screen.Window, commit: bool) -> int {
+    files = f.changes.files
+    if !commit {
+        reset_layout_(s)
+        measure_columns_(win, s, files)
+    }
+    if files.len > 0 {
+        p.row = p.row + 1
+        noun = if f.changes.file_count == 1 { "file" } else { "files" }
+        title = "Changes · ${f.changes.file_count} ${noun}"
+        t0 = screen.seg(title, screen.style(attrs: screen.DIM | screen.BOLD))
+        line_(p, 2, [t0], s.layout.changes)
+        for i in 0..files.len {
+            fd = files[i] as *turn_changes.FileDiff
+            open = turn_changes.file_expanded(fd, files.len == 1)
+            file_(p, s, fd, open)
+            if open { diff_(p, fd.diff) }
+        }
+    }
+    if f.changes_only != 0 { return p.row }
+    open_details = expanded(s, f)
+    heading_(p, "Details", open_details, s.layout.details, 4)
+    if !open_details { return p.row }
+    output = trim_nl_(f.output)
+    count = turn_changes.line_count(output)
+    result_open = result_expanded(s, f)
+    lw = if count == 1 { "line" } else { "lines" }
+    heading_(p, "Result · ${count} ${lw}", result_open, s.layout.result, 4)
+    if result_open {
+        limited = count > turn_changes.PREVIEW_LINES && s.full_result == 0
+        if limited {
+            label = "Preview · first ${turn_changes.PREVIEW_LINES} of ${count} lines"
+            l0 = screen.seg(label, dim_())
+            line_(p, 6, [l0], s.layout.preview)
+        }
+        shown = if string.length(output) == 0 { "No result" } else if limited { preview_(output) } else { output }
+        o0 = screen.seg(shown)
+        line_(p, 6, [o0], s.layout.output)
+        if count > turn_changes.PREVIEW_LINES {
+            heading_(p, if limited { "Show full result" } else { "Show preview" }, !limited, s.layout.full_result, 6)
+        }
+    }
+    sc = turn_changes.line_count(f.script)
+    sw = if sc == 1 { "line" } else { "lines" }
+    heading_(p, "Script · ${sc} ${sw}", s.script_open != 0, s.layout.script, 4)
+    if s.script_open != 0 {
+        b0 = screen.seg(trim_nl_(f.script))
+        line_(p, 6, [b0], s.layout.script_body)
+    }
+    return p.row
+}

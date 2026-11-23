@@ -1,4 +1,4 @@
-// Ports the 55 tests of upstream src/tui/transcript.zig under their names.
+// Ports the 59 tests of upstream src/tui/transcript.zig (as of 5f801fe) under their names.
 //
 // Partially ported (the backing is not ported yet):
 //  - "restored Run summaries follow run_index and tool_call_id and survive
@@ -28,6 +28,7 @@ import naeb.tui.entry
 import naeb.tui.viewport
 import naeb.tui.agent_tree
 import naeb.tui.turn_changes
+import naeb.tui.run_details
 import naeb.tui.turn_summary
 import naeb.tui.bill
 import naeb.tui.label
@@ -72,6 +73,21 @@ one_change_(path: string, added: int, removed: int, text: string) -> *turn_chang
     l = list.list_new()
     list.list_add_raw(l, changes_(path, added, removed, 0, text))
     return turn_changes.change_text_new(l)
+}
+
+// The rows an entry draws at `width`, as text (upstream entryText).
+entry_text_(e: *entry.Entry, width: int) -> string {
+    surf = screen.surface(width, 1024)
+    win = screen.window(surf)
+    rows = entry.draw(e, win, true)
+    spec.assert_eq(rows, entry.height(e, win), "rows drawn match rows measured")
+    parts = ""
+    top = rows
+    if top > 1024 { top = 1024 }
+    for y in 0..top {
+        parts = "${parts}${screen.row_text(surf, y)}\n"
+    }
+    return parts
 }
 
 none_() -> *turn_changes.ChangeText { return turn_changes.change_text_empty() }
@@ -244,7 +260,7 @@ main() {
             spec.assert_eq(entry.height(e, win), 1, "folded height")
             streq(seg_text_(e, 2), "Run")
             transcript.toggle_all(t)
-            spec.assert_eq(entry.height(e, win), 10, "open height")
+            spec.assert_eq(entry.height(e, win), 2, "open height")
         }
         spec.it("entry height cache reuses measurements and invalidates on width or append") callback {
             win = surf_win_(10, 24)
@@ -321,11 +337,11 @@ main() {
             streq(e.label, "Run")
             spec.assert_eq(entry.height(e, win), 2, "folded height")
             transcript.toggle_all(t)
-            shown = entry.segments(e)
-            streq(shown[8].text, "-old\n")
-            spec.assert_eq(screen.color_value(shown[8].style.fg), 1, "red")
-            streq(shown[11].text, "+hi\n")
-            spec.assert_eq(entry.height(e, win), 13, "open height")
+            text_view = entry_text_(e, 60)
+            spec.assert_contains(text_view, "▸ src/a.zig   +1 −1", "first file row")
+            spec.assert_contains(text_view, "▸ b.md (new)  +1", "second file row")
+            spec.assert_false(string.contains(text_view, "-old") != 0, "diffs stay closed")
+            spec.assert_eq(entry.height(e, win), 6, "open height")
             many = list.list_new()
             for i in 0..3 { list.list_add_raw(many, changes_("x", 2, 1, 0, "")) }
             text = turn_changes.change_text_new(many)
@@ -340,19 +356,13 @@ main() {
             transcript.end_run(t, true, "", 300, one_change_("a.zig", 1, 1, diff_text))
             transcript.toggle_all(t)
             e = e_(t, 0)
-            shown = entry.segments(e)
-            streq(shown[7].text, "-let count = 1")
-            streq(shown[8].text, "0")
-            spec.assert_true(screen.has_attr(shown[8].style, screen.BOLD) && !screen.has_attr(shown[7].style, screen.BOLD), "bold middle")
-            spec.assert_eq(screen.color_value(shown[8].style.fg), 1, "red")
-            streq(shown[10].text, "+let count = 1")
-            streq(shown[11].text, "1")
-            spec.assert_eq(screen.color_value(shown[11].style.fg), 2, "green")
             rows = entry.draw(e, win, true)
             spec.assert_eq(entry.height(e, win), rows, "rows")
-            streq(cell_(win, 14, 4).grapheme, "0")
-            spec.assert_true(screen.has_attr(cell_(win, 14, 4).style, screen.BOLD), "bold cell")
-            spec.assert_false(screen.has_attr(cell_(win, 13, 4).style, screen.BOLD), "plain neighbour")
+            streq(cell_(win, 20, 4).grapheme, "0")
+            spec.assert_true(screen.has_attr(cell_(win, 20, 4).style, screen.BOLD), "bold cell")
+            spec.assert_false(screen.has_attr(cell_(win, 19, 4).style, screen.BOLD), "plain neighbour")
+            spec.assert_eq(screen.color_value(cell_(win, 20, 4).style.fg), 1, "red")
+            spec.assert_eq(screen.color_value(cell_(win, 20, 5).style.fg), 2, "green")
         }
         spec.it("agent tree stays visible folded, expanded and after Run ends") callback {
             t = transcript.new()
@@ -363,12 +373,14 @@ main() {
             streq(seg_text_(e, 1), "")
             transcript.toggle_all(t)
             streq(row_(e, 0), "  └─ a1 fix it · running · step 3 · edit src/x.zig")
-            streq(e.text, seg_text_(e, 10))
+            spec.assert_eq(e.details.script_open, 0, "Script stays closed")
             transcript.progress(t, agent_tree.new_agent("a1", "fix it", `state`: agent_tree.PS_DONE, step: 3, tools: ["edit"], files: ["src/x.zig"]))
             transcript.end_run(t, true, "done", 1234, none_())
             streq(seg_text_(e, 2), "Run")
             streq(seg_text_(e, 1), "")
-            streq(seg_text_(e, 8), "done")
+            opened = entry_text_(e, 120)
+            spec.assert_contains(opened, "Details", "Details heading")
+            spec.assert_false(string.contains(opened, "done") != 0, "successful output stays hidden")
             streq(row_(e, 0), "  └─ a1 fix it · completed · step 3 · edit src/x.zig")
             transcript.progress(t, agent_tree.new_agent("a1", "late"))
             streq(e.label, "Run")
@@ -468,7 +480,7 @@ main() {
             surf = screen.surface(120, 3)
             win = screen.window(surf)
             t = transcript.new()
-            full = bill.format_footer(turn_summary.new("completed", 12, turn_summary.usage(), turn_summary.timing(190000, 0, 0, 0, 0, 8, 1)), 2, 120)
+            full = bill.format_footer(turn_summary.new("completed", 12, turn_summary.usage(), turn_summary.timing(190000, 0, 0, 0, 0, 8, 1)), 120)
             transcript.add(t, entry.KIND_BILL, full)
             en = e_(t, 0)
             widths = [120, 40, 8, 1, 0, 120]
@@ -480,7 +492,8 @@ main() {
                 spec.assert_eq(entry.height(en, win), 1, "height at ${width}")
                 spec.assert_eq(entry.draw(en, win, true), 1, "draw at ${width}")
                 expected = bill.fit(full, width)
-                col = 0
+                col = width - screen.win_gwidth(win, expected)
+                if col < 0 { col = 0 }
                 off = 0
                 while off < string.length(expected) {
                     n = screen.codepoint_len(expected, off)
@@ -565,15 +578,17 @@ main() {
             streq(cell_(win, 2, 2).grapheme, "└")
             streq(cell_(win, 0, 3).grapheme, " ")
             transcript.toggle_all(t)
-            spec.assert_eq(entry.height(e, win), 9, "open height")
+            e.details.open = 1
+            entry.invalidate(e)
+            spec.assert_eq(entry.height(e, win), 7, "open height")
             entry.draw(e, win, true)
-            streq(cell_(win, 0, 3).grapheme, "C")
+            streq(cell_(win, 6, 4).grapheme, "R")
             transcript.progress(t, agent_tree.new_agent("a2", "second", `state`: agent_tree.PS_FAILED, step: 4, tools: ["bash"]))
-            spec.assert_eq(entry.height(e, win), 9, "after failure")
+            spec.assert_eq(entry.height(e, win), 7, "after failure")
             transcript.end_run(t, true, "result", 2000, none_())
-            spec.assert_eq(entry.height(e, win), 9, "after end")
+            spec.assert_eq(entry.height(e, win), 7, "after end")
             entry.draw(e, win, true)
-            streq(cell_(win, 0, 5).grapheme, "R")
+            streq(cell_(win, 6, 5).grapheme, "r")
             streq(row_(e, 0), "  ├─ a2 second · failed · step 4 · bash")
             transcript.toggle_all(t)
             spec.assert_eq(entry.height(e, win), 3, "folded again")
@@ -1015,7 +1030,7 @@ main() {
             streq(seg_text_(e, 0), "! ")
             spec.assert_eq(screen.color_value(entry.segments(e)[0].style.fg), 3, "yellow")
         }
-        spec.it("expanded Runs retain all result lines and label bounded diffs as previews") callback {
+        spec.it("Run detail previews retain complete results and per-file diffs") callback {
             t = transcript.new()
             result = ""
             diff_text = ""
@@ -1023,20 +1038,35 @@ main() {
                 result = "${result}result ${i}\n"
                 diff_text = "${diff_text}+line ${i}\n"
             }
-            transcript.start_run(t, "script")
+            transcript.start_run(t, "secret-script")
             transcript.end_run(t, true, result, 1, one_change_("a", 240, 0, diff_text))
             e = e_(t, 0)
             streq(e.output, result)
+            streq((e.changes.files[0] as *turn_changes.FileDiff).diff, diff_text)
             streq(e.changes.preview, "Diff preview · 60 of 241 lines\n")
-            spec.assert_true(string.contains(e.changes.diff, "more lines") == 0, "no more-lines text")
             transcript.toggle_all(t)
-            shown = entry.segments(e)
-            n = shown.len
-            streq(shown[4].text, "Changes\n")
-            streq(shown[n - 4].text, "Result\n")
-            spec.assert_true(string.ends_with(shown[n - 3].text, "result 239") != 0, "last result line")
-            streq(shown[n - 2].text, "\nScript\n")
-            streq(shown[n - 1].text, "script")
+            collapsed = entry_text_(e, 120)
+            spec.assert_false(string.contains(collapsed, "result 0") != 0, "result hidden")
+            spec.assert_false(string.contains(collapsed, "secret-script") != 0, "script hidden")
+            spec.assert_false(string.contains(collapsed, "+line 0") != 0, "diff hidden")
+            e.details.open = 1
+            e.details.result_open = 1
+            entry.invalidate(e)
+            preview = entry_text_(e, 120)
+            spec.assert_contains(preview, "Preview · first 20 of 240 lines", "preview label")
+            spec.assert_contains(preview, "result 19", "last previewed line")
+            spec.assert_false(string.contains(preview, "result 20") != 0, "past the preview")
+            e.details.full_result = 1
+            e.details.script_open = 1
+            (e.changes.files[0] as *turn_changes.FileDiff).open = 1
+            entry.invalidate(e)
+            full = entry_text_(e, 120)
+            spec.assert_contains(full, "result 239", "full result")
+            spec.assert_contains(full, "+line 239", "full diff")
+            spec.assert_contains(full, "secret-script", "script")
+            copy = turn_changes.change_text_clone(e.changes)
+            streq((copy.files[0] as *turn_changes.FileDiff).diff, diff_text)
+            spec.assert_eq((copy.files[0] as *turn_changes.FileDiff).open, 1, "open state is copied")
         }
         spec.it("retry removes only the failed attempt and preserves interjections and prior answers") callback {
             t = transcript.new()
@@ -1199,6 +1229,174 @@ main() {
                     streq(screen.row_text(surf, 0), want)
                 }
             }
+        }
+
+        spec.it("Run detail controls preserve siblings and mode state at narrow and wide widths") callback {
+            widths = [60, 120, 160]
+            for wi in 0..3 {
+                width = widths[wi]
+                win = surf_win_(width, 40)
+                t = transcript.new()
+                transcript.start_run(t, "hidden-script")
+                two = list.list_new()
+                list.list_add_raw(two, changes_("src/a-long-path-with-界-symbols-and-enough-text-to-wrap-at-sixty-columns.zig", 1, 0, 0, "+first-body\n"))
+                list.list_add_raw(two, changes_("b.zig", 1, 0, 0, "+second-body\n"))
+                transcript.end_run(t, true, "output-body", 1, turn_changes.change_text_new(two))
+                e = e_(t, 0)
+                e.open = 1
+                entry.height(e, win)
+                file_hit, ok = entry.control(e, win, 3)
+                spec.assert_true(ok, "file heading is a control")
+                spec.assert_eq(file_hit.action, run_details.ACT_FILE, "file action")
+                spec.assert_eq(file_hit.file, 0, "first file")
+                if width == 60 {
+                    spec.assert_true(file_hit.rows > 1, "the long path wraps")
+                    wrapped, wok = entry.control(e, win, 4)
+                    spec.assert_true(wok && wrapped.action == run_details.ACT_FILE && wrapped.file == 0, "the wrapped row hits the same file")
+                }
+                entry.toggle_control(e, file_hit)
+                spec.assert_true(e.open != 0, "Run stays open")
+                spec.assert_eq((e.changes.files[0] as *turn_changes.FileDiff).open, 1, "first file open")
+                spec.assert_eq((e.changes.files[1] as *turn_changes.FileDiff).open, turn_changes.UNSET, "second file untouched")
+                spec.assert_eq(e.details.script_open, 0, "Script untouched")
+                e.details.open = 1
+                e.details.result_open = 0
+                entry.invalidate(e)
+                rows = entry.height(e, win)
+                for row in 0..rows {
+                    hit, hok = entry.control(e, win, row)
+                    if hok && hit.action == run_details.ACT_SCRIPT {
+                        entry.toggle_control(e, hit)
+                        break
+                    }
+                }
+                normal = entry_text_(e, width)
+                spec.assert_contains(normal, "hidden-script", "script shown")
+                spec.assert_false(string.contains(normal, "output-body") != 0, "result hidden")
+                spec.assert_contains(normal, "+first-body", "first diff shown")
+                spec.assert_false(string.contains(normal, "+second-body") != 0, "second diff hidden")
+                e.simple = 1
+                spec.assert_str_eq(entry_text_(e, width), normal, "Simple draws the same open Run")
+                e.simple = 0
+                entry.height(e, win)
+                top, tok = entry.control(e, win, 0)
+                entry.toggle_control(e, top)
+                spec.assert_eq(e.open, 0, "folded")
+                entry.height(e, win)
+                top2, tok2 = entry.control(e, win, 0)
+                entry.toggle_control(e, top2)
+                spec.assert_true(e.details.script_open != 0 && (e.changes.files[0] as *turn_changes.FileDiff).open == 1, "choices survive folding")
+                spec.assert_str_eq(entry_text_(e, width), normal, "restored")
+            }
+        }
+
+        spec.it("read-only Runs omit Changes and failed edits expose output without exposing Script") callback {
+            t = transcript.new()
+            transcript.start_run(t, "private-script")
+            transcript.end_run(t, true, "read-result", 1, none_())
+            e = e_(t, 0)
+            e.open = 1
+            read_view = entry_text_(e, 60)
+            spec.assert_false(string.contains(read_view, "Changes") != 0, "no Changes")
+            spec.assert_contains(read_view, "Details", "Details")
+            spec.assert_false(string.contains(read_view, "Result") != 0, "no Result")
+            spec.assert_false(string.contains(read_view, "read-result") != 0, "no output")
+            spec.assert_false(string.contains(read_view, "private-script") != 0, "no script")
+            e.changes = one_change_("a", 1, 0, "+small-diff\n")
+            e.run = entry.RUN_FAILED
+            entry.invalidate(e)
+            failed = entry_text_(e, 60)
+            spec.assert_contains(failed, "+small-diff", "diff")
+            spec.assert_contains(failed, "read-result", "output")
+            spec.assert_false(string.contains(failed, "private-script") != 0, "script stays hidden")
+        }
+
+        spec.it("Details hides successful output and preserves nested choices when closed") callback {
+            widths = [60, 120, 160]
+            for wi in 0..3 {
+                width = widths[wi]
+                win = surf_win_(width, 40)
+                t = transcript.new()
+                transcript.start_run(t, "private-script")
+                transcript.end_run(t, true, "private-output", 1, none_())
+                e = e_(t, 0)
+                e.open = 1
+                closed = entry_text_(e, width)
+                spec.assert_contains(closed, "▸ Details", "closed Details")
+                spec.assert_false(string.contains(closed, "Result") != 0, "no Result")
+                spec.assert_false(string.contains(closed, "Script") != 0, "no Script")
+                details, dok = entry.control(e, win, 1)
+                spec.assert_true(dok && details.action == run_details.ACT_DETAILS, "Details control")
+                entry.toggle_control(e, details)
+                opened = entry_text_(e, width)
+                spec.assert_contains(opened, "private-output", "output shown")
+                spec.assert_false(string.contains(opened, "private-script") != 0, "script still closed")
+                rows = entry.height(e, win)
+                for row in 0..rows {
+                    hit, hok = entry.control(e, win, row)
+                    if hok && hit.action == run_details.ACT_SCRIPT {
+                        entry.toggle_control(e, hit)
+                        break
+                    }
+                }
+                spec.assert_true(e.details.script_open != 0, "Script opened")
+                entry.height(e, win)
+                entry.toggle_control(e, details)
+                spec.assert_str_eq(entry_text_(e, width), closed, "closing Details hides the nested choices")
+                entry.height(e, win)
+                entry.toggle_control(e, details)
+                restored = entry_text_(e, width)
+                spec.assert_contains(restored, "private-script", "script restored")
+                spec.assert_str_eq(e.output, "private-output", "output kept")
+            }
+        }
+
+        spec.it("file rows align counts by display width and distinguish paths from filenames") callback {
+            widths = [60, 120, 160]
+            for wi in 0..3 {
+                width = widths[wi]
+                t = transcript.new()
+                transcript.start_run(t, "edit")
+                two = list.list_new()
+                list.list_add_raw(two, changes_("src/界.zig", 8, 2, 0, "+x\n"))
+                list.list_add_raw(two, changes_("src/long-name.zig", 18, 0, 0, "+y\n"))
+                transcript.end_run(t, true, "", 1, turn_changes.change_text_new(two))
+                e = e_(t, 0)
+                e.open = 1
+                surf = screen.surface(width, 20)
+                win = screen.window(surf)
+                entry.draw(e, win, true)
+                spec.assert_true(screen.has_attr(cell_(win, 6, 3).style, screen.DIM), "directory is dim")
+                spec.assert_false(screen.has_attr(cell_(win, 10, 3).style, screen.DIM), "file name is plain")
+                last_digits = [0, 0]
+                for row in 3..5 {
+                    for col in 0..width {
+                        cell = cell_(win, col, row)
+                        if screen.color_value(cell.style.fg) == 2 && cell.grapheme == "8" {
+                            last_digits[row - 3] = col
+                        }
+                    }
+                }
+                spec.assert_true(last_digits[0] > 0, "found the 8")
+                spec.assert_eq(last_digits[0], last_digits[1], "counts align")
+                spec.assert_false(string.contains(entry_text_(e, width), "−0") != 0, "no zero removals")
+            }
+        }
+
+        spec.it("a Run summary read from an event keeps its failure count and none when the event has none") callback {
+            with_count = transcript.summary_from_json(jsonx.parse("{\"counts\":[{\"name\":\"edit\",\"count\":2}],\"omitted\":0,\"failures\":1,\"files\":[]}"))
+            spec.assert_eq_long(with_count.failures, 1, "failures")
+            without = transcript.summary_from_json(jsonx.parse("{\"counts\":[],\"omitted\":0,\"files\":[]}"))
+            spec.assert_eq_long(without.failures, -1, "no failures member")
+            // a caught edit failure: its Run opens with Details and Result showing
+            t = transcript.new()
+            transcript.start_run(t, "edit")
+            transcript.end_run_with_summary(t, true, "caught-edit-error", 1, one_change_("a", 1, 1, "-b\n+a\n"), with_count as ptr)
+            e = e_(t, 0)
+            e.open = 1
+            shown = entry_text_(e, 120)
+            spec.assert_contains(shown, "Result", "Result heading")
+            spec.assert_contains(shown, "caught-edit-error", "the caught error")
         }
     }
     return spec.run_summary(fw)

@@ -978,7 +978,7 @@ print_line_(win: screen.Window, line: Line, theme: Theme, commit: bool) -> int {
     if line.kind == KIND_CODE {
         used = print_code_(row, line.text, Code { lang: line.lang, lex: line.lex }, theme, commit)
     } else if line.kind == KIND_HEADING {
-        used = print_prose_(row, line.text, screen.style(fg: screen.color_index(4), attrs: screen.BOLD), theme, commit)
+        used = print_prose_(row, line.text, screen.style(attrs: screen.BOLD), theme, commit)
     } else if line.kind == KIND_QUOTE {
         used = print_quote_(row, line.text, theme, commit)
     } else if line.kind == KIND_TABLE {

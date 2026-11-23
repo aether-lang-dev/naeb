@@ -105,6 +105,7 @@ activity_label(a: Activity, now: long) -> Label {
 struct Status {
     cfg: ptr                      // *types.Config
     hovered: int                  // -1 none
+    hovered_row: int              // the first row of the hovered control, -1 none
     hover_bg: int
     user_bg: int
     code_bg: int
@@ -128,6 +129,7 @@ new(cfg: @keep ptr) -> Status {
     return Status {
         cfg: cfg,
         hovered: -1,
+        hovered_row: -1,
         hover_bg: screen.DEFAULT,
         user_bg: screen.DEFAULT,
         code_bg: screen.DEFAULT,

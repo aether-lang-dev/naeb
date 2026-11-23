@@ -162,10 +162,13 @@ struct Choice {
     value: string
     label: string
     detail: string
+    // The service a /model choice is of (shown beside the model); has_service says it is set.
+    service: string
+    has_service: int
 }
 
 choice(value: string, label: string, detail: string) -> Choice {
-    return Choice { value: value, label: label, detail: detail }
+    return Choice { value: value, label: label, detail: detail, service: "", has_service: 0 }
 }
 
 struct Candidate {
@@ -175,6 +178,8 @@ struct Candidate {
     label: string
     detail: string
     is_path: int                  // an `@` file completion: `value` replaces the mention
+    service: string               // a /model choice's service, shown beside the model
+    has_service: int
 }
 
 // upstream Candidate.group(): -1 when this is an argument choice.
@@ -211,7 +216,7 @@ effort_choices() -> Choice[] {
     while i <= n {
         if i == n || vals[i] == 32 {
             v = string.substring(vals, start, i)
-            out.push(Choice { value: v, label: v, detail: "" })
+            out.push(Choice { value: v, label: v, detail: "", service: "", has_service: 0 })
             start = i + 1
         }
         i = i + 1
@@ -234,7 +239,7 @@ candidates(input: string, sessions: Choice[], tasks: Choice[], models: Choice[],
             while c < CMD_COUNT {
                 if out.len == limit { return out }
                 if spec_group(c) == g && string.starts_with(TAGS[c], prefix) != 0 {
-                    out.push(Candidate { command: c, has_value: 0, value: "", label: slash_name(c), detail: spec_help(c), is_path: 0 })
+                    out.push(Candidate { command: c, has_value: 0, value: "", label: slash_name(c), detail: spec_help(c), is_path: 0, service: "", has_service: 0 })
                 }
                 c = c + 1
             }
@@ -259,7 +264,7 @@ candidates(input: string, sessions: Choice[], tasks: Choice[], models: Choice[],
         if out.len == limit { break }
         ch = choices[i]
         if string.starts_with(ch.value, arg) != 0 {
-            out.push(Candidate { command: command, has_value: 1, value: ch.value, label: ch.label, detail: ch.detail, is_path: 0 })
+            out.push(Candidate { command: command, has_value: 1, value: ch.value, label: ch.label, detail: ch.detail, is_path: 0, service: ch.service, has_service: ch.has_service })
         }
         i = i + 1
     }

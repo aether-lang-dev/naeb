@@ -48,6 +48,7 @@ struct Log {
     model: string
     parent_session_id: string
     cache_key: string
+    tuning: string             // the header's tuning object (JSON), "" none (an old log)
     forked_from: string        // the forked_from object's JSON, "" none
     mcp_servers: string        // the header's mcp_servers array (JSON), "" none
     next_agent_id: long
@@ -65,6 +66,7 @@ struct Replayed {
     steps: int
     parent_session_id: string
     cache_key: string
+    tuning: string
     forked_from: string
     mcp_servers: string
     provider: string
@@ -92,6 +94,7 @@ new_log_(fd: int, offset: long) -> ptr {
     l.model = ""
     l.parent_session_id = ""
     l.cache_key = ""
+    l.tuning = ""
     l.forked_from = ""
     l.mcp_servers = ""
     l.next_agent_id = 1 as long
@@ -151,6 +154,7 @@ restore(path: string, history: ptr, expected_parent: string, check_parent: int) 
     l.model = r.model
     l.parent_session_id = r.parent_session_id
     l.cache_key = r.cache_key
+    l.tuning = r.tuning
     l.forked_from = r.forked_from
     l.mcp_servers = r.mcp_servers
     l.next_agent_id = r.next_agent_id
@@ -381,6 +385,7 @@ new_replayed_() -> ptr {
     r.steps = 0
     r.parent_session_id = ""
     r.cache_key = ""
+    r.tuning = ""
     r.forked_from = ""
     r.mcp_servers = ""
     r.provider = "chat_completions"
@@ -541,6 +546,9 @@ replay(data: string, history: ptr) -> ptr {
         if list.list_size(history) == 0 || (r.steps == 0 && from == 0 && has_provider) {
             r.parent_session_id = string.copy(jsonx.str_or(rec, "parent_session_id", ""))
             r.cache_key = string.copy(jsonx.str_or(rec, "cache_key", ""))
+            tv = jsonx.field(rec, "tuning")
+            r.tuning = ""
+            if tv != null && json.json_type(tv) == json.JSON_OBJECT { r.tuning = jsonx.encode(tv) }
             ff = jsonx.field(rec, "forked_from")
             r.forked_from = ""
             if ff != null { r.forked_from = jsonx.encode(ff) }

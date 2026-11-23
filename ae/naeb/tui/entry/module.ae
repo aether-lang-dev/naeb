@@ -41,7 +41,7 @@ import naeb.tui.long_text
 import naeb.tui.markdown
 import naeb.tui.bill
 import naeb.tui.label
-import naeb.tui.intraline
+import naeb.tui.run_details
 import naeb.tui.format
 import naeb.tui.smooth
 
@@ -50,12 +50,12 @@ exports(MAX_DIFF_LINES, MAX_SEGMENTS,
         KIND_FAILURE, KIND_CHANGES, KIND_FENCE,
         RUN_RUNNING, RUN_BACKGROUND, RUN_SUPERSEDED, RUN_OK, RUN_FAILED, RUN_WARNING, RUN_LOST,
         RUN_TIMED_OUT, RUN_CANCELED,
-        Invocation, Entry, new_entry, free_entry, invalidate, display_text, refresh_label,
+        Invocation, Entry, Control, new_entry, free_entry, invalidate, display_text, refresh_label,
         has_warning, is_live, refresh_agents, collapsible, toggle_rows, draw, extent, height,
-        segments)
+        segments, changes_only, result_expanded, control, toggle_control)
 
 const MAX_DIFF_LINES = 60
-const MAX_SEGMENTS = 196
+const MAX_SEGMENTS = 16
 
 const KIND_USER = 0
 const KIND_ASSISTANT = 1
@@ -105,6 +105,8 @@ struct Entry {
     text: string
     // For KIND_RUN: the complete result delivered by Session.
     output: string
+    // For KIND_CHANGES: the Turn's elapsed time, shown at the right of its first row.
+    turn_time: string
     hook_notice: string
     changes: *turn_changes.ChangeText
     agents: ptr[]
@@ -126,11 +128,25 @@ struct Entry {
     step_effort: string
     // Collapsible entries share the transcript ctrl+o state.
     open: int
+    // For KIND_RUN: which of Changes, Details, Result and Script are open.
+    details: *run_details.State
     has_cached: int
     cached_width: int
     cached_len: int
     cached_open: int
     cached_rows: int
+    cached_simple: int
+    cached_width_method: int
+}
+
+// Where in a Run a click lands: the rows of the control it hit, and the
+// disclosure it toggles (-1: the Run itself; else run_details.ACT_*, with
+// `file` the index for ACT_FILE).
+struct Control {
+    first: int
+    rows: int
+    action: int
+    file: int
 }
 
 new_entry(kind: int) -> *Entry {
@@ -142,7 +158,9 @@ new_entry(kind: int) -> *Entry {
     e.queued = -1
     e.text = ""
     e.output = ""
+    e.turn_time = ""
     e.hook_notice = ""
+    e.details = run_details.new_state()
     e.changes = turn_changes.change_text_empty()
     e.agents = make([]ptr, 0)
     e.invocations = make([]ptr, 0)
@@ -161,8 +179,9 @@ new_entry(kind: int) -> *Entry {
 free_entry(e: *Entry) {
     markdown.cache_free(e.markdown_cache)
     heap.free(e.smooth)
+    run_details.free_state(e.details)
     heap.free(e.tool_summary)
-    heap.free(e.changes)
+    turn_changes.change_text_free(e.changes)
     heap.free(e.agent_tree)
     for i in 0..e.agents.len {
         heap.free(e.agents[i] as *agent_tree.Agent)
@@ -191,6 +210,11 @@ min_(a: int, b: int) -> int {
 max_(a: int, b: int) -> int {
     if a > b { return a }
     return b
+}
+
+sat_(a: int) -> int {
+    if a < 0 { return 0 }
+    return a
 }
 
 dim_() -> screen.Style {
@@ -306,6 +330,52 @@ has_warning(e: *Entry) -> bool {
     return false
 }
 
+// A successful Run of edit and write calls only: its Changes are the whole
+// story, so its Result and Script are not offered.
+changes_only(e: *Entry) -> bool {
+    if e.run != RUN_OK || has_warning(e) { return false }
+    if e.has_tool_summary == 0 { return false }
+    sm = e.tool_summary
+    n = list.list_size(sm.counts)
+    if n == 0 || sm.omitted > 0 || sm.failures < 0 || sm.failures > 0 { return false }
+    for i in 0..n {
+        c = list.list_get_raw(sm.counts, i) as *tool_summary.Count
+        if c.name != "edit" && c.name != "write" { return false }
+    }
+    for i in 0..list.list_size(sm.files) {
+        f = list.list_get_raw(sm.files, i) as *tool_summary.File
+        if f.failed != 0 { return false }
+    }
+    return true
+}
+
+// A failure or a warning: the Run's Details open by themselves.
+needs_attention_(e: *Entry) -> bool {
+    attention = e.run == RUN_FAILED || e.run == RUN_WARNING || e.run == RUN_LOST || e.run == RUN_TIMED_OUT || e.run == RUN_CANCELED || has_warning(e)
+    if e.has_tool_summary != 0 {
+        if e.tool_summary.failures > 0 { attention = true }
+        for i in 0..list.list_size(e.tool_summary.files) {
+            f = list.list_get_raw(e.tool_summary.files, i) as *tool_summary.File
+            if f.failed != 0 { attention = true }
+        }
+    }
+    return attention
+}
+
+facts_(e: *Entry) -> run_details.Facts {
+    return run_details.Facts {
+        changes: e.changes, output: e.output, script: e.text,
+        changes_only: if changes_only(e) { 1 } else { 0 },
+        attention: if needs_attention_(e) { 1 } else { 0 }
+    }
+}
+
+// Whether the Run's Result is open: as the person left it, else when it has
+// no changes or needs attention (upstream details.resultExpanded(e)).
+result_expanded(e: *Entry) -> bool {
+    return run_details.result_expanded(e.details, facts_(e))
+}
+
 // Rows keep their last state; a row is live while its Run runs or its
 // background result is undelivered.
 is_live(e: *Entry, p: *agent_tree.Agent) -> bool {
@@ -324,6 +394,7 @@ collapsible(e: *Entry) -> bool {
 // The rows the entry takes folded, whatever its open state.
 toggle_rows(e: *Entry, win: screen.Window) -> int {
     if !collapsible(e) { return 0 }
+    if e.open != 0 { return 1 }
     open = e.open
     e.open = 0
     rows = draw(e, win, false)
@@ -362,6 +433,14 @@ rows_of_(r: screen.PrintResult) -> int {
 // Entry.print). With commit false nothing is written: it only measures.
 draw(e: *Entry, win: screen.Window, commit: bool) -> int {
     if e.simple != 0 && (e.kind == KIND_BILL || e.kind == KIND_CHANGES) { return 0 }
+    if e.kind == KIND_RUN {
+        rows = height(e, win)
+        if commit {
+            prefix_rows = draw_run_prefix_(e, win, true)
+            if e.open != 0 { run_details.draw(e.details, facts_(e), win, true, prefix_rows) }
+        }
+        return rows
+    }
     if e.kind == KIND_CHANGES { return draw_changes_(e, win, commit) }
     if e.kind == KIND_ASSISTANT {
         th = markdown.theme(e.code_bg, screen.color_index(6))
@@ -370,60 +449,18 @@ draw(e: *Entry, win: screen.Window, commit: bool) -> int {
     }
     if e.kind == KIND_USER && win.width >= 4 { return draw_user_(e, win, commit) }
     if e.kind == KIND_BILL {
-        segs = make([]screen.Segment, 0)
-        s = screen.Segment { text: bill.fit(e.text, win.width), style: dim_(), link: "", link_params: "" }
-        segs.push(s)
-        screen.draw(win, segs, wrap: screen.WRAP_NONE, commit: commit)
+        time = bill.fit(e.text, win.width)
+        screen.draw_segment(screen.child(win, x_off: sat_(win.width - screen.win_gwidth(win, time))), screen.seg(time, dim_()), wrap: screen.WRAP_NONE, commit: commit)
         return 1
     }
     folded = collapsible(e) && e.open == 0
     wrap = screen.WRAP_WORD
     if folded {
         wrap = screen.WRAP_NONE
-    } else if e.kind == KIND_RUN || e.kind == KIND_BACKGROUND || e.kind == KIND_FAILURE || e.kind == KIND_FENCE {
+    } else if e.kind == KIND_BACKGROUND || e.kind == KIND_FAILURE || e.kind == KIND_FENCE {
         wrap = screen.WRAP_GRAPHEME
     }
     shown = segments(e)
-    if e.kind == KIND_RUN {
-        if e.simple != 0 && e.open == 0 && string.length(e.title_files) > 0 {
-            at = min_(e.title_files_at, string.length(e.label))
-            title = make([]screen.Segment, 0)
-            t0 = screen.Segment { text: shown[0].text, style: shown[0].style, link: "", link_params: "" }
-            title.push(t0)
-            t1 = screen.Segment { text: shown[1].text, style: shown[1].style, link: "", link_params: "" }
-            title.push(t1)
-            t2 = screen.Segment { text: string.substring(e.label, 0, at), style: screen.style(), link: "", link_params: "" }
-            title.push(t2)
-            t3 = screen.Segment { text: e.title_files, style: screen.style(), link: "", link_params: "" }
-            title.push(t3)
-            t4 = screen.Segment { text: string.substring(e.label, at, string.length(e.label)), style: screen.style(), link: "", link_params: "" }
-            title.push(t4)
-            screen.draw(win, title, wrap: screen.WRAP_NONE, commit: commit)
-        } else {
-            screen.draw(win, shown[0..3], wrap: screen.WRAP_NONE, commit: commit)
-        }
-        if e.simple != 0 && e.open == 0 && e.run != RUN_RUNNING { return 1 }
-        if e.simple != 0 && e.open == 0 {
-            return 1 + agent_tree.draw(e.agent_tree, screen.child(win, y_off: 1), commit)
-        }
-        rows = 1
-        if string.length(e.changes.summary) > 0 {
-            r = screen.draw_segment(screen.child(win, x_off: 2, y_off: rows), screen.seg(e.changes.summary, dim_()), wrap: screen.WRAP_WORD, commit: commit)
-            rows = rows + rows_of_(r)
-        }
-        if string.length(e.files) > 0 {
-            r = screen.draw_segment(screen.child(win, x_off: 2, y_off: rows), screen.seg(e.files, dim_()), wrap: screen.WRAP_WORD, commit: commit)
-            rows = rows + rows_of_(r)
-        }
-        if string.length(e.hook_notice) > 0 {
-            screen.draw_segment(screen.child(win, x_off: 2, y_off: rows), screen.seg(e.hook_notice, fg_(3)), wrap: screen.WRAP_NONE, commit: commit)
-            rows = rows + 1
-        }
-        rows = rows + agent_tree.draw(e.agent_tree, screen.child(win, y_off: rows), commit)
-        if e.open == 0 { return rows }
-        details = screen.draw(screen.child(win, y_off: rows), shown[4..shown.len], wrap: screen.WRAP_GRAPHEME, commit: commit)
-        return rows + rows_of_(details)
-    }
     if folded && e.kind == KIND_USER {
         suffix_width = screen.win_gwidth(win, e.label)
         if e.queued >= 0 { suffix_width = suffix_width + 9 }
@@ -434,6 +471,81 @@ draw(e: *Entry, win: screen.Window, commit: bool) -> int {
     r = screen.draw(win, shown, wrap: wrap, commit: commit)
     if folded { return 1 }
     return rows_of_(r)
+}
+
+// The Run's heading, its facts and its agent tree: the rows above the
+// details (upstream printRunPrefix). Returns the rows it takes.
+draw_run_prefix_(e: *Entry, win: screen.Window, commit: bool) -> int {
+    shown = segments(e)
+    if e.simple != 0 && e.open == 0 && string.length(e.title_files) > 0 {
+        at = min_(e.title_files_at, string.length(e.label))
+        title = make([]screen.Segment, 0)
+        t0 = screen.Segment { text: shown[0].text, style: shown[0].style, link: "", link_params: "" }
+        title.push(t0)
+        t1 = screen.Segment { text: shown[1].text, style: shown[1].style, link: "", link_params: "" }
+        title.push(t1)
+        t2 = screen.Segment { text: string.substring(e.label, 0, at), style: screen.style(), link: "", link_params: "" }
+        title.push(t2)
+        t3 = screen.Segment { text: e.title_files, style: screen.style(), link: "", link_params: "" }
+        title.push(t3)
+        t4 = screen.Segment { text: string.substring(e.label, at, string.length(e.label)), style: screen.style(), link: "", link_params: "" }
+        title.push(t4)
+        screen.draw(win, title, wrap: screen.WRAP_NONE, commit: commit)
+    } else {
+        screen.draw(win, shown, wrap: screen.WRAP_NONE, commit: commit)
+    }
+    if e.simple != 0 && e.open == 0 && e.run != RUN_RUNNING { return 1 }
+    if e.simple != 0 && e.open == 0 {
+        return 1 + agent_tree.draw(e.agent_tree, screen.child(win, y_off: 1), commit)
+    }
+    rows = 1
+    if e.open == 0 && string.length(e.changes.summary) > 0 {
+        r = screen.draw_segment(screen.child(win, x_off: 2, y_off: rows), screen.seg(e.changes.summary, dim_()), wrap: screen.WRAP_WORD, commit: commit)
+        rows = rows + rows_of_(r)
+    }
+    if string.length(e.files) > 0 {
+        r = screen.draw_segment(screen.child(win, x_off: 2, y_off: rows), screen.seg(e.files, dim_()), wrap: screen.WRAP_WORD, commit: commit)
+        rows = rows + rows_of_(r)
+    }
+    if string.length(e.hook_notice) > 0 {
+        screen.draw_segment(screen.child(win, x_off: 2, y_off: rows), screen.seg(e.hook_notice, fg_(3)), wrap: screen.WRAP_NONE, commit: commit)
+        rows = rows + 1
+    }
+    rows = rows + agent_tree.draw(e.agent_tree, screen.child(win, y_off: rows), commit)
+    return rows
+}
+
+// The controls of an entry at `row`: the one whose rows contain it, and
+// whether there is one (upstream Entry.control). A Run is looked up in the
+// layout its last measurement recorded.
+control(e: *Entry, win: screen.Window, row: int) -> (Control, bool) {
+    nothing = Control { first: 0, rows: 0, action: -1, file: 0 }
+    if e.kind == KIND_RUN {
+        rows, found = cached_height_(e, win)
+        if !found { return nothing, false }
+        parent_rows = rows
+        if e.open != 0 { parent_rows = 1 }
+        if row < parent_rows { return Control { first: 0, rows: parent_rows, action: -1, file: 0 }, true }
+        if e.open == 0 || row >= rows { return nothing, false }
+        h, ok = run_details.hit(e.details, e.changes.files, row)
+        if !ok { return nothing, false }
+        return Control { first: h.first, rows: h.count, action: h.action, file: h.file }, true
+    }
+    parent_rows = toggle_rows(e, win)
+    if row < parent_rows { return Control { first: 0, rows: parent_rows, action: -1, file: 0 }, true }
+    return nothing, false
+}
+
+// Toggles what `c` (from control) names, and forgets the measured height.
+toggle_control(e: *Entry, c: Control) {
+    if c.action >= 0 {
+        run_details.toggle(e.details, facts_(e), c.action, c.file)
+    } else if e.open != 0 {
+        e.open = 0
+    } else {
+        e.open = 1
+    }
+    invalidate(e)
 }
 
 // A proposed naeb.ae change: what it answers, the diff in a Run's colours
@@ -460,11 +572,34 @@ fence_segments_(b: *Segs, text: string) {
     }
 }
 
-// `label` is the summary line, `text` one row per file while open.
+// Byte offset of the last `needle` in `s`, -1 for none.
+last_index_(s: string, needle: string) -> int {
+    n = string.length(needle)
+    i = string.length(s) - n
+    while i >= 0 {
+        if string.substring(s, i, i + n) == needle { return i }
+        i = i - 1
+    }
+    return -1
+}
+
+// `label` is the summary line, `turn_time` the Turn's elapsed time (at the
+// right of the first row, or on a row of its own when they would touch),
+// `text` one row per file while open: the directory dim, the file name plain,
+// the counts green and red.
 draw_changes_(e: *Entry, win: screen.Window, commit: bool) -> int {
     screen.draw_segment(win, screen.seg(e.label, dim_()), wrap: screen.WRAP_NONE, commit: commit)
-    if e.open == 0 { return 1 }
     rows = 1
+    time = bill.fit(e.turn_time, win.width)
+    if string.length(time) > 0 {
+        time_w = screen.win_gwidth(win, time)
+        fits = screen.win_gwidth(win, e.label) + time_w + 2 <= win.width
+        y = 1
+        if fits { y = 0 }
+        screen.draw_segment(screen.child(win, x_off: win.width - time_w, y_off: y, height: 1), screen.seg(time, dim_()), wrap: screen.WRAP_NONE, commit: commit)
+        if !fits { rows = rows + 1 }
+    }
+    if e.open == 0 { return rows }
     text = e.text
     n = string.length(text)
     start = 0
@@ -472,7 +607,34 @@ draw_changes_(e: *Entry, win: screen.Window, commit: bool) -> int {
         nl = string.index_of_from(text, "\n", start)
         stop = nl
         if nl < 0 { stop = n }
-        screen.draw_segment(screen.child(win, y_off: rows), screen.seg(string.substring(text, start, stop), dim_()), wrap: screen.WRAP_NONE, commit: commit)
+        line = string.substring(text, start, stop)
+        len = string.length(line)
+        added_at = last_index_(line, " +")
+        removed_at = last_index_(line, " −")
+        if added_at < 0 { added_at = len }
+        counts_at = added_at
+        removed_start = len
+        if removed_at >= 0 {
+            removed_start = removed_at + 1
+            if removed_at < counts_at { counts_at = removed_at }
+        }
+        path_end = counts_at
+        while path_end > 0 && line[path_end - 1] == 32 { path_end = path_end - 1 }
+        leaf = 0
+        k = path_end
+        while k > 0 {
+            k = k - 1
+            if line[k] == 47 {
+                leaf = k + 1
+                break
+            }
+        }
+        c0 = screen.seg(string.substring(line, 0, leaf), dim_())
+        c1 = screen.seg(string.substring(line, leaf, path_end))
+        c2 = screen.seg(string.substring(line, path_end, counts_at), dim_())
+        c3 = screen.seg(string.substring(line, counts_at, removed_start), fg_(2))
+        c4 = screen.seg(string.substring(line, removed_start, len), fg_(1))
+        screen.draw(screen.child(win, y_off: rows), [c0, c1, c2, c3, c4], wrap: screen.WRAP_NONE, commit: commit)
         rows = rows + 1
         if nl < 0 { break }
         start = nl + 1
@@ -520,19 +682,40 @@ extent(e: *Entry, win: screen.Window) -> int {
     return height(e, win) + e.gap
 }
 
-height(e: *Entry, win: screen.Window) -> int {
-    len = string.length(display_text(e)) + string.length(e.output) + string.length(e.changes.diff)
-    if e.simple == 0 && e.has_cached != 0 {
-        if e.cached_width == win.width && e.cached_len == len && e.cached_open == e.open { return e.cached_rows }
+layout_len_(e: *Entry) -> int {
+    return string.length(display_text(e)) + string.length(e.output) + string.length(e.changes.diff)
+}
+
+// The rows measured at this width, when nothing they depend on changed since.
+cached_height_(e: *Entry, win: screen.Window) -> (int, bool) {
+    if e.has_cached == 0 { return 0, false }
+    if e.cached_width != win.width || e.cached_len != layout_len_(e) || e.cached_open != e.open { return 0, false }
+    if e.kind == KIND_RUN {
+        if e.cached_simple != e.simple || e.cached_width_method != win.surf.width_method { return 0, false }
+    } else if e.simple != 0 {
+        return 0, false
     }
+    return e.cached_rows, true
+}
+
+height(e: *Entry, win: screen.Window) -> int {
+    rows, found = cached_height_(e, win)
+    if found { return rows }
     measure = win
     measure.height = 65535
-    rows = draw(e, measure, false)
+    if e.kind == KIND_RUN {
+        rows = draw_run_prefix_(e, measure, false)
+        if e.open != 0 { rows = run_details.draw(e.details, facts_(e), measure, false, rows) }
+    } else {
+        rows = draw(e, measure, false)
+    }
     e.has_cached = 1
     e.cached_width = win.width
-    e.cached_len = len
+    e.cached_len = layout_len_(e)
     e.cached_open = e.open
     e.cached_rows = rows
+    e.cached_simple = e.simple
+    e.cached_width_method = win.surf.width_method
     return rows
 }
 
@@ -568,51 +751,6 @@ segments(e: *Entry) -> screen.Segment[] {
         }
         add_(b, "", d)
         add_(b, e.label, plain)
-        if e.open == 0 { return b.items }
-        add_(b, "\n", plain)
-        add_(b, "Changes\n", screen.style(attrs: screen.BOLD | screen.DIM))
-        add_(b, e.changes.preview, d)
-        n = 6
-        diff = e.changes.diff
-        if string.length(diff) == 0 {
-            add_(b, "No file changes\n", d)
-            n = n + 1
-        }
-        lines = intraline.lines_new(diff)
-        while n + 3 <= MAX_SEGMENTS - 5 {
-            item, ok = intraline.next(lines)
-            if !ok { break }
-            line = item.line
-            c = line[0]
-            st = screen.style(attrs: screen.BOLD | screen.DIM)
-            if c == 43 {
-                st = fg_(2)
-            } else if c == 45 {
-                st = fg_(1)
-            } else if c == 32 {
-                st = d
-            }
-            if item.has_emphasis != 0 {
-                strong = st
-                strong.attrs = strong.attrs | screen.BOLD
-                add_(b, string.substring(line, 0, item.emphasis.start), st)
-                add_(b, string.substring(line, item.emphasis.start, item.emphasis.end), strong)
-                add_(b, string.substring(line, item.emphasis.end, string.length(line)), st)
-                n = n + 3
-            } else {
-                add_(b, line, st)
-                n = n + 1
-            }
-        }
-        heap.free(lines)
-        add_(b, "Result\n", screen.style(attrs: screen.BOLD | screen.DIM))
-        result = "No result"
-        if string.length(e.output) > 0 { result = trim_nl_(e.output) }
-        rst = d
-        if e.run == RUN_FAILED { rst = screen.style(fg: screen.color_index(1), attrs: screen.DIM) }
-        add_(b, result, rst)
-        add_(b, "\nScript\n", screen.style(attrs: screen.BOLD | screen.DIM))
-        add_(b, e.text, d)
         return b.items
     }
     if e.kind == KIND_BACKGROUND {

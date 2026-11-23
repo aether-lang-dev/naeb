@@ -1,4 +1,5 @@
-// New tests (upstream has none in entry.zig; its entries are covered through
+// Ports the two tests of upstream src/tui/transcript/entry.zig (as of 5f801fe) under
+// their names, and adds tests (the rest of upstream's entries are covered through
 // transcript.zig's tests, ported in tui_transcript_test.ae). These cover what
 // those leave unchecked: folded queued users, simple-mode caching and
 // visibility, assistant tint, the changes entry, notice kinds, toggle_rows,
@@ -11,11 +12,137 @@ import naeb.tui.transcript
 import naeb.tui.agent_tree
 import naeb.tui.turn_changes
 import naeb.tools.diff
+import naeb.session.tool_summary
+import naeb.tui.run_details
 import term.screen
+
+// A tool summary of the named tools (counts[i] calls of names[i]); `failures`
+// -1 is upstream's null; `failed_file` adds a failed edit of a.zig.
+summary_(n1: string, k1: int, n2: string, k2: int, failures: int, omitted: int, failed_file: bool) -> *tool_summary.Summary {
+    sm = tool_summary.empty()
+    if k1 > 0 {
+        c = heap.new(tool_summary.Count)
+        c.name = n1
+        c.count = k1
+        list.list_add(sm.counts, c as ptr)
+    }
+    if k2 > 0 {
+        c = heap.new(tool_summary.Count)
+        c.name = n2
+        c.count = k2
+        list.list_add(sm.counts, c as ptr)
+    }
+    sm.failures = failures
+    sm.omitted = omitted
+    if failed_file {
+        f = heap.new(tool_summary.File)
+        f.tool = "edit"
+        f.path = "a.zig"
+        f.duration_ms = -1
+        f.failed = 1
+        list.list_add(sm.files, f as ptr)
+    }
+    return sm
+}
+
+edit_diff_() -> *turn_changes.ChangeText {
+    l = list.list_new()
+    c = heap.new(diff.Change)
+    c.path = "a.zig"
+    c.added = 1
+    c.removed = 1
+    c.created = 0
+    c.diff = "-before\n+after\n"
+    list.list_add_raw(l, c as ptr)
+    return turn_changes.change_text_new(l)
+}
 
 main() {
     fw = spec.init()
     spec.describe(fw, "tui.entry") {
+        spec.it("expanded edit and write Runs show only changes without hiding failures or other tools") callback {
+            // upstream's cases in order: the first two tools of each summary and their
+            // counts, then failures (-1: null), omitted, a failed file, the Run's
+            // state, a hook notice and whether only Changes is expected. Cases 13
+            // and 14 are an empty summary and none.
+            n1 = ["edit", "write", "edit", "edit", "edit", "edit", "edit", "edit", "edit", "edit", "edit", "read", "edit", "", ""]
+            k1 = [2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 2, 0, 0]
+            n2 = ["", "", "write", "", "", "", "", "", "", "", "bash", "edit", "", "", ""]
+            k2 = [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0]
+            failures = [0, 0, 0, 1, -1, 0, 0, 0, 0, -1, -1, -1, -1, 0, 0]
+            omitted = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0]
+            failed_files = [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0]
+            runs = [entry.RUN_OK, entry.RUN_OK, entry.RUN_OK, entry.RUN_OK, entry.RUN_OK, entry.RUN_FAILED, entry.RUN_RUNNING, entry.RUN_WARNING, entry.RUN_OK, entry.RUN_OK, entry.RUN_OK, entry.RUN_OK, entry.RUN_OK, entry.RUN_OK, entry.RUN_OK]
+            notices = ["", "", "", "", "", "", "", "", "after-edit hook failed", "", "", "", "", "", ""]
+            only = [1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+            for ci in 0..15 {
+                for sm in 0..2 {
+                    e = entry.new_entry(entry.KIND_RUN)
+                    e.open = 1
+                    e.simple = sm
+                    e.run = runs[ci]
+                    if ci == 13 {
+                        // an empty summary, built from no Run
+                        e.tool_summary = tool_summary.empty()
+                        e.has_tool_summary = 1
+                    } else if ci != 14 {
+                        e.tool_summary = summary_(n1[ci], k1[ci], n2[ci], k2[ci], failures[ci], omitted[ci], failed_files[ci] == 1)
+                        e.has_tool_summary = 1
+                    }
+                    e.text = "edit-script"
+                    e.output = "edit-result"
+                    e.hook_notice = notices[ci]
+                    e.changes = edit_diff_()
+                    spec.assert_eq(if entry.changes_only(e) { 1 } else { 0 }, only[ci], "changes_only, case ${ci}")
+                    e.details.open = 1
+                    e.details.result_open = 1
+                    e.details.script_open = 1
+                    surf = screen.surface(120, 40)
+                    win = screen.window(surf)
+                    rows = entry.draw(e, win, true)
+                    text = ""
+                    for y in 0..rows { text = "${text}${screen.row_text(surf, y)}\n" }
+                    spec.assert_contains(text, "Changes", "Changes, case ${ci}")
+                    spec.assert_contains(text, "+after", "diff, case ${ci}")
+                    bodies = ["Result", "Script", "edit-result", "edit-script"]
+                    for bi in 0..4 {
+                        spec.assert_eq(if string.contains(text, bodies[bi]) != 0 { 1 } else { 0 }, 1 - only[ci], "${bodies[bi]}, case ${ci}")
+                    }
+                    spec.assert_str_eq(e.output, "edit-result", "output kept")
+                    spec.assert_str_eq(e.text, "edit-script", "script kept")
+                }
+            }
+        }
+        spec.it("caught tool failures open Result by default without overriding an explicit choice") callback {
+            for ci in 0..3 {
+                e = entry.new_entry(entry.KIND_RUN)
+                e.run = entry.RUN_OK
+                e.has_tool_summary = 1
+                if ci == 0 {
+                    e.tool_summary = summary_("", 0, "", 0, 0, 0, false)
+                } else if ci == 1 {
+                    e.tool_summary = summary_("", 0, "", 0, 1, 0, false)
+                } else {
+                    e.tool_summary = summary_("", 0, "", 0, -1, 0, true)
+                }
+                one = list.list_new()
+                c = heap.new(diff.Change)
+                c.path = "a"
+                c.added = 1
+                c.removed = 0
+                c.created = 0
+                c.diff = "+x\n"
+                list.list_add_raw(one, c as ptr)
+                e.changes = turn_changes.change_text_new(one)
+                want = ci != 0
+                spec.assert_eq(if entry.result_expanded(e) { 1 } else { 0 }, if want { 1 } else { 0 }, "default, case ${ci}")
+                e.details.result_open = 0
+                spec.assert_false(entry.result_expanded(e), "explicit close, case ${ci}")
+                e.details.result_open = 1
+                spec.assert_true(entry.result_expanded(e), "explicit open, case ${ci}")
+                spec.assert_eq(e.details.script_open, 0, "Script untouched, case ${ci}")
+            }
+        }
         spec.it("a folded queued user leaves room for its marker") callback {
             surf = screen.surface(30, 4)
             win = screen.window(surf)

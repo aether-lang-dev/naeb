@@ -1,0 +1,74 @@
+// Ports the four tests of upstream src/session/tuning.zig under their names
+// (NIB_TUNE is NAEB_TUNE here; the log record is JSON text).
+import std.spec
+import std.string
+import naeb.jsonx
+import naeb.session.profile
+import naeb.session.tuning
+
+main() {
+    fw = spec.init()
+    spec.describe(fw, "session.tuning") {
+        spec.it("profiles pick a variant; unmatched models get the defaults") callback {
+            ds = tuning.for_profile(profile.DEEPSEEK)
+            spec.assert_eq(ds.delivery, tuning.DELIVERY_TOOL, "deepseek delivery")
+            spec.assert_eq(ds.validation, tuning.VALIDATION_NONE, "deepseek validation")
+            others = [profile.CODEX, profile.CLAUDE, profile.DEFAULT]
+            for i in 0..3 {
+                r = tuning.for_profile(others[i])
+                spec.assert_eq(r.delivery, tuning.DELIVERY_USER, "default delivery")
+                spec.assert_eq(r.validation, tuning.VALIDATION_SINGLE, "default validation")
+            }
+        }
+        spec.it("NAEB_TUNE replaces profile variants") callback {
+            a, e1 = tuning.resolve(profile.DEEPSEEK, "delivery=user")
+            spec.assert_str_eq(e1, "", "no error")
+            spec.assert_eq(a.delivery, tuning.DELIVERY_USER, "user over deepseek")
+            b, _e2 = tuning.resolve(profile.CODEX, " delivery = tool ,")
+            spec.assert_eq(b.delivery, tuning.DELIVERY_TOOL, "spaces and a trailing comma")
+            c, _e3 = tuning.resolve(profile.DEEPSEEK, "")
+            spec.assert_eq(c.delivery, tuning.DELIVERY_TOOL, "empty keeps the profile")
+            d, _e4 = tuning.resolve(profile.DEEPSEEK, "validation=single")
+            spec.assert_eq(d.validation, tuning.VALIDATION_SINGLE, "validation replaced")
+            spec.assert_eq(d.delivery, tuning.DELIVERY_TOOL, "delivery kept")
+            f, _e5 = tuning.resolve(profile.CODEX, "validation=existing-only")
+            spec.assert_eq(f.validation, tuning.VALIDATION_EXISTING_ONLY, "existing-only")
+        }
+        spec.it("NAEB_TUNE rejects unknown names and malformed entries") callback {
+            specs = ["nope=tool", "validation=huge", "delivery=huge", "delivery", "delivery=tool,x=y"]
+            want = [
+                "NAEB_TUNE: unknown tuning 'nope'; tunings: delivery, validation",
+                "NAEB_TUNE: validation has no variant 'huge'; variants: single, existing-only, none",
+                "NAEB_TUNE: delivery has no variant 'huge'; variants: user, tool",
+                "NAEB_TUNE: expected <tuning>=<variant>, got 'delivery'",
+                "NAEB_TUNE: unknown tuning 'x'; tunings: delivery, validation"
+            ]
+            for i in 0..5 {
+                _r, err = tuning.resolve(profile.DEFAULT, specs[i])
+                spec.assert_str_eq(err, want[i], "message ${i}")
+            }
+        }
+        spec.it("the log record round-trips and tolerates unknown names") callback {
+            record = tuning.to_log(tuning.Resolved { delivery: tuning.DELIVERY_TOOL, validation: tuning.VALIDATION_NONE })
+            spec.assert_str_eq(record, "{\"delivery\":\"tool\",\"validation\":\"none\"}", "text")
+            back = tuning.from_log(jsonx.parse(record))
+            spec.assert_eq(back.delivery, tuning.DELIVERY_TOOL, "delivery")
+            spec.assert_eq(back.validation, tuning.VALIDATION_NONE, "validation")
+            future = tuning.from_log(jsonx.parse("{\"delivery\":\"gone\",\"other\":\"x\"}"))
+            spec.assert_eq(future.delivery, tuning.DELIVERY_USER, "unknown variant")
+            spec.assert_eq(future.validation, tuning.VALIDATION_SINGLE, "missing tuning")
+            old = tuning.from_log(jsonx.parse("{\"delivery\":\"tool\"}"))
+            spec.assert_eq(old.validation, tuning.VALIDATION_SINGLE, "older log")
+            spec.assert_eq(tuning.from_log(jsonx.parse("{}")).delivery, tuning.DELIVERY_USER, "empty")
+        }
+        spec.it("tool delivery needs wait to fold results; without it a result is a user message") callback {
+            r = tuning.Resolved { delivery: tuning.DELIVERY_TOOL, validation: tuning.VALIDATION_SINGLE }
+            spec.assert_eq(tuning.background_mode(r, true), tuning.BG_TOOL, "tool")
+            spec.assert_eq(tuning.background_mode(r, false), tuning.BG_TOOL_WITHOUT_WAIT, "no wait")
+            spec.assert_true(tuning.folds_results(tuning.BG_TOOL_WITHOUT_WAIT), "still folds")
+            spec.assert_eq(tuning.background_mode(tuning.defaults(), true), tuning.BG_USER, "user")
+            spec.assert_false(tuning.folds_results(tuning.BG_USER), "user does not fold")
+        }
+    }
+    return spec.run_summary(fw)
+}
