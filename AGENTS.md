@@ -41,10 +41,14 @@ each Aether module ports, through which upstream commit, and what is left) and
 
 ## Porting an upstream change
 
-How far behind: upstream's head, 0.20.0 (e6b1cb4, 2026-11-20), is merged, but the
-port is ported through 0.13.0 (a2dd439) plus the commits PORT_STATUS's table
-"Upstream 0.13.0 to 0.20.0" marks ported (per-file commits are in its Status
-table); the failing files of `ae/tests/upstream-e2e.sh` are the to-do list. To port
+How far behind: upstream's head, 0.20.0 (e6b1cb4, 2026-11-20), is merged, and the
+port is ported through 0.13.0 (a2dd439) plus most of the commits after it (the
+table "Upstream 0.13.0 to 0.20.0" in PORT_STATUS lists each with its status; per-file
+commits are in its Status table). What is left is plugins (e5e024b), the SQLite
+metrics index (7757af0), unified credential resolution (8f8a2a0) and the Codex parts
+(out by policy), so the version string stays 0.13.0 and `tests/test_session.py` fails
+at its first assertion (the version check) and `tests/test_effort.py` in its Codex
+half. The failing files of `ae/tests/upstream-e2e.sh` are the to-do list. To port
 a change: fast-forward `main` to upstream and merge it here (the Zig sources and
 renamed docs/tests come across), run `tools/upstream-diff.sh` to see what changed
 in each ported file, port the change into the matching `ae/naeb/` module with its
@@ -101,7 +105,8 @@ tools/tui_tests.sh            # the TUI suites alone; ae/term/run-tests.sh for t
   port, or write the gap up in `asks/` and leave the case out in
   `ae/tests/upstream-e2e.sh` with its reason. Left out by policy: the Codex
   classes (no Codex sign-in or WebSocket) and `test_update.py`, `test_install.py`.
-  Last known: 29 of 30 files pass; `test_effort.py` fails in its Codex half.
+  Last known (cachyos, 2026-11-23): 28 of 30 files pass; `test_effort.py` fails in its Codex half
+  and `test_session.py` at its version assertion (see below).
 - The red-team suite makes unix sockets under the checkout, so it fails from a
   long path (the limit is 107 bytes). Run the whole thing from a checkout whose
   path is short (about 30 characters), and run `ae/tests/redteam/run.sh` alone if

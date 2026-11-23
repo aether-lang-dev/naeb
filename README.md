@@ -63,12 +63,17 @@ port is renamed to match.
 - **Benchmarks.** Upstream's speed, cost and memory numbers were measured on
   its Zig build and are not claimed for naeb.
 - **Behind upstream.** Upstream's head, 0.20.0 (e6b1cb4, 2026-11-20), is merged
-  here, but the port is ported through 0.13.0 (a2dd439) plus the individual
-  upstream commits after it that PORT_STATUS.md marks ported (it has the table of
-  all 48, with what is still to do). PORT_STATUS.md also lists, file by
-  file, the upstream commit each Aether module is ported through. A port of an
-  upstream change is done in the matching `ae/naeb/` module with tests, checked
-  against upstream's own tests.
+  here. The port is ported through 0.13.0 (a2dd439) plus most of what came after:
+  the TUI redesign, tuning and the final prompt wording, model families and
+  profiles, deliveries committed with the Step, `rerun`, `/model` across
+  services and resuming across models. It still lacks installable plugins
+  (e5e024b), the SQLite metrics index (7757af0), unified credential resolution
+  (8f8a2a0), and the Codex sign-in and fast mode, which are out by policy, so
+  the reported version stays 0.13.0 until a whole release is covered.
+  PORT_STATUS.md has the table of every upstream commit since 0.13.0 with its
+  status, and, file by file, the upstream commit each Aether module is ported
+  through. A port of an upstream change is done in the matching `ae/naeb/`
+  module with tests, checked against upstream's own tests.
 - **Names.** Everything the port names itself is `naeb`: the command, the
   `NAEB_*` environment variables (upstream's `NIB_*`), `~/.naeb` (upstream's
   `~/.nib`), `.naeb/skills` in a project, the hook variables `NAEB_EVENT`,

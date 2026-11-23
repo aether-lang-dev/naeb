@@ -8,9 +8,10 @@ and is never committed to; the port follows it.
 Ported through upstream commit: **a2dd439** (Release 0.13.0) for the files listed with it
 below, plus the individual upstream commits after it that the table "Upstream 0.13.0 to 0.20.0"
 lists as ported. `main` was fast-forwarded to upstream **e6b1cb4** (Release 0.20.0,
-2026-11-20) on 2026-11-23 and merged into `aether-port`; the port is therefore
-**not** current with it: that table is the to-do list, and `ae/tests/upstream-e2e.sh`'s
-failing files are its tests.
+2026-11-20) on 2026-11-23 and merged into `aether-port`. What the port still lacks of it is
+in that table: installable plugins (e5e024b), the SQLite metrics index (7757af0), unified
+credential resolution (8f8a2a0), the paste redraw change (8e854a4, its test passes without it)
+and the Codex parts (out by policy); `ae/tests/upstream-e2e.sh`'s failing files say the same.
 
 ## How the tracking works
 
@@ -74,15 +75,14 @@ tests read `/proc`, so on macOS `test_agent`, `test_agent_reuse` and
 - on the head that recorded this table: **17 passed, 13 failed** (the same list less
   providers, limits, skill_mentions; effort is the Codex half, out by policy).
 
-After the TUI redesign (21cfb75) and the tuning port (823c6fa), measured by file on cachyos
-(not a full run of the suite since the table above): passing `test_tui_stream`, `test_tui_mouse`,
-`test_undo`, `test_prediction`, `test_hooks`, `test_interjections`; still failing
-`test_background_run` (9 cases: `deliveries` records and the final prompt wording), `test_agent_fork`
-(1 case: the final prompt wording, `backgroundDelivery`/`backgroundWait`), `test_background_bash`
-(1 failure, 1 error: `deliveries`), `test_model`, `test_replay`, `test_session` (version), `test_effort`
-(Codex, policy). The Aether suites minus the red-team script were 87 of 88 at the redesign head, the
-one failure being `check_layers.sh` flagging an unpinned new module in the synced copy (pinned in
-the next commit; the gate is otherwise green).
+After the TUI redesign, the tuning port, the final prompt wording, deliveries with the Step, `rerun`,
+the model changes and the small ports above, on cachyos 2026-11-23: `ae/tests/upstream-e2e.sh`
+**28 passed, 2 failed** (the two: `test_session`, which stops at its first assertion, the version
+string against `build.zig.zon`, and passes whole when the version is set to 0.20.0 in a lab-only copy
+that is never committed; and `test_effort`, whose Codex half is out by policy). The Aether suites
+minus the red-team script: 89 of 89 on cachyos at that head. One flake that predates this work was
+fixed on the way: `test_agent`'s `test_parallel_nonzero_exit` failed about one run in six because the
+signal watcher polled every 20 ms (40 of 40 now).
 
 Version: no upstream release between 0.13.0 and 0.20.0 is fully covered (plugins, from 0.14.0, are
 out), so `build_info` stays at 0.13.0.
@@ -137,8 +137,8 @@ out (below).
 
 Before any release the full red-team suite (`ae/tests/redteam/run.sh`, 0 holes,
 including `mode_selection.py`) and upstream's end-to-end suite
-(`ae/tests/upstream-e2e.sh`, 29 of 30 with `test_effort`'s Codex half the one
-failure) must be run and green on the single `naeb` binary. Last run complete on the
+(`ae/tests/upstream-e2e.sh`, 28 of 30: `test_effort`'s Codex half and `test_session`'s version
+assertion are the two failures until a whole release is covered) must be run and green on the single `naeb` binary. Last run complete on the
 single binary: upstream's e2e suite, 29 of 30, on cachyos 2026-11-23 at the commit
 that announces --mode unfenced only on a terminal; `aeb .tests.ae` without the
 red-team script 88/88 and `mode_selection.py` 0 failures at the commit before it.
