@@ -14,6 +14,7 @@
 import std.list
 import std.string
 import naeb.jsonx
+import naeb.auth
 import naeb.config
 import naeb.provider.types
 import naeb.tui.commands
@@ -255,16 +256,18 @@ forget_sessions(m: *Menu) { m.sessions_loaded = 0 }
 
 // Loads the argument choices the input asks for. `services` is the app's
 // service lister: |arg: string| -> commands.Choice[] boxed in a ptr list.
-load(m: *Menu, input: string, p: *port.Port, home: string, cfg: ptr, services: fn) {
+load(m: *Menu, input: string, p: *port.Port, envp: ptr, home: string, cfg: ptr, services: fn) {
     if string.starts_with(input, "/model ") != 0 {
-        entries, err = config.model_entries(home, cfg)
+        entries, err = auth.model_entries(envp, home, cfg)
         commands.Choice[] out = []
         if err == "" {
             n = list.list_size(entries)
             for i in 0..n {
                 en = list.list_get_raw(entries, i) as *config.ModelEntry
-                active = en.model == model_of_(cfg)
-                c = commands.choice(en.model, en.model, if active { "current" } else { "" })
+                active = en.provider == types.name(cfg) && en.model == model_of_(cfg)
+                c = commands.choice("${en.provider}/${en.model}", en.model, if active { "current" } else { "" })
+                c.service = en.provider
+                c.has_service = 1
                 out.push(c)
             }
         }

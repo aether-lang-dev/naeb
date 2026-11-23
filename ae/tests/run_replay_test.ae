@@ -36,6 +36,17 @@ const BACKGROUND_MAIN = <<LOG
 {"bash":{"id":"b1","run":1,"state":"superseded","superseded_by":"b2","elapsed_ms":20}}
 LOG
 
+const RERUN_MAIN = <<LOG
+{"messages":[{"role":"system","content":"s"},{"role":"user","content":"u"}],"tuning":{"delivery":"tool","validation":"none"}}
+{"from":0,"messages":[],"source":{"step":1,"run":0,"code":"bad()","arguments":"{\"code\":\"bad()\"}","failed":false}}
+{"from":0,"messages":[],"source":{"step":1,"run":0,"code":"bad()","arguments":"{\"code\":\"bad()\"}","failed":true}}
+{"from":2,"messages":[{"role":"assistant","tool_calls":[{"id":"a","function":{"name":"run","arguments":"{\"code\":\"bad()\"}"}}]},{"role":"tool","tool_call_id":"a","content":"Error: x\nSource: 1:0"}]}
+{"from":0,"messages":[],"source":{"step":2,"run":0,"code":"good()","base":"1:0","arguments":"{}","failed":false}}
+{"from":0,"messages":[],"hook":{"command":"true","exit_code":0}}
+{"from":4,"messages":[{"role":"assistant","tool_calls":[{"id":"b","function":{"name":"rerun","arguments":"{\"base\":\"1:0\",\"edits\":[]}"}},{"id":"c","function":{"name":"run","arguments":"{\"code\":\"slow()\"}"}}]},{"role":"tool","tool_call_id":"b","content":"ok\n\n[background run r1 finished]\nlate"},{"role":"tool","tool_call_id":"c","content":"Run still executing"}],"run_results":[{"tool_call_id":"b","output":"ok"},{"tool_call_id":"c","background_id":"r1"}],"deliveries":[{"event":{"id":"r1","kind":"run","state":"finished","completion":{"step":2,"run_index":1,"ok":false,"output":"late\nSource: 2:1","source_reference":true}},"via":"fold","output_bytes":3}]}
+
+LOG
+
 const SAME_AS_CALLS = <<LOG
 {"step":1,"run":0,"index":0,"seq":0,"name":"read","args":{"path":"a"},"ok":true,"result":"{\"text\":\"hello\"}","sha256":"same","truncated":false}
 {"step":1,"run":0,"meta":{"start_ms_epoch":10,"end":"ok"}}
@@ -116,6 +127,24 @@ main() {
                 spec.assert_eq(r.child, 1, "child ${i}")
                 i = i + 1
             }
+        }
+        spec.it("rerun resolves its source; folded and delivered Runs replay their own output") callback {
+            r, e = run_replay.load_main(RERUN_MAIN)
+            spec.assert_str_eq(e, "", "loads")
+            spec.assert_eq(list.list_size(r), 3, "three Runs")
+            a = list.list_get_raw(r, 0) as *run_replay.Run
+            spec.assert_str_eq(a.code, "bad()", "first code")
+            spec.assert_eq(a.source_reference, 1, "a failed script carries its reference")
+            spec.assert_str_eq(a.expected, "Error: x\nSource: 1:0", "its output")
+            b = list.list_get_raw(r, 1) as *run_replay.Run
+            spec.assert_str_eq(b.code, "good()", "a rerun executes its resolved source")
+            spec.assert_eq(b.source_reference, 0, "no reference when it succeeded")
+            spec.assert_str_eq(b.expected, "ok", "the receiving Run keeps its own output, not the folded text")
+            c = list.list_get_raw(r, 2) as *run_replay.Run
+            spec.assert_str_eq(c.background_id, "r1", "background id")
+            spec.assert_eq(c.has_expected, 1, "its delivered completion is the expected output")
+            spec.assert_str_eq(c.expected, "late\nSource: 2:1", "completion output")
+            spec.assert_eq(c.source_reference, 1, "completion verdict")
         }
         spec.it("background lifecycle records do not replace replay history") callback {
             runs, err = run_replay.load_main(nl_(BACKGROUND_MAIN))

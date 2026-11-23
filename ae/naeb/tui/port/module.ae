@@ -83,6 +83,7 @@ struct Port {
     switch_config: fn
     sessions: fn
     tasks: fn
+    resume_profile: fn
     request_stop: fn
     user_stop: fn
     take_stop: fn
@@ -218,6 +219,7 @@ scripted(cfg: @keep ptr, home: string) -> *Port {
     p.any_pending = |ctx: ptr| { return (ctx as *Script).pending }
     p.waiting_task = |ctx: ptr| { return "" }
     p.recovery_hint = |ctx: ptr, reason: string| { return (ctx as *Script).hint }
+    p.resume_profile = |ctx: ptr, model: string| { return "" }
     p.recovery_files = |ctx: ptr| { return list.list_new() }
     p.run_js = |ctx: ptr, code: string| { return (ctx as *Script).js_reply }
     p.sandbox_status = |ctx: ptr| { return "off (scripted)" }

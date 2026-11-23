@@ -18,7 +18,7 @@ import naeb.provider.types
 
 exports(system, user, user_from, assistant, tool, role, content, has_content, str_or, bool_of, raw,
         set_raw, without, tool_calls, tool_call_count, reasoning_provider, reasoning_data,
-        reasoning_includes_output, step_effort, history_json, ORDER)
+        reasoning_includes_output, reasoning_model, tag_reasoning_model, reasoning_compatible, step_effort, history_json, ORDER)
 
 const ORDER = "role content tool_calls tool_call_id reasoning images phase waiting step_effort bash_replacements run_ok tool_summary step_calls_omitted source background_id background_ok background_run background_kind"
 
@@ -211,6 +211,47 @@ reasoning_field_(m: string, key: string) -> string {
 
 reasoning_provider(m: string) -> string { return reasoning_field_(m, "provider") }
 reasoning_data(m: string) -> string { return reasoning_field_(m, "data") }
+
+// (1, model) when the reasoning records the model that produced it, else (0, "").
+reasoning_model(m: string) -> (int, string) {
+    v = jsonx.parse(m)
+    if v == null { return 0, "" }
+    r = jsonx.field(v, "reasoning")
+    has = 0
+    out = ""
+    if r != null && jsonx.kind(r, "model") == 3 {
+        has = 1
+        out = string.copy(jsonx.str_or(r, "model", ""))
+    }
+    jsonx.free(v)
+    return has, out
+}
+
+// `m` with its reasoning (if any, and tied to a model) recording `model`;
+// "" means the origin is unknown. A reasoning that already has a model keeps it.
+tag_reasoning_model(m: string, model: string) -> string {
+    p = reasoning_provider(m)
+    if p == "" || types.reasoning_tracks_model(p) == false { return m }
+    has, _old = reasoning_model(m)
+    if has == 1 { return m }
+    inc = ""
+    if reasoning_includes_output(m) == 1 { inc = ",\"includes_output\":true" }
+    return set_raw(m, "reasoning", "{\"provider\":${jsonx.quote(p)},\"data\":${jsonx.quote(reasoning_data(m))}${inc},\"model\":${jsonx.quote(model)}}")
+}
+
+// Whether the reasoning of `m` may be sent to the service `cp` selects: the
+// same provider, and (where the data is tied to a model) the same model.
+// Legacy records without a model, or with an empty one, are not.
+reasoning_compatible(m: string, cp: ptr) -> bool {
+    p = reasoning_provider(m)
+    if cp == null || p == "" { return false }
+    c = cp as *types.Config
+    if p != c.provider { return false }
+    if types.protocol(cp) == "chat_completions" { return true }
+    has, model = reasoning_model(m)
+    if has == 0 || model == "" { return false }
+    return model == c.model
+}
 
 reasoning_includes_output(m: string) -> int {
     v = jsonx.parse(m)

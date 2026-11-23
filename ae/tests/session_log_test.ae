@@ -873,6 +873,157 @@ t_images_() {
     spec.assert_true(string.starts_with(msg.raw(item_(h, 1), "images"), "[{\"path\":\"/x/a.png\""), "images are written back as read")
 }
 
+// Upstream 9bf5e6a: a record's `deliveries` settle the background tasks they
+// carry and charge their bytes (not for "wait"); the receiving Step zeroes
+// what was pending first.
+t_deliveries_() {
+    sys = msg.system("base")
+    started = "{\"id\":\"r1\",\"kind\":\"run\",\"state\":\"started\"}"
+    fin = "{\"id\":\"r1\",\"kind\":\"run\",\"state\":\"finished\",\"ok\":true}"
+    d = rec_("", 0, "[${sys}]", 0)
+    d = app_(d, ",\"background\":${started}", 0, "[]", 0)
+    h = list.list_new()
+    r = rp_("${d}\n", h)
+    spec.assert_eq(list.list_size(r.lost_background), 1, "an unsettled task is lost")
+    fold = "[{\"event\":${fin},\"via\":\"fold\",\"output_bytes\":42}]"
+    d2 = app_(d, ",\"model_ms\":1,\"deliveries\":${fold}", 1, "[{\"role\":\"assistant\",\"content\":\"a\"}]", 0)
+    h2 = list.list_new()
+    r2 = rp_("${d2}\n", h2)
+    spec.assert_str_eq(r2.err, "", "replay ok")
+    spec.assert_eq(list.list_size(r2.lost_background), 0, "a delivered task is not lost")
+    spec.assert_eq(list.list_size(r2.background_repairs), 0, "nothing to repair")
+    spec.assert_eq(r2.pending_background_bytes as int, 42, "the fold is billed to the next Step")
+    wait = "[{\"event\":${fin},\"via\":\"wait\",\"output_bytes\":99}]"
+    d3 = app_(d, ",\"model_ms\":1,\"deliveries\":${wait}", 1, "[{\"role\":\"assistant\",\"content\":\"a\"}]", 0)
+    r3 = rp_("${d3}\n", list.list_new())
+    spec.assert_eq(r3.pending_background_bytes as int, 0, "a wait is not billed")
+    spec.assert_eq(list.list_size(r3.lost_background), 0, "a waited task is settled")
+    ins = "[{\"event\":${fin},\"via\":\"insert\",\"output_bytes\":7}]"
+    bgm = "{\"role\":\"user\",\"content\":\"1234567\",\"source\":\"background\",\"background_id\":\"r1\",\"background_kind\":\"run\",\"background_ok\":true}"
+    d4 = app_(d, ",\"deliveries\":${ins}", 1, "[${bgm}]", 0)
+    r4 = rp_("${d4}\n", list.list_new())
+    spec.assert_eq(r4.pending_background_bytes as int, 7, "an insert is billed")
+    spec.assert_eq(list.list_size(r4.lost_background), 0, "an inserted task is settled")
+}
+
+// A torn tail that is itself valid JSON (only its newline is missing) must
+// not become a record when the repair record's newline completes it.
+t_torn_valid_tail_() {
+    d = tmp_()
+    path = "${d}/torn.jsonl"
+    l, _e = log.create(path)
+    h = list.list_new()
+    cm_(l, h, 0, L1_(msg.system("base")), 0, "")
+    cm_(l, h, 1, L1_(msg.user("one")), 1, "")
+    log.close(l)
+    whole = read_(path)
+    extra = "{\"at\":1,\"from\":2,\"messages\":[{\"role\":\"user\",\"content\":\"torn\"}],\"context_tokens\":2,\"repair\":false}"
+    fs.write(path, "${whole}${extra}")
+    h2 = list.list_new()
+    l2, e2 = log.restore(path, h2, "", 0)
+    spec.assert_str_eq(e2, "", "restore")
+    spec.assert_eq(list.list_size(h2), 2, "the unterminated record is not committed")
+    log.close(l2)
+    h3 = list.list_new()
+    l3, e3 = log.restore(path, h3, "", 0)
+    spec.assert_str_eq(e3, "", "a second restore")
+    spec.assert_eq(list.list_size(h3), 2, "it does not become a record after the repair either")
+    log.close(l3)
+}
+
+// A `source` record is local: it commits nothing, and the latest one for a
+// reference resolves only for a Run that is in committed history with the same code.
+t_source_() {
+    d = tmp_()
+    path = "${d}/source.jsonl"
+    l, _e = log.create(path)
+    h = list.list_new()
+    cm_(l, h, 0, L1_(msg.system("base")), 0, "")
+    cm_(l, h, 1, L1_(msg.user("one")), 1, "")
+    spec.assert_str_eq(log.source(l, 1, 0, "bad()", "", "{\"code\":\"bad()\"}", 0), "", "start record")
+    found0, _c0, _f0 = log.find_source(l, "1:0")
+    spec.assert_eq(found0, 0, "a Run that is not committed is unavailable")
+    log.source(l, 1, 0, "bad()", "", "{\"code\":\"bad()\"}", 1)
+    calls = list.list_new()
+    list.list_add_raw(calls, types.tool_call_new("a", "run", "{\"code\":\"bad()\"}"))
+    cm_(l, h, 2, L2_(msg.assistant("", calls, "", "", 0, "", -1, ""), msg.tool("a", "Error\nSource: 1:0", "")), 2, "")
+    found, code, failed = log.find_source(l, "1:0")
+    spec.assert_eq(found, 1, "committed")
+    spec.assert_str_eq(code, "bad()", "code")
+    spec.assert_eq(failed, 1, "failed")
+    found2, _c2, _f2 = log.find_source(l, "9:9")
+    spec.assert_eq(found2, 0, "unknown reference")
+    log.source(l, 1, 0, "other()", "", "{\"code\":\"other()\"}", 1)
+    found3, _c3, _f3 = log.find_source(l, "1:0")
+    spec.assert_eq(found3, 0, "the latest source must match the committed script")
+    hh = list.list_new()
+    r = rp_(read_(path), hh)
+    spec.assert_str_eq(r.err, "", "source records replay as no-ops")
+    spec.assert_eq(list.list_size(hh), 4, "history unchanged by source records")
+    log.close(l)
+}
+
+// Upstream bda9d03: reasoning is tied to the model that produced it; legacy
+// records get the record's model (or none), and a compacted snapshot keeps it.
+t_reasoning_model_() {
+    r1 = "{\"role\":\"assistant\",\"content\":\"old reply\",\"reasoning\":{\"provider\":\"openai\",\"data\":\"[]\"}}"
+    r2 = "{\"role\":\"assistant\",\"reasoning\":{\"provider\":\"openai\",\"data\":\"[]\"}}"
+    d = rec_(",\"provider\":\"openai\",\"model\":\"old\"", 0, "[${msg.system("base")}]", 0)
+    d = app_(d, ",\"model\":\"old\"", 1, "[${r1}]", 0)
+    d = app_(d, "", 2, "[${r2}]", 0)
+    h = list.list_new()
+    r = rp_("${d}\n", h)
+    spec.assert_str_eq(r.err, "", "replay ok")
+    has1, m1 = msg.reasoning_model(item_(h, 1))
+    spec.assert_eq(has1, 1, "recorded")
+    spec.assert_str_eq(m1, "old", "the record's model")
+    has2, m2 = msg.reasoning_model(item_(h, 2))
+    spec.assert_eq(has2, 1, "unknown origin is recorded as empty")
+    spec.assert_str_eq(m2, "", "empty model")
+    snap = "{\"at\":2,\"model\":\"new\",\"from\":1,\"messages\":[${item_(h, 1)},${item_(h, 2)}],\"context_tokens\":0,\"repair\":false}"
+    h2 = list.list_new()
+    rs2 = rp_("${d}\n${snap}\n", h2)
+    spec.assert_str_eq(rs2.err, "", "snapshot replay ok")
+    _h, mm = msg.reasoning_model(item_(h2, 1))
+    spec.assert_str_eq(mm, "old", "a compacted snapshot keeps the producing model")
+    cp = types.new_config("openai", "", "", "new")
+    spec.assert_false(msg.reasoning_compatible(item_(h2, 1), cp), "another model's reasoning is not sent")
+    spec.assert_false(msg.reasoning_compatible(item_(h2, 2), cp), "unknown origin is not sent")
+    same = types.new_config("openai", "", "", "old")
+    spec.assert_true(msg.reasoning_compatible(item_(h2, 1), same), "the producing model's is")
+}
+
+// Upstream 019eefc: the header's model, family and profile survive restore, a
+// fork header labels the child runtime rather than the inherited system text,
+// and a legacy header has none of them.
+t_header_profile_() {
+    d = tmp_()
+    sysm = "[${msg.system("base")}]"
+    m1 = ",\"provider\":\"openai\",\"model\":\"deepseek-flash\",\"family\":\"deepseek\",\"profile\":\"deepseek\""
+    p1 = "${d}/h1.jsonl"
+    fs.write(p1, "${rec_(m1, 0, sysm, 0)}\n")
+    l1, e1 = log.restore(p1, list.list_new(), "", 0)
+    spec.assert_str_eq(e1, "", "restore")
+    spec.assert_str_eq(lg_(l1).header_model, "deepseek-flash", "model")
+    spec.assert_eq(lg_(l1).has_header_model, 1, "has model")
+    spec.assert_str_eq(lg_(l1).header_family, "deepseek", "family")
+    spec.assert_str_eq(lg_(l1).header_profile, "deepseek", "profile")
+    log.close(l1)
+    m2 = ",\"provider\":\"openai\",\"model\":\"gpt-6.1-sol\",\"family\":\"gpt\",\"profile\":\"codex\",\"forked_from\":{\"session\":\"parent\",\"message_count\":1}"
+    p2 = "${d}/h2.jsonl"
+    fs.write(p2, "${rec_(m2, 0, sysm, 0)}\n")
+    l2, _e2 = log.restore(p2, list.list_new(), "", 0)
+    spec.assert_str_eq(lg_(l2).header_profile, "", "a fork header carries no retained profile")
+    spec.assert_str_eq(lg_(l2).header_model, "gpt-6.1-sol", "but its model")
+    log.close(l2)
+    m3 = ",\"provider\":\"openai\""
+    p3 = "${d}/h3.jsonl"
+    fs.write(p3, "${rec_(m3, 0, sysm, 0)}\n")
+    l3, _e3 = log.restore(p3, list.list_new(), "", 0)
+    spec.assert_eq(lg_(l3).has_header_model, 0, "a legacy header has no model")
+    log.close(l3)
+}
+
 main() {
     fw = spec.init()
     spec.describe(fw, "session.log") {
@@ -896,6 +1047,11 @@ main() {
         spec.it("replay carries unbilled background bytes across interrupted Turns and clears on a committed Step") callback { t_pending_interrupted_() }
         spec.it("pending background bytes count only appended UTF-8 content and clear only on full Steps") callback { t_pending_table_() }
         spec.it("restore preserves pending background bytes across snapshots and idempotent lifecycle repairs") callback { t_pending_restore_() }
+        spec.it("deliveries settle background tasks and bill inserts and folds, not waits") callback { t_deliveries_() }
+        spec.it("a torn tail that is valid JSON is not committed by the repair") callback { t_torn_valid_tail_() }
+        spec.it("source records resolve only committed Runs and commit nothing") callback { t_source_() }
+        spec.it("reasoning provenance survives legacy replay and compaction under a different model") callback { t_reasoning_model_() }
+        spec.it("the header's model, family and profile survive restore; a fork header keeps no profile") callback { t_header_profile_() }
         spec.it("fork header retains provenance and cache across compaction without billing inherited Steps") callback { t_fork_header_() }
         spec.it("0.4.0 replay restores background Run ids and bash replacements from lifecycle records") callback { t_run_ids_() }
         spec.it("background Run completion restores its superseded bash on the originating Run") callback { t_completion_replacements_() }

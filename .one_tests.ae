@@ -1,0 +1,24 @@
+import bldr
+import aether
+import aether (source, lib, caps)
+
+aeb(cap) {
+    bldr.build() {
+        aether.program_test() {
+            source("ae/tests/prompt_test.ae")
+            lib("ae")
+        }
+        aether.program_test() {
+            source("ae/tests/tui_commands_test.ae")
+            lib("ae")
+        }
+        aether.program_test() {
+            source("ae/tests/tui_app_test.ae")
+            lib("ae")
+        }
+        aether.program_test() {
+            source("ae/tests/tui_menu_test.ae")
+            lib("ae")
+        }
+    }
+}

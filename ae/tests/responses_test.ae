@@ -71,6 +71,8 @@ has_(s: string, part: string) -> int {
     return 0
 }
 
+cfg_model_(cp: ptr) -> string { return (cp as *types.Config).model }
+
 msgs_user_(text: string) -> ptr {
     l = list.list_new()
     list.list_add(l, msg.user(text))
@@ -474,7 +476,7 @@ main() {
             // The next request replays the reasoning item and the call, then the result.
             history = list.list_new()
             list.list_add(history, msg.user("task"))
-            list.list_add(history, msg.assistant(r.text, r.tool_calls, r.reasoning_provider, r.reasoning_data, r.reasoning_includes_output, r.phase, -1, ""))
+            list.list_add(history, msg.tag_reasoning_model(msg.assistant(r.text, r.tool_calls, r.reasoning_provider, r.reasoning_data, r.reasoning_includes_output, r.phase, -1, ""), cfg_model_(cp)))
             list.list_add(history, msg.tool("call_1", "done", ""))
             body, err = responses.request_body(cp, "key", history, RUN_TOOLS, -1)
             spec.assert_str_eq(err, "", "body")
@@ -501,7 +503,7 @@ main() {
             spec.assert_str_eq(tc.arguments, "{\"code\":\"console.log(1);\"}", "code as arguments")
             history = list.list_new()
             list.list_add(history, msg.user("task"))
-            list.list_add(history, msg.assistant(r.text, r.tool_calls, r.reasoning_provider, r.reasoning_data, r.reasoning_includes_output, r.phase, -1, ""))
+            list.list_add(history, msg.tag_reasoning_model(msg.assistant(r.text, r.tool_calls, r.reasoning_provider, r.reasoning_data, r.reasoning_includes_output, r.phase, -1, ""), cfg_model_(cp)))
             list.list_add(history, msg.tool("call_1", "done", ""))
             body, err = responses.request_body(cp, "key", history, RUN_TOOLS, -1)
             spec.assert_str_eq(err, "", "body")
@@ -529,7 +531,7 @@ main() {
             spec.assert_eq(kc.deltas, 2, "two deltas")
             history = list.list_new()
             list.list_add(history, msg.user("hi"))
-            list.list_add(history, msg.assistant(r.text, r.tool_calls, r.reasoning_provider, r.reasoning_data, r.reasoning_includes_output, r.phase, -1, ""))
+            list.list_add(history, msg.tag_reasoning_model(msg.assistant(r.text, r.tool_calls, r.reasoning_provider, r.reasoning_data, r.reasoning_includes_output, r.phase, -1, ""), cfg_model_(cp)))
             body, err = responses.request_body(cp, "key", history, "[]", -1)
             root = doc_(body)
             spec.assert_str_eq(jsonx.str_or(arr_(root, "input", 1), "content", ""), "mock answer", "normalized message content")

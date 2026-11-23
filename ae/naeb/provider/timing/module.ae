@@ -276,7 +276,7 @@ finish(mp: ptr, calls: ptr) -> ptr {
     i = 0
     while i < list.list_size(calls) {
         tc = list.list_get_raw(calls, i) as *types.ToolCall
-        if tc.name == "run" {
+        if tc.name == "run" || tc.name == "rerun" {
             k = 0
             while k < m.used {
                 s = list.list_get_raw(m.slots, k) as *ArgSlot

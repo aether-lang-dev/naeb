@@ -86,14 +86,18 @@ main() {
         spec.it("model choices filter and complete without running the bare command") callback {
             e = none_()
             commands.Choice[] models = []
-            models.push(commands.choice("gpt-6.1-sol", "gpt-6.1-sol", "current"))
-            models.push(commands.choice("gpt-6.1-terra", "gpt-6.1-terra", ""))
+            models.push(commands.choice("openai/gpt-6.1-sol", "gpt-6.1-sol", "current"))
+            models.push(commands.choice("openai/gpt-6.1-terra", "gpt-6.1-terra", ""))
+            models.push(commands.choice("local/gpt-6.1-sol", "gpt-6.1-sol", ""))
             spec.assert_false(commands.allowed_while_busy("/model gpt-6.1-sol"), "busy")
             spec.assert_false(commands.candidate_runs(commands.candidates("/model", e, e, models, e)[0]), "bare")
             selected = commands.candidates("/model gpt-6.1-s", e, e, models, e)
-            spec.assert_eq(selected.len, 1, "one")
+            spec.assert_eq(selected.len, 2, "a model matches in every service that has it")
             spec.assert_str_eq(selected[0].detail, "current", "detail")
-            spec.assert_str_eq(commands.candidate_line(selected[0]), "/model gpt-6.1-sol", "line")
+            spec.assert_str_eq(commands.candidate_line(selected[0]), "/model openai/gpt-6.1-sol", "line")
+            qualified = commands.candidates("/model local/gpt-6.1-s", e, e, models, e)
+            spec.assert_eq(qualified.len, 1, "a qualified prefix picks one service")
+            spec.assert_str_eq(qualified[0].value, "local/gpt-6.1-sol", "value")
         }
         spec.it("service choices complete /provider and run on Enter") callback {
             e = none_()

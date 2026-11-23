@@ -67,7 +67,9 @@ main() {
             ms = list.list_new()
             list.list_add(ms, msg.system("instructions"))
             list.list_add(ms, msg.user("task"))
-            list.list_add(ms, msg.assistant("", list.list_new(), "anthropic", blocks, 1, "", -1, ""))
+            tcalls = list.list_new()
+            list.list_add(tcalls, types.tool_call_new("call", "run", "{\"code\":\"1\"}"))
+            list.list_add(ms, msg.tag_reasoning_model(msg.assistant("", tcalls, "anthropic", blocks, 1, "", -1, ""), c.model))
             list.list_add(ms, msg.tool("call", "result", ""))
             body, err = anthropic.request_body(cp, ms, "[]", -1)
             spec.assert_str_eq(err, "", "body")
@@ -78,6 +80,11 @@ main() {
             spec.assert_eq(has_(body, "tool_result"), 1, "tool_result")
             c.model = "claude-haiku-5-5"
             spec.assert_str_eq(anthropic.effort(cp), "off", "haiku can be disabled")
+            changed, ce = anthropic.request_body(cp, ms, "[]", -1)
+            spec.assert_str_eq(ce, "", "changed-model body")
+            spec.assert_eq(has_(changed, "opaque-signature"), 0, "another model's signed reasoning is not sent")
+            spec.assert_eq(has_(changed, "\"type\":\"tool_use\""), 1, "the call stays")
+            spec.assert_eq(has_(changed, "\"tool_use_id\":\"call\""), 1, "its result stays paired")
             c.model = "claude-3-7-sonnet"
             types.set_effort(cp, "medium")
             lb, e2 = anthropic.request_body(cp, user_msgs_(), "[]", 32)

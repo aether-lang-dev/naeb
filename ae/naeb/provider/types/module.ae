@@ -11,7 +11,7 @@ import std.list
 import naeb.jsonx
 
 exports(session_max_tokens, Config, Limits, McpServer, mcp_server_new, mcp_server_copy, Usage, Reply, ToolCall, new_config, new_limits, copy, name, protocol, vision,
-        custom_run, set_effort, check_session, key_hint, missing_key, known_id, definition_protocol,
+        custom_run, set_effort, check_session, check_fork, reasoning_tracks_model, key_hint, missing_key, known_id, definition_protocol,
         definition_base_url, definition_key_envs, definition_default_model, definition_name,
         definition_vision, definition_custom_run, definition_models, model_context_window, small_model, builtin_ids,
         usage_new, usage_add, usage_json, usage_copy, reply_new, tool_call_new, tool_calls_json,
@@ -462,12 +462,28 @@ set_effort(cp: ptr, value: string) -> string {
     return ""
 }
 
-// "" or "SessionProviderMismatch" / "SessionModelMismatch".
-check_session(cp: ptr, id: string, model: string) -> string {
+// "" or "SessionProviderMismatch": a Session resumes with the model selected now.
+check_session(cp: ptr, id: string) -> string {
     c = cp as *Config
     if c.provider != id { return "SessionProviderMismatch" }
+    return ""
+}
+
+// "" or "SessionProviderMismatch" / "SessionModelMismatch": a fork continues
+// its parent's cached prefix, so a Responses or Anthropic one keeps the model.
+check_fork(cp: ptr, id: string, model: string) -> string {
+    c = cp as *Config
+    e = check_session(cp, id)
+    if e != "" { return e }
     if protocol(cp) != "chat_completions" && model != "" && model != c.model { return "SessionModelMismatch" }
     return ""
+}
+
+// Whether reasoning of `provider` is tied to the model that produced it
+// (encrypted or signed continuation data): every wire but chat completions.
+reasoning_tracks_model(provider: string) -> bool {
+    if provider == "custom" { return true }
+    return definition_protocol(provider) != "chat_completions"
 }
 
 // What a 401 asks the user to check, without revealing any key.

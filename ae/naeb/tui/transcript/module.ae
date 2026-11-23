@@ -1045,6 +1045,9 @@ add_history_message_(t: *Transcript, v: ptr, runs: *RunMap) {
         }
         if found < 0 { return }
         e = at(t, found)
+        // A `rerun`'s Script is the source it executed, not its edits.
+        executed = jsonx.str_or(v, "executed_source", "")
+        if executed != "" { e.text = trim_nl_both_(executed) }
         e.run = entry.RUN_FAILED
         if has_bg_id {
             e.run = entry.RUN_BACKGROUND

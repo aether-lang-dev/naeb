@@ -31,7 +31,7 @@ import naeb.tools.atomic_file
 
 exports(record_tools, File, Prov, Switch, Custom, ModelEntry, Val, DEFAULT_PROVIDER, home, load, parse, parse_value,
         resolve, apply_store, credentialed, startup_order, custom_providers, endpoint_id_problem,
-        add_endpoint, parse_model, model_text, save_model, model_entries, save_effort, save_simple,
+        add_endpoint, parse_model, model_text, save_model, Listing, listing, push_entry, save_effort, save_simple,
         save_skill, save_mcp, load_skills, load_mcp, skill_enabled, enabled_skills, rewrite_value)
 
 const DEFAULT_PROVIDER = "anthropic"
@@ -1566,43 +1566,37 @@ save_model(envp: ptr, home_path: string, provider_id: string, model: string) -> 
     return cp, "", ""
 }
 
-// The models of the service `cp` selects: its catalog, or a custom service's
-// configured model, plus the current one if it is not listed.
-// (list of *ModelEntry, error name).
-model_entries(home_path: string, cp: ptr) -> (ptr, string) {
-    c = cp as *types.Config
-    out = list.list_new()
-    nm = types.name(cp)
-    if c.provider == "custom" {
-        items, err = custom_providers(home_path)
-        if err != "" { return null, err }
-        i = 0
-        while i < list.list_size(items) {
-            cu = list.list_get_raw(items, i) as *Custom
-            if cu.id == nm { push_entry_(out, nm, cu.model) }
-            i = i + 1
-        }
-    } else {
-        models = types.definition_models(c.provider)
-        if list.list_size(models) == 0 { push_entry_(out, c.provider, types.definition_default_model(c.provider)) }
-        i = 0
-        while i < list.list_size(models) {
-            m, _g = list.get_string(models, i)
-            push_entry_(out, c.provider, m)
-            i = i + 1
-        }
-    }
-    j = 0
-    while j < list.list_size(out) {
-        en = list.list_get_raw(out, j) as *ModelEntry
-        if en.model == c.model { return out, "" }
-        j = j + 1
-    }
-    push_entry_(out, nm, c.model)
-    return out, ""
+// What config.toml names for the model listing (see auth.model_entries):
+// every section's name, the models its sections set, and the selected provider.
+struct Listing {
+    names: ptr       // list of strings: every [<id>] and [providers.<id>] section
+    models: ptr      // list of *ModelEntry: each section's own model, file order
+    selected: string // the top-level `provider`, "" none
 }
 
-push_entry_(l: ptr, provider_id: string, model: string) {
+listing(home_path: string) -> (ptr, string) {
+    path = join_(home_path, "config.toml")
+    text, rerr = read_text_(path)
+    if rerr != "" { return null, rerr }
+    fp, _d = parse(text, path)
+    if fp == null { return null, "InvalidConfig" }
+    file = fp as *File
+    l = heap.new(Listing)
+    l.names = list.list_new()
+    l.models = list.list_new()
+    l.selected = ""
+    if file.provider_set == 1 { l.selected = string.copy(file.provider_name) }
+    i = 0
+    while i < list.list_size(file.providers) {
+        item = list.list_get_raw(file.providers, i) as *Prov
+        i = i + 1
+        list.list_add(l.names, string.copy(item.name))
+        if item.model_set == 1 { push_entry(l.models, item.name, item.model) }
+    }
+    return l as ptr, ""
+}
+
+push_entry(l: ptr, provider_id: string, model: string) {
     en = heap.new(ModelEntry)
     en.provider = string.copy(provider_id)
     en.model = string.copy(model)

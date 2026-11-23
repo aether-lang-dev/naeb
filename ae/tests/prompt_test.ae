@@ -32,6 +32,10 @@ tmp_() -> string {
     return real
 }
 
+cfg_() -> ptr {
+    return types.new_config("chat_completions", "", "", "mock")
+}
+
 host_docs_() -> string {
     t = tools.new("/unused")
     return tools.docs(t)
@@ -383,15 +387,15 @@ main() {
     spec.describe(fw, "session.compact") {
         spec.it("compaction cuts preserve recent turns and complete tool groups") callback {
             m = messages_()
-            spec.assert_eq(compact.compaction_cut(m, 10, 128000 as long), 3, "recent turns")
-            spec.assert_eq(compact.compaction_cut(m, 10, 64 as long), 7, "tool group")
-            spec.assert_eq(compact.compaction_cut(m, 7, 64 as long), 1, "too few")
-            e = compact.estimate_tokens(m, 3, 10)
-            spec.assert_eq(compact.compaction_cut(m, 10, e * 4 as long), 3, "kept turns fit a quarter of the window")
-            spec.assert_eq(compact.compaction_cut(m, 10, e * 3 as long), 7, "kept turns over a quarter fall back to Steps")
+            spec.assert_eq(compact.compaction_cut(m, 10, 128000 as long, cfg_()), 3, "recent turns")
+            spec.assert_eq(compact.compaction_cut(m, 10, 64 as long, cfg_()), 7, "tool group")
+            spec.assert_eq(compact.compaction_cut(m, 7, 64 as long, cfg_()), 1, "too few")
+            e = compact.estimate_tokens(m, 3, 10, cfg_())
+            spec.assert_eq(compact.compaction_cut(m, 10, e * 4 as long, cfg_()), 3, "kept turns fit a quarter of the window")
+            spec.assert_eq(compact.compaction_cut(m, 10, e * 3 as long, cfg_()), 7, "kept turns over a quarter fall back to Steps")
             order = [0, 1, 4, 5, 6, 4, 5, 6, 4, 5, 6]
             long_turn = pick_(m, order, 11)
-            spec.assert_eq(compact.compaction_cut(long_turn, 11, 128000 as long), 5, "long turn")
+            spec.assert_eq(compact.compaction_cut(long_turn, 11, 128000 as long, cfg_()), 5, "long turn")
         }
         spec.it("compaction replaces images with placeholders and budgets them") callback {
             shot = "{\"path\":\"p\",\"name\":\"shot.png\",\"media_type\":\"image/png\",\"bytes\":10,\"width\":1280,\"height\":720}"
@@ -410,41 +414,47 @@ main() {
             list.list_add(one, msg.user("look"))
             two_l = list.list_new()
             list.list_add(two_l, img_msg)
-            spec.assert_eq_long(compact.estimate_tokens(two_l, 0, 1), compact.estimate_tokens(one, 0, 1) + 1500, "one image budgeted")
+            spec.assert_eq_long(compact.estimate_tokens(two_l, 0, 1, cfg_()), compact.estimate_tokens(one, 0, 1, cfg_()) + 1500, "one image budgeted")
             // the summary request carries placeholders, not images
             history = list.list_new()
             list.list_add(history, msg.system("s"))
             list.list_add(history, img_msg)
-            req = compact.summary_request(history, 2)
+            req = compact.summary_request(history, 2, "")
             first, _g = list.get_string(req, 1)
             spec.assert_str_eq(msg.raw(first, "images"), "", "request has no images")
             spec.assert_str_eq(msg.content(first), "look\n[image shot.png 1280×720 omitted]", "request has the placeholder")
             kept, _h = list.get_string(history, 1)
             spec.assert_true(msg.raw(kept, "images") != "", "the history keeps its images")
         }
+        spec.it("compaction prompt appends optional user focus") callback {
+            spec.assert_str_eq(compact.summary_prompt("   "), compact.SUMMARY_PROMPT, "blank focus")
+            focused = compact.summary_prompt("keep auth decisions")
+            spec.assert_true(string.starts_with(focused, compact.SUMMARY_PROMPT), "base first")
+            spec.assert_true(string.ends_with(focused, "\n\nAdditional focus from the user: keep auth decisions"), "focus last")
+        }
         spec.it("estimate_tokens budgets an images array") callback {
             plain = list.list_new()
             list.list_add(plain, msg.user("look"))
             withimg = list.list_new()
             list.list_add(withimg, msg.set_raw(msg.user("look"), "images", "[{\"name\":\"shot.png\"}]"))
-            spec.assert_eq_long(compact.estimate_tokens(withimg, 0, 1), compact.estimate_tokens(plain, 0, 1) + 1500, "one image")
+            spec.assert_eq_long(compact.estimate_tokens(withimg, 0, 1, cfg_()), compact.estimate_tokens(plain, 0, 1, cfg_()) + 1500, "one image")
         }
         spec.it("estimate_tokens counts content, reasoning and tool calls") callback {
             l = list.list_new()
             list.list_add(l, msg.user("123456"))
-            spec.assert_eq_long(compact.estimate_tokens(l, 0, 1), 10 as long, "8 + 6/3")
+            spec.assert_eq_long(compact.estimate_tokens(l, 0, 1, cfg_()), 10 as long, "8 + 6/3")
             l2 = list.list_new()
-            list.list_add(l2, msg.assistant("123456", one_call_("c1"), "openai", "123456789", 0, "", -1, ""))
+            list.list_add(l2, msg.assistant("123456", one_call_("c1"), "chat_completions", "123456789", 0, "", -1, ""))
             // 8 + 6/3 + 9/3 + (8 + (2 + 3 + 2)/3)
-            spec.assert_eq_long(compact.estimate_tokens(l2, 0, 1), 8 + 2 + 3 + 8 + 2 as long, "assistant")
+            spec.assert_eq_long(compact.estimate_tokens(l2, 0, 1, cfg_()), 8 + 2 + 3 + 8 + 2 as long, "assistant")
             l3 = list.list_new()
-            list.list_add(l3, msg.assistant("123456", null, "openai", "123456789", 1, "", -1, ""))
-            spec.assert_eq_long(compact.estimate_tokens(l3, 0, 1), 8 + 3 as long, "reasoning includes output replaces content")
+            list.list_add(l3, msg.assistant("123456", null, "chat_completions", "123456789", 1, "", -1, ""))
+            spec.assert_eq_long(compact.estimate_tokens(l3, 0, 1, cfg_()), 8 + 3 as long, "reasoning includes output replaces content")
         }
         spec.it("compact rewrites history through the model call") callback {
             m = messages_()
             seen = list.list_new()
-            r = compact.compact(m, 128000 as long, 500 as long, |request: ptr, out: ptr| {
+            r = compact.compact(m, 128000 as long, 500 as long, cfg_(), "", |request: ptr, out: ptr| {
                 list.list_add(seen, string.copy("n=${list.list_size(request)}"))
                 last, _e = list.get_string(request, list.list_size(request) - 1)
                 list.list_add(seen, string.copy(msg.content(last)))
@@ -472,23 +482,23 @@ main() {
                 list.list_add(short, string_at_(m, i))
                 i = i + 1
             }
-            r1 = compact.compact(short, 64 as long, 0 as long, |request: ptr, out: ptr| {
+            r1 = compact.compact(short, 64 as long, 0 as long, cfg_(), "", |request: ptr, out: ptr| {
                 o = out as *compact.ModelReply
                 o.text = "x"
             }) as *compact.Result
             spec.assert_eq(r1.status, compact.TOO_FEW_STEPS, "too few")
             spec.assert_str_eq(r1.notice, "compaction skipped: fewer than three complete Steps", "notice")
-            r2 = compact.compact(m, 128000 as long, 0 as long, |request: ptr, out: ptr| {
+            r2 = compact.compact(m, 128000 as long, 0 as long, cfg_(), "", |request: ptr, out: ptr| {
                 o = out as *compact.ModelReply
                 o.text = ""
             }) as *compact.Result
             spec.assert_str_eq(r2.err, "InvalidSummary", "empty summary")
-            r3 = compact.compact(m, 128000 as long, 0 as long, |request: ptr, out: ptr| {
+            r3 = compact.compact(m, 128000 as long, 0 as long, cfg_(), "", |request: ptr, out: ptr| {
                 o = out as *compact.ModelReply
                 o.err = "Canceled"
             }) as *compact.Result
             spec.assert_str_eq(r3.err, "Canceled", "model error passes through")
-            r4 = compact.compact(m, 128000 as long, 0 as long, |request: ptr, out: ptr| {
+            r4 = compact.compact(m, 128000 as long, 0 as long, cfg_(), "", |request: ptr, out: ptr| {
                 o = out as *compact.ModelReply
                 o.text = string.copy("x")
                 big = ""
@@ -503,13 +513,13 @@ main() {
             spec.assert_eq(r4.status, compact.INEFFECTIVE, "ineffective")
             spec.assert_true(has_(r4.notice, "would not bring context below half the window"), "notice")
             // Equal size is not smaller: a 7-byte summary costs 18 tokens, as the two messages it replaces.
-            r5 = compact.compact(m, 128000 as long, 0 as long, |request: ptr, out: ptr| {
+            r5 = compact.compact(m, 128000 as long, 0 as long, cfg_(), "", |request: ptr, out: ptr| {
                 o = out as *compact.ModelReply
                 o.text = "SUMMARY"
             }) as *compact.Result
             spec.assert_eq(r5.status, compact.INEFFECTIVE, "no gain is ineffective")
             // Smaller than the history but not below half the window.
-            r6 = compact.compact(m, 64 as long, 0 as long, |request: ptr, out: ptr| {
+            r6 = compact.compact(m, 64 as long, 0 as long, cfg_(), "", |request: ptr, out: ptr| {
                 o = out as *compact.ModelReply
                 o.text = "S"
             }) as *compact.Result

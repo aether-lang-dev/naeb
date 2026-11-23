@@ -16,6 +16,7 @@ import std.spec
 import std.fs
 import std.list
 import std.string
+import naeb.auth
 import naeb.config
 import naeb.config.env
 import naeb.provider.types
@@ -286,8 +287,10 @@ main() {
             env.set(e, "NAEB_MODEL", "claude-haiku-5-5")
             cp = ok_(e, "")
             spec.assert_eq(cfg_(cp).context_window as int, 1000000, "catalog window")
-            spec.assert_str_eq(types.check_session(cp, "anthropic", "claude-haiku-5-5"), "", "same session")
-            spec.assert_str_eq(types.check_session(cp, "chat_completions", ""), "SessionProviderMismatch", "provider mismatch")
+            spec.assert_str_eq(types.check_session(cp, "anthropic"), "", "same session")
+            spec.assert_str_eq(types.check_fork(cp, "anthropic", "claude-haiku-5-5"), "", "same model fork")
+            spec.assert_str_eq(types.check_fork(cp, "anthropic", "claude-sonnet-5-5"), "SessionModelMismatch", "a fork keeps the model")
+            spec.assert_str_eq(types.check_session(cp, "chat_completions"), "SessionProviderMismatch", "provider mismatch")
             env.set(e, "NAEB_MODEL", "unknown")
             spec.assert_str_eq(err_(e, ""), "InvalidConfig", "unknown model window")
             spec.assert_true(contains_(detail_(e, ""), "unknown model context window; set context_window or NAEB_CONTEXT_WINDOW") == 1, "detail")
@@ -571,20 +574,22 @@ main() {
             ae = env.clone(e)
             env.set(ae, "NAEB_PROVIDER", "anthropic")
             anthropic = ok_(ae, custom)
-            own, oerr = config.model_entries(d, anthropic)
+            own, oerr = auth.model_entries(e, d, anthropic)
             spec.assert_str_eq(oerr, "", "entries")
-            spec.assert_eq(list.list_size(own), 4, "anthropic's catalog")
+            spec.assert_eq(list.list_size(own), 6, "anthropic's catalog and the configured services' models")
             i = 0
             while i < 4 {
                 spec.assert_str_eq((list.list_get_raw(own, i) as *config.ModelEntry).provider, "anthropic", "entry ${i} provider")
                 i = i + 1
             }
+            spec.assert_str_eq((list.list_get_raw(own, 4) as *config.ModelEntry).provider, "local", "local")
+            spec.assert_str_eq((list.list_get_raw(own, 5) as *config.ModelEntry).provider, "locked", "locked")
             le = env.clone(e)
             env.set(le, "NAEB_PROVIDER", "local")
             local = ok_(le, custom)
-            listed, _e2 = config.model_entries(d, local)
-            spec.assert_eq(list.list_size(listed), 1, "custom lists its model")
-            spec.assert_str_eq((list.list_get_raw(listed, 0) as *config.ModelEntry).model, "old", "old")
+            listed, _e2 = auth.model_entries(e, d, local)
+            spec.assert_eq(list.list_size(listed), 2, "custom lists its model and the other configured one")
+            spec.assert_str_eq((list.list_get_raw(listed, 0) as *config.ModelEntry).model, "old", "the current service's model first")
             saved_cfg, serr, _d3 = config.save_model(e, d, "local", "new")
             spec.assert_str_eq(serr, "", "saved")
             spec.assert_str_eq(cfg_(saved_cfg).model, "new", "returned config")
@@ -607,6 +612,32 @@ main() {
             fs.write("${d}/chat.toml", "")
             _c3, cerr, _d5 = config.save_model(e, "${d}/chat", "chat_completions", "other-model")
             spec.assert_str_eq(cerr, "UnknownModelContextWindow", "chat_completions needs a window for a new model")
+            fs.remove_tree(d)
+        }
+        spec.it("model entries merge environment keys and configured models by service") callback {
+            d = tmp_()
+            e = env_home_(d)
+            env.set(e, "OPENAI_API_KEY", "fake")
+            fs.write("${d}/config.toml", "[anthropic]\nmodel = \"claude-private\"\ncontext_window = 1000\n[providers.local]\nprotocol = \"responses\"\nbase_url = \"http://localhost\"\nmodel = \"gpt-6.1-sol\"\ncontext_window = 1000\n")
+            cp, err, _x = config.load(e, d)
+            spec.assert_str_eq(err, "", "loads")
+            entries, eerr = auth.model_entries(e, d, cp)
+            spec.assert_str_eq(eerr, "", "entries")
+            openai = 0
+            local = 0
+            private = 0
+            other = 0
+            for i in 0..list.list_size(entries) {
+                en = list.list_get_raw(entries, i) as *config.ModelEntry
+                if en.provider == "openai" { openai = openai + 1 }
+                if en.provider == "local" { local = local + 1 }
+                if en.model == "claude-private" { private = private + 1 }
+                if en.provider == "deepseek" || en.provider == "chat_completions" { other = other + 1 }
+            }
+            spec.assert_eq(openai, list.list_size(types.definition_models("openai")), "openai's catalog, signed in by its key")
+            spec.assert_eq(local, 1, "a configured endpoint's model")
+            spec.assert_eq(private, 1, "a model a section sets")
+            spec.assert_eq(other, 0, "services that are neither configured nor signed in stay out")
             fs.remove_tree(d)
         }
         spec.it("startup picks the first credentialed service without persisting") callback {

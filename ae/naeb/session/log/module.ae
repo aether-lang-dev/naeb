@@ -33,12 +33,14 @@ import naeb.msg
 import std.io
 import naeb.fserr
 import naeb.provider.types
+import naeb.run_replay
 
-exports(Log, Replayed, Summary, create, restore, close, commit, event, background, replay, list_sessions,
+exports(Log, Replayed, Summary, create, restore, close, commit, event, background, source, find_source, replay, list_sessions,
         latest, first_line)
 
 struct Log {
     fd: int
+    path: string
     offset: long
     guard: ptr
     poisoned: int
@@ -58,6 +60,11 @@ struct Log {
     lost_background: ptr       // list of background event JSON texts
     pending_background_bytes: long
     context_tokens: long
+    // What the header says about the Session's runtime, for the retained-Profile notice.
+    header_model: string
+    has_header_model: int
+    header_family: string
+    header_profile: string
 }
 
 struct Replayed {
@@ -80,11 +87,16 @@ struct Replayed {
     background_repairs: ptr
     pending_background_bytes: long
     context_tokens: long
+    header_model: string
+    has_header_model: int
+    header_family: string
+    header_profile: string
 }
 
 new_log_(fd: int, offset: long) -> ptr {
     l = heap.new(Log)
     l.fd = fd
+    l.path = ""
     l.offset = offset
     l.guard = lock.new()
     l.poisoned = 0
@@ -104,6 +116,10 @@ new_log_(fd: int, offset: long) -> ptr {
     l.lost_background = list.list_new()
     l.pending_background_bytes = 0 as long
     l.context_tokens = 0 as long
+    l.header_model = ""
+    l.has_header_model = 0
+    l.header_family = ""
+    l.header_profile = ""
     return l as ptr
 }
 
@@ -119,7 +135,9 @@ create(path: string) -> (ptr, string) {
         io.fd_close(lfd)
         return null, "SessionBusy"
     }
-    return new_log_(lfd, 0 as long), ""
+    nl = new_log_(lfd, 0 as long)
+    (nl as *Log).path = path
+    return nl, ""
 }
 
 // Opens and replays an existing log into `history` (a list of message
@@ -148,6 +166,7 @@ restore(path: string, history: ptr, expected_parent: string, check_parent: int) 
         return null, "AgentSessionParentMismatch"
     }
     l = new_log_(lfd, string.length(data) as long) as *Log
+    l.path = path
     l.steps = r.steps
     l.provider = r.provider
     l.custom_provider = r.custom_provider
@@ -164,7 +183,18 @@ restore(path: string, history: ptr, expected_parent: string, check_parent: int) 
     l.lost_background = r.lost_background
     l.pending_background_bytes = r.pending_background_bytes
     l.context_tokens = r.context_tokens
+    l.header_model = r.header_model
+    l.has_header_model = r.has_header_model
+    l.header_family = r.header_family
+    l.header_profile = r.header_profile
     if r.needs_repair == 1 {
+        // A valid JSON value missing only its commit newline must not become a
+        // record when the repair record's newline completes the line: a line
+        // that is not JSON ends it first.
+        if string.length(data) > 0 && string.char_at(data, string.length(data) - 1) != 10 {
+            e0 = append_raw_(l as ptr, "!\n")
+            if e0 != "" { return null, e0 }
+        }
         e = append_(l as ptr, "", 1)
         if e != "" { return null, e }
     }
@@ -205,9 +235,7 @@ append_raw_(lp: ptr, line: string) -> string {
 }
 
 append_(lp: ptr, members: string, repair: int) -> string {
-    prefix = ""
-    if repair == 1 { prefix = "\n" }
-    return append_raw_(lp, "${prefix}${record_(members, 0, "[]", 0 as long, repair)}\n")
+    return append_raw_(lp, "${record_(members, 0, "[]", 0 as long, repair)}\n")
 }
 
 sync_(lp: ptr) -> string {
@@ -234,6 +262,67 @@ event(lp: ptr, members: string, sync: int) -> string {
 // A background lifecycle record (synced).
 background(lp: ptr, event_json: string, step: int) -> string {
     return event(lp, ",\"background\":${event_json},\"turn_step\":${step}", 1)
+}
+
+// A local `source` record: the script a Run executes, its `rerun` base and
+// original arguments, and whether it failed (docs/session-log.md).
+source(lp: ptr, step: int, run: int, code: string, base: string, arguments: string, failed: int) -> string {
+    members = ",\"source\":{\"step\":${step},\"run\":${run},\"code\":${jsonx.quote(code)}"
+    if base != "" { members = "${members},\"base\":${jsonx.quote(base)}" }
+    ft = "false"
+    if failed == 1 { ft = "true" }
+    return event(lp, "${members},\"arguments\":${jsonx.quote(arguments)},\"failed\":${ft}}", 1)
+}
+
+// The latest source record for "step:run" whose Run is in committed history
+// with the same code; `failed` is then the committed Run's own verdict (a
+// background Run's from its delivered completion). (found, code, failed).
+find_source(lp: ptr, reference: string) -> (int, string, int) {
+    l = lp as *Log
+    lock.acquire(l.guard)
+    data, rerr = fs.read(l.path)
+    lock.release(l.guard)
+    if rerr != "" { return 0, "", 0 }
+    found = 0
+    fstep = 0
+    frun = 0
+    fcode = ""
+    lines = string.split(data, "\n")
+    count = string.array_size(lines)
+    i = 0
+    // The last piece follows the final newline: empty or a torn tail.
+    while i < count - 1 {
+        line = string.copy(string.array_get(lines, i))
+        i = i + 1
+        if string.length(line) == 0 { continue }
+        rec = jsonx.parse(line)
+        if rec == null { continue }
+        sv = jsonx.field(rec, "source")
+        if sv != null && json.json_type(sv) == json.JSON_OBJECT {
+            st = jsonx.int_or(sv, "step", 0)
+            rn = jsonx.int_or(sv, "run", 0)
+            if reference == "${st}:${rn}" {
+                found = 1
+                fstep = st
+                frun = rn
+                fcode = string.copy(jsonx.str_or(sv, "code", ""))
+            }
+        }
+        jsonx.free(rec)
+    }
+    string.string_array_free(lines)
+    if found == 0 { return 0, "", 0 }
+    runs, merr = run_replay.load_main(data)
+    if merr != "" { return 0, "", 0 }
+    k = 0
+    while k < list.list_size(runs) {
+        r = list.list_get_raw(runs, k) as *run_replay.Run
+        if r.step == fstep && r.run == frun && r.has_expected == 1 && r.code == fcode {
+            return 1, fcode, r.source_reference
+        }
+        k = k + 1
+    }
+    return 0, "", 0
 }
 
 assistant_count_(messages: ptr, from: int) -> int {
@@ -264,11 +353,20 @@ commit(lp: ptr, history: ptr, from: int, messages: ptr, tokens: long, members: s
         return e
     }
     if from == list.list_size(history) && forked == 0 { l.steps = l.steps + assistant_count_(messages, 0) }
-    apply_(history, from, messages, effort_of_(members))
+    apply_(history, from, messages, effort_of_(members), member_of_(members, "model"))
     l.context_tokens = tokens
     e2 = sync_(lp)
     lock.release(l.guard)
     return e2
+}
+
+member_of_(members: string, key: string) -> string {
+    if string.index_of(members, "\"${key}\"") < 0 { return "" }
+    v = jsonx.parse("{${string.substring(members, 1, string.length(members))}}")
+    if v == null { return "" }
+    out = string.copy(jsonx.str_or(v, key, ""))
+    jsonx.free(v)
+    return out
 }
 
 effort_of_(members: string) -> string {
@@ -284,7 +382,8 @@ truncate_(history: ptr, n: int) {
     while list.list_size(history) > n { list.list_remove(history, list.list_size(history) - 1) }
 }
 
-apply_(history: ptr, from: int, messages: ptr, effort: string) {
+// A reasoning that records no model gets the record's ("" when the record has none: unknown).
+apply_(history: ptr, from: int, messages: ptr, effort: string, model: string) {
     truncate_(history, from)
     i = 0
     while i < list.list_size(messages) {
@@ -293,6 +392,7 @@ apply_(history: ptr, from: int, messages: ptr, effort: string) {
         if effort != "" && msg.role(mm) == "assistant" {
             mm = msg.set_raw(mm, "step_effort", "{\"effort\":${jsonx.quote(effort)}}")
         }
+        mm = msg.tag_reasoning_model(mm, model)
         list.list_add(history, mm)
         i = i + 1
     }
@@ -378,6 +478,19 @@ struct Pending {
     delivered: int
 }
 
+// The first pending background task `id` is settled (FIFO for reused ids).
+settle_(pending: ptr, id: string) {
+    pi = 0
+    while pi < list.list_size(pending) {
+        pp = list.list_get_raw(pending, pi) as *Pending
+        if pp.id == id {
+            list.list_remove(pending, pi)
+            return
+        }
+        pi = pi + 1
+    }
+}
+
 new_replayed_() -> ptr {
     r = heap.new(Replayed)
     r.err = ""
@@ -399,6 +512,10 @@ new_replayed_() -> ptr {
     r.background_repairs = list.list_new()
     r.pending_background_bytes = 0 as long
     r.context_tokens = 0 as long
+    r.header_model = ""
+    r.has_header_model = 0
+    r.header_family = ""
+    r.header_profile = ""
     return r as ptr
 }
 
@@ -537,7 +654,7 @@ replay(data: string, history: ptr) -> ptr {
             torn = 1
             continue
         }
-        if jsonx.has(rec, "hook") == 1 {
+        if jsonx.has(rec, "hook") == 1 || jsonx.has(rec, "source") == 1 {
             jsonx.free(rec)
             continue
         }
@@ -556,6 +673,19 @@ replay(data: string, history: ptr) -> ptr {
             r.mcp_servers = ""
             if ms != null { r.mcp_servers = jsonx.encode(ms) }
             r.provider = string.copy(jsonx.str_or(rec, "provider", "chat_completions"))
+            // A fork header labels the child runtime, not the inherited system text.
+            r.has_header_model = 0
+            r.header_model = ""
+            if jsonx.kind(rec, "model") == json.JSON_STRING {
+                r.has_header_model = 1
+                r.header_model = string.copy(jsonx.str_or(rec, "model", ""))
+            }
+            r.header_family = ""
+            r.header_profile = ""
+            if r.forked_from == "" {
+                r.header_family = string.copy(jsonx.str_or(rec, "family", ""))
+                r.header_profile = string.copy(jsonx.str_or(rec, "profile", ""))
+            }
             r.custom_provider = string.copy(jsonx.str_or(rec, "custom_provider", ""))
         }
         if jsonx.kind(rec, "model") == json.JSON_STRING { r.model = string.copy(jsonx.str_or(rec, "model", "")) }
@@ -610,22 +740,18 @@ replay(data: string, history: ptr) -> ptr {
                 p.delivered = 0
                 list.list_add(pending, p as ptr)
             } else {
-                pi = 0
-                while pi < list.list_size(pending) {
-                    pp = list.list_get_raw(pending, pi) as *Pending
-                    if pp.id == bid {
-                        list.list_remove(pending, pi)
-                        break
-                    }
-                    pi = pi + 1
-                }
+                settle_(pending, bid)
             }
             jsonx.free(rec)
             continue
         }
         msgs = messages_of_(rec)
+        dls = jsonx.field(rec, "deliveries")
+        has_deliveries = 0
+        if dls != null && json.json_type(dls) == json.JSON_ARRAY { has_deliveries = 1 }
         mi = 0
-        while mi < list.list_size(msgs) {
+        // Logs of the old format mark a delivery by the background message itself.
+        while has_deliveries == 0 && mi < list.list_size(msgs) {
             m, _g = list.get_string(msgs, mi)
             if msg.str_or(m, "source", "") == "background" {
                 mbid = msg.str_or(m, "background_id", "")
@@ -678,17 +804,37 @@ replay(data: string, history: ptr) -> ptr {
         }
         if from == list.list_size(history) && jsonx.has(rec, "forked_from") == 0 {
             r.steps = r.steps + assistant_count_(msgs, 0)
-            mi2 = 0
-            while mi2 < list.list_size(msgs) {
-                m2, _g2 = list.get_string(msgs, mi2)
-                if msg.str_or(m2, "source", "") == "background" {
-                    r.pending_background_bytes = r.pending_background_bytes + (string.length(msg.content(m2)) as long)
+            if has_deliveries == 1 {
+                // The receiving Step zeroes what was pending, then what it folded is pending again.
+                if jsonx.has(rec, "model_ms") == 1 { r.pending_background_bytes = 0 as long }
+                di = 0
+                while di < json.json_array_size(dls) {
+                    dv = json.json_array_get_raw(dls, di)
+                    ev = jsonx.field(dv, "event")
+                    if ev != null {
+                        did = string.copy(jsonx.str_or(ev, "id", ""))
+                        e5 = restore_id_(r, did)
+                        if e5 != "" { return fail_(r, e5) }
+                        settle_(pending, did)
+                    }
+                    if jsonx.str_or(dv, "via", "") != "wait" {
+                        r.pending_background_bytes = r.pending_background_bytes + jsonx.long_or(dv, "output_bytes", 0 as long)
+                    }
+                    di = di + 1
                 }
-                mi2 = mi2 + 1
+            } else {
+                mi2 = 0
+                while mi2 < list.list_size(msgs) {
+                    m2, _g2 = list.get_string(msgs, mi2)
+                    if msg.str_or(m2, "source", "") == "background" {
+                        r.pending_background_bytes = r.pending_background_bytes + (string.length(msg.content(m2)) as long)
+                    }
+                    mi2 = mi2 + 1
+                }
+                if jsonx.has(rec, "model_ms") == 1 { r.pending_background_bytes = 0 as long }
             }
-            if jsonx.has(rec, "model_ms") == 1 { r.pending_background_bytes = 0 as long }
         }
-        apply_(history, from, msgs, string.copy(jsonx.str_or(rec, "effort", "")))
+        apply_(history, from, msgs, string.copy(jsonx.str_or(rec, "effort", "")), string.copy(jsonx.str_or(rec, "model", "")))
         restore_replacements_(history, from, rec, msgs, reps)
         if validate_(history) == 0 {
             jsonx.free(rec)

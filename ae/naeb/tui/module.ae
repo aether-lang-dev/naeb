@@ -1691,7 +1691,7 @@ toggle_entry(a: *App, index: int) {
 // ---------------------------------------------------------------- render
 
 render(a: *App) {
-    menu.load(a.menu, editor.text(a.input), a.p, a.home, a.cfg, service_lister_(a))
+    menu.load(a.menu, editor.text(a.input), a.p, a.envp, a.home, a.cfg, service_lister_(a))
     menu.sync(a.menu, a.input)
     visible = a.input
     if provider_flow.flow_takes_text(a.flow) != 0 {
@@ -1840,8 +1840,14 @@ model_selection_(a: *App, arg: string) -> (string, string, string) {
     first = words[0]
     slash = string.index_of(first, "/")
     if slash >= 0 {
+        head = string.substring(first, 0, slash)
+        ids = types.builtin_ids()
+        for bi in 0..list.list_size(ids) {
+            bid, _bg = list.get_string(ids, bi)
+            if bid == head { return config.parse_model(arg) }
+        }
         lst, _e = auth.services(a.envp, a.home)
-        if slash > 0 && slash + 1 < string.length(first) && lst != null && auth.find(lst, string.substring(first, 0, slash)) != null {
+        if slash > 0 && slash + 1 < string.length(first) && lst != null && auth.find(lst, head) != null {
             return config.parse_model(arg)
         }
     }
@@ -2004,7 +2010,9 @@ execute(a: *App, c: int, arg: string, line: string) {
         cc = a.cfg as *types.Config
         window = if cc.context_window > (1 as long) { cc.context_window } else { 1 as long }
         details = if a.has_last_summary != 0 { bill.details(a.last_summary, a.last_turn_runs) } else { "No completed turn yet." }
-        report(a, entry.KIND_INFO, "Provider ${types.name(a.cfg)} · ${cc.model} · ${auth.describe(a.cfg)} · effort ${effective_effort_(a)} · context ${a.context * 100 / window}%\n${details}")
+        string retained = call(a.p.resume_profile, a.p.ctx, cc.model)
+        resume_line = if retained != "" { "${cc.model} · retained session Profile: ${retained}\n" } else { "" }
+        report(a, entry.KIND_INFO, "Provider ${types.name(a.cfg)} · ${cc.model} · ${auth.describe(a.cfg)} · effort ${effective_effort_(a)} · context ${a.context * 100 / window}%\n${resume_line}${details}")
     } else if c == commands.CMD_FENCE {
         string fj = call(a.p.fence, a.p.ctx)
         if fj == "" {
@@ -2157,7 +2165,7 @@ execute(a: *App, c: int, arg: string, line: string) {
         jsonx.free(v)
     } else if c == commands.CMD_COMPACT {
         drop_prediction_(a)
-        begin_turn_(a, line, "", 1, status.PHASE_COMPACTING)
+        begin_turn_(a, arg, "", 1, status.PHASE_COMPACTING)
     } else if c == commands.CMD_REFLECT {
         if !credentialed(a) {
             transcript.add(a.transcript, entry.KIND_ERR, "No provider · /provider to sign in")

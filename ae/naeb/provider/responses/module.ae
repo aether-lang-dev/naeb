@@ -173,7 +173,7 @@ request_body(cp: ptr, cache_key: string, messages: ptr, tools_json: string, max_
             i = i + 1
             continue
         }
-        if msg.reasoning_provider(m) == c.provider {
+        if msg.reasoning_compatible(m, cp) {
             items = jsonx.parse(msg.reasoning_data(m))
             if items == null || json.json_type(items) != json.JSON_ARRAY {
                 jsonx.free(items)

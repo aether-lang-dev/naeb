@@ -76,11 +76,11 @@ const PARSE_UNKNOWN = 2
 const TAGS[] = ["simple", "help", "new", "resume", "compact", "undo", "provider", "model", "effort",
                 "copy", "reflect", "js", "tasks", "stop", "status", "skills", "mcp", "fence"]
 const GROUPS[] = [1, 1, 2, 2, 2, 2, 2, 2, 0, 1, 2, 0, 1, 2, 1, 1, 1, 1]
-const ARGS[] = ["", "", "", "<id>", "", "", "[service]", "<model>", "[level]", "", "[focus]", "<code>",
+const ARGS[] = ["", "", "", "<id>", "[focus]", "", "[service]", "<model>", "[level]", "", "[focus]", "<code>",
                 "", "<id>", "", "[on|off <name>]", "[on|off <id>]", ""]
 const HELPS[] = ["toggle Simple mode", "commands and keys", "new session", "resume a session",
                  "compact earlier history", "undo last edited Turn; edit/write only",
-                 "sign in and switch service", "switch model of this service", "reasoning effort",
+                 "sign in and switch service", "switch model and service", "reasoning effort",
                  "copy last answer", "publish issue drafts", "run JavaScript", "background tasks",
                  "stop a task; changes may remain", "timing and cache details",
                  "list or enable skills for new sessions", "list or enable MCP servers for new sessions",
@@ -263,7 +263,13 @@ candidates(input: string, sessions: Choice[], tasks: Choice[], models: Choice[],
     while i < choices.len {
         if out.len == limit { break }
         ch = choices[i]
-        if string.starts_with(ch.value, arg) != 0 {
+        // A model matches by its qualified value ("openai/gpt-6.1-sol") or by the model alone.
+        by_model = 0
+        if command == CMD_MODEL {
+            slash = string.index_of(ch.value, "/")
+            if slash >= 0 && string.starts_with(string.substring(ch.value, slash + 1, string.length(ch.value)), arg) != 0 { by_model = 1 }
+        }
+        if string.starts_with(ch.value, arg) != 0 || by_model == 1 {
             out.push(Candidate { command: command, has_value: 1, value: ch.value, label: ch.label, detail: ch.detail, is_path: 0, service: ch.service, has_service: ch.has_service })
         }
         i = i + 1

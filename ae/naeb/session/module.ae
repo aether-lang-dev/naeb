@@ -72,7 +72,7 @@ mode_name_(tp: ptr) -> string {
 }
 
 exports(Session, Options, Sink, Ran, new_options, new_sink, init, turn, turn_with_images, image_directory, run, compact_now, close, swap_fence, start_turn_end_hooks, finish_hooks, error_message, timing_json, undo,
-        set_activity, enqueue, take_queued, switch_config, steps_logged,
+        set_activity, enqueue, take_queued, switch_config, resume_notice, steps_logged,
         VERSION)
 
 const VERSION = "0.13.0-ae"   // `naeb --version`; Session headers record build_info.naeb_version()
@@ -220,6 +220,22 @@ steps_logged(sp: ptr) -> int {
 // Applies a new provider/model config in place before the first Step
 // (upstream switchConfig's .updated): "updated", "reopen" when Steps exist
 // (the caller opens a new Session with it), or "update_failed:<error>".
+// The retained session Profile to show in /status after a resume, only where
+// it differs from the one the requested model would get or cannot be
+// established; "" otherwise (upstream ResumeAdaptation.notice).
+resume_notice(sp: ptr, requested_model: string) -> string {
+    l = (sp as *Session).log as *log.Log
+    if l.header_profile == "" {
+        if l.has_header_model == 0 { return "" }
+        if l.header_model == requested_model { return "" }
+        return "unknown"
+    }
+    fam = profile.family_for_model(requested_model)
+    if profile.name(profile.for_family(fam)) != l.header_profile { return l.header_profile }
+    if l.header_family != "" && l.header_family != profile.family_name(fam) { return l.header_profile }
+    return ""
+}
+
 switch_config(sp: ptr, cp: @keep ptr) -> string {
     s = sp as *Session
     if (s.log as *log.Log).steps > 0 { return "reopen" }
@@ -252,7 +268,7 @@ error_message(err: string) -> string {
         "UnknownService" -> { return "Unknown service · run naeb login to list services" }
         "EmptyKey" -> { return "API key cannot be empty" }
         "SessionProviderMismatch" -> { return "Cannot resume this session with a different provider; use its original NAEB_PROVIDER or start a new session." }
-        "SessionModelMismatch" -> { return "Cannot resume this Codex session with a different model; set NAEB_MODEL to its original model or start a new session." }
+        "SessionModelMismatch" -> { return "Cannot fork this session with a different model; use the parent session's model." }
         _ -> { return err }
     }
 }
@@ -302,7 +318,7 @@ init(cp: @keep ptr, op: @keep ptr) -> (ptr, string, string) {
     if o.fork != null {
         fk = o.fork as *agent_input.Fork
         if o.resume_id != "" || o.continue_latest == 1 { return null, "ConflictingForkOptions", "" }
-        ferr = types.check_session(cp, fk.provider, fk.model)
+        ferr = types.check_fork(cp, fk.provider, fk.model)
         if ferr != "" { return null, ferr, "" }
         if c.custom_provider != fk.custom_provider { return null, "SessionProviderMismatch", "" }
     }
@@ -350,11 +366,15 @@ init(cp: @keep ptr, op: @keep ptr) -> (ptr, string, string) {
         if rerr != "" { return null, rerr, "" }
         s.log = lp
         l = lp as *log.Log
-        cerr = types.check_session(cp, l.provider, l.model)
+        cerr = types.check_session(cp, l.provider)
         if cerr == "" && c.custom_provider != l.custom_provider { cerr = "SessionProviderMismatch" }
         if cerr != "" {
             log.close(lp)
             return null, cerr, ""
+        }
+        // Resuming under another model leaves that model's reasoning behind: size the context without it.
+        if types.protocol(cp) != "chat_completions" && l.model != c.model {
+            l.context_tokens = compact.estimate_tokens(s.history, 0, list.list_size(s.history), cp)
         }
         // A resumed Session keeps the MCP servers it started with.
         logged = agent_input.mcp_servers_from(l.mcp_servers)
@@ -444,7 +464,7 @@ initialize_fork_(s: *Session, fp: ptr, cwd: string) -> string {
     if c.custom_provider != "" { members = "${members},\"custom_provider\":${jsonx.quote(c.custom_provider)}" }
     members = "${members},\"model\":${jsonx.quote(c.model)},\"parent_session_id\":${jsonx.quote(s.parent_session_id)},\"cache_key\":${jsonx.quote(s.cache_key)}"
     members = "${members},\"forked_from\":{\"session\":${jsonx.quote(f.session)},\"message_count\":${f.message_count}},\"naeb_version\":${jsonx.quote(build_info.naeb_version())}${family_members_(c.model)},\"tuning\":${tuning.to_log(tuning.Resolved { delivery: s.tuning_delivery, validation: s.tuning_validation })},\"mode\":${jsonx.quote(mode_name_(s.tools))}"
-    tokens = compact.estimate_tokens(msgs, 0, list.list_size(msgs))
+    tokens = compact.estimate_tokens(msgs, 0, list.list_size(msgs), s.cfg)
     return log.commit(s.log, s.history, 0, msgs, tokens, members, 1)
 }
 
@@ -553,7 +573,7 @@ initialize_history_(s: *Session, cwd: string) -> string {
     list.list_add(msgs, msg.system(system))
     one = list.list_new()
     list.list_add(one, msg.system(system))
-    tokens = compact.estimate_tokens(one, 0, 1)
+    tokens = compact.estimate_tokens(one, 0, 1, s.cfg)
     return log.commit(s.log, s.history, 0, msgs, tokens, members, 0)
 }
 
@@ -702,6 +722,8 @@ struct Executed {
     images: string           // the images the Run viewed, a JSON array, "" none
     tool_bytes: long
     omitted: long
+    scope_id: int            // the Run scope that executed it, -1 none (not run, or in the background)
+    executed_source: string  // a `rerun`'s resolved script, "" none
 }
 
 new_executed_(output: string, ok: int) -> *Executed {
@@ -716,6 +738,8 @@ new_executed_(output: string, ok: int) -> *Executed {
     e.images = ""
     e.tool_bytes = 0 as long
     e.omitted = 0 as long
+    e.scope_id = -1
+    e.executed_source = ""
     return e
 }
 
@@ -928,7 +952,9 @@ run(sp: @keep ptr, code: string, cancel: @keep ptr) -> *Ran {
     r.changes = tools.take_changes(scope)
     r.run_id = s.run_id
     l = s.log as *log.Log
-    r.err = log.commit(s.log, s.history, list.list_size(s.history), list.list_new(), l.context_tokens, ",\"model\":${jsonx.quote((s.cfg as *types.Config).model)},\"task_ids\":${progress.task_ids_json(t.progress)}", 0)
+    scopes = make([]int, 0)
+    scopes.push((scope as *tools.RunScope).id)
+    r.err, _waited = commit_delivery_(s, list.list_size(s.history), list.list_new(), l.context_tokens, ",\"model\":${jsonx.quote((s.cfg as *types.Config).model)},\"task_ids\":${progress.task_ids_json(t.progress)}", "", list.list_new(), scopes)
     if canceled_(cancel) == 1 { background.stop_all(t.background) }
     return r
 }
@@ -976,18 +1002,102 @@ run_end_(s: *Session) {
     lock.release(s.fence_guard)
 }
 
+// The reference line a failed script's output ends with.
+source_line_(step: int, run: int) -> string {
+    return "Source: ${step}:${run} (rerun executes from the beginning; prior effects may repeat)"
+}
+
+// The script a `rerun` call executes: the failed Run it names with its edits
+// applied in order (upstream run.zig patch). (code, "") or ("", error text).
+resolve_rerun_(s: *Session, arguments: string) -> (string, string) {
+    usage = "error: expected {base: string, edits: [{old_text: string, new_text: string}]}"
+    args = jsonx.parse(arguments)
+    if args == null || json.json_type(args) != json.JSON_OBJECT || jsonx.kind(args, "base") != json.JSON_STRING {
+        jsonx.free(args)
+        return "", usage
+    }
+    edits = jsonx.field(args, "edits")
+    if edits == null || json.json_type(edits) != json.JSON_ARRAY {
+        jsonx.free(args)
+        return "", usage
+    }
+    n = json.json_array_size(edits)
+    k = 0
+    while k < n {
+        ev = json.json_array_get_raw(edits, k)
+        if json.json_type(ev) != json.JSON_OBJECT || jsonx.kind(ev, "old_text") != json.JSON_STRING || jsonx.kind(ev, "new_text") != json.JSON_STRING {
+            jsonx.free(args)
+            return "", usage
+        }
+        k = k + 1
+    }
+    base = string.copy(jsonx.str_or(args, "base", ""))
+    found, source, failed = log.find_source(s.log, base)
+    if found == 0 {
+        jsonx.free(args)
+        return "", "error: base source unavailable in this Session"
+    }
+    if failed == 0 {
+        jsonx.free(args)
+        return "", "error: base must be a completed failed script"
+    }
+    code = source
+    if n == 0 {
+        jsonx.free(args)
+        return "", "error: EmptyEdits; edits require nonempty old_text matching exactly once"
+    }
+    i = 0
+    while i < n {
+        ev2 = json.json_array_get_raw(edits, i)
+        old = string.copy(jsonx.str_or(ev2, "old_text", ""))
+        new = string.copy(jsonx.str_or(ev2, "new_text", ""))
+        if string.length(old) == 0 {
+            jsonx.free(args)
+            return "", "error: EmptyOldText; edits require nonempty old_text matching exactly once"
+        }
+        first = string.index_of(code, old)
+        if first < 0 {
+            jsonx.free(args)
+            return "", "error: OldTextNotFound; edits require nonempty old_text matching exactly once"
+        }
+        if string.index_of_from(code, old, first + 1) >= 0 {
+            jsonx.free(args)
+            return "", "error: AmbiguousOldText; edits require nonempty old_text matching exactly once"
+        }
+        code = "${string.substring(code, 0, first)}${new}${string.substring(code, first + string.length(old), string.length(code))}"
+        i = i + 1
+    }
+    jsonx.free(args)
+    return code, ""
+}
+
 // One `run` tool call (upstream run.zig execute + executeTimed).
 execute_(s: *Session, tc: *types.ToolCall, sk: ptr, cancel: @keep ptr, run: @keep ptr, run_index: int) -> ptr {
     c = s.cfg as *types.Config
     l = c.limits as *types.Limits
-    if tc.name != "run" { return new_executed_("error: unknown tool `${tc.name}`; the only tool is `run`", 0) as ptr }
-    args = jsonx.parse(tc.arguments)
-    if args == null || json.json_type(args) != json.JSON_OBJECT || jsonx.kind(args, "code") != json.JSON_STRING {
+    rerun = tc.name == "rerun"
+    if !rerun && tc.name != "run" { return new_executed_("error: expected run or rerun", 0) as ptr }
+    base = ""
+    code = ""
+    if rerun {
+        resolved, rerr = resolve_rerun_(s, tc.arguments)
+        if rerr != "" { return new_executed_(rerr, 0) as ptr }
+        code = resolved
+        args0 = jsonx.parse(tc.arguments)
+        base = string.copy(jsonx.str_or(args0, "base", ""))
+        jsonx.free(args0)
+    } else {
+        args = jsonx.parse(tc.arguments)
+        if args == null || json.json_type(args) != json.JSON_OBJECT || jsonx.kind(args, "code") != json.JSON_STRING {
+            jsonx.free(args)
+            return new_executed_("error: arguments must be a JSON object { \"code\": string }", 0) as ptr
+        }
+        code = string.copy(jsonx.str_or(args, "code", ""))
         jsonx.free(args)
-        return new_executed_("error: arguments must be a JSON object { \"code\": string }", 0) as ptr
     }
-    code = string.copy(jsonx.str_or(args, "code", ""))
-    jsonx.free(args)
+    source_step = (s.log as *log.Log).steps + 1
+    serr = log.source(s.log, source_step, run_index, code, base, tc.arguments, 0)
+    if serr != "" { return new_executed_("error: ${serr}", 0) as ptr }
     emit_(sk, "{\"run_start\":${jsonx.quote(code)}}")
     t = s.tools as *tools.Tools
     if background.any_pending(t.background) == 0 { progress.clear(t.progress) }
@@ -1011,7 +1121,9 @@ execute_(s: *Session, tc: *types.ToolCall, sk: ptr, cancel: @keep ptr, run: @kee
             if attempted == 0 && canceled_(cancel) == 0 && timing.elapsed(j.timing) >= (l.run_background_after_ms as long) && sync.atomic_load(j.waiting) == 1 && tools.blocked_in_wait(j.scope) == 0 {
                 attempted = 1
                 if background.active_runs(t.background) < background.RUN_LIMIT {
-                    return background_run_(s, j, sk, started) as ptr
+                    bge = background_run_(s, j, sk, started)
+                    if rerun { bge.executed_source = code }
+                    return bge as ptr
                 }
             }
         }
@@ -1025,7 +1137,12 @@ execute_(s: *Session, tc: *types.ToolCall, sk: ptr, cancel: @keep ptr, run: @kee
     poll_(s, sk)
     changes = tools.take_changes(j.scope)
     if j.hook_notice != "" { emit_(sk, "{\"notice\":${jsonx.quote(j.hook_notice)}}") }
-    out_text = output.step_limit_output(output.format_hook_saved(o as ptr, j.hook, l.run_output_bytes as long, tools.outputs_dir(s.tools), 1), remaining_steps_(s))
+    failed = 0
+    if o.ok == 0 && canceled_(cancel) == 0 && o.text != "Error: run timed out" { failed = 1 }
+    log.source(s.log, source_step, run_index, code, base, tc.arguments, failed)
+    formatted = output.format_hook_saved(o as ptr, j.hook, l.run_output_bytes as long, tools.outputs_dir(s.tools), 1)
+    if failed == 1 { formatted = "${formatted}\n${source_line_(source_step, run_index)}" }
+    out_text = output.step_limit_output(formatted, remaining_steps_(s))
     summary = tool_summary.init(run, run_index, timing.omitted(run) - before_omitted)
     viewed = tools.take_images(j.scope)
     tool_summary.annotate_views(summary, viewed)
@@ -1044,6 +1161,8 @@ execute_(s: *Session, tc: *types.ToolCall, sk: ptr, cancel: @keep ptr, run: @kee
     e.images = viewed
     e.tool_bytes = timing.tool_bytes(run) - before_bytes
     e.omitted = timing.omitted(run) - before_omitted
+    e.scope_id = (j.scope as *tools.RunScope).id
+    if rerun { e.executed_source = code }
     return e as ptr
 }
 
@@ -1099,12 +1218,17 @@ poll_runs_(s: *Session) {
         j2 = list.list_get_raw(done, k) as *RunJob
         o2 = j2.outcome as *sandbox.Outcome
         out_text = output.format_hook_saved(o2 as ptr, j2.hook, l.run_output_bytes as long, tools.outputs_dir(s.tools), 1)
+        failed = 0
+        if o2.ok == 0 && o2.text != "Error: run timed out" && sync.atomic_load(j2.cancel) == 0 { failed = 1 }
+        if failed == 1 { out_text = "${out_text}\n${source_line_(j2.step, j2.run_index)}" }
+        srt = "false"
+        if failed == 1 { srt = "true" }
         okt = "false"
         if o2.ok == 1 { okt = "true" }
         changes = tools.take_changes(j2.scope)
         hn = ""
         if j2.hook_notice != "" { hn = "\"hook_notice\":${jsonx.quote(j2.hook_notice)}," }
-        completion = "{${hn}\"execution\":{\"start_ms_epoch\":${j2.exec_start},\"end_ms_epoch\":${j2.exec_end}},\"step\":${j2.step},\"run_index\":${j2.run_index},\"ok\":${okt},\"output\":${jsonx.quote(out_text)},\"run_ms\":${j2.elapsed_ms},\"tool_bytes\":${timing.tool_bytes(j2.timing)},\"calls\":${calls_json_(j2.timing)},\"calls_omitted\":${timing.omitted(j2.timing)},\"changes\":${changes_json_(changes)}}"
+        completion = "{${hn}\"execution\":{\"start_ms_epoch\":${j2.exec_start},\"end_ms_epoch\":${j2.exec_end}},\"step\":${j2.step},\"run_index\":${j2.run_index},\"source_reference\":${srt},\"ok\":${okt},\"output\":${jsonx.quote(out_text)},\"run_ms\":${j2.elapsed_ms},\"tool_bytes\":${timing.tool_bytes(j2.timing)},\"calls\":${calls_json_(j2.timing)},\"calls_omitted\":${timing.omitted(j2.timing)},\"changes\":${changes_json_(changes)}}"
         background.enqueue_run(t.background, j2.id, o2.ok, "[background run ${j2.id} finished]\n${out_text}", completion, j2.exec_start, j2.exec_end, (j2.scope as *tools.RunScope).id)
         k = k + 1
     }
@@ -1173,7 +1297,8 @@ insert_background_(s: *Session, pending: ptr, sk: ptr, include_detached: int) ->
     n = list.list_size(items)
     if n == 0 { return "" }
     l = (s.cfg as *types.Config).limits as *types.Limits
-    added = list.list_new()
+    entries = ""
+    delivered = list.list_new()
     has_background = 0
     i = 0
     while i < n {
@@ -1214,24 +1339,59 @@ insert_background_(s: *Session, pending: ptr, sk: ptr, include_detached: int) ->
         if it.exec_end > 0 { event = "${event},\"execution\":{\"start_ms_epoch\":${it.exec_start},\"end_ms_epoch\":${it.exec_end}}" }
         event = "${event}}"
         list.list_add(pending, m)
-        list.list_add(added, event)
+        if entries != "" { entries = "${entries}," }
+        entries = "${entries}${delivery_json_(it, "insert", string.length(content) as long)}"
+        list.list_add(delivered, it as ptr)
         background.delivered(t.background, it.id, it.invocation)
         s.pending_background_bytes = s.pending_background_bytes + (string.length(content) as long)
         emit_(sk, "{\"background\":${event}}")
         i = i + 1
     }
     if has_background == 0 { return "" }
-    tokens = (s.log as *log.Log).context_tokens + compact.estimate_tokens(pending, 0, list.list_size(pending))
-    e = log.commit(s.log, s.history, list.list_size(s.history), pending, tokens, "", 0)
+    tokens = (s.log as *log.Log).context_tokens + compact.estimate_tokens(pending, 0, list.list_size(pending), s.cfg)
+    e, waited = commit_delivery_(s, list.list_size(s.history), pending, tokens, "", entries, delivered, make([]int, 0))
     if e != "" { return e }
     list.list_clear(pending)
-    k = 0
-    while k < list.list_size(added) {
-        ev, _g2 = list.get_string(added, k)
-        log.background(s.log, ev, s.steps + 1)
-        k = k + 1
+    for wi in 0..list.list_size(waited) {
+        announce_background_(s, list.list_get_raw(waited, wi) as *background.Item, sk)
     }
     return ""
+}
+
+// The `deliveries` entry of one result: its event, how it reached the model
+// (insert, fold or wait) and the bytes it cost.
+delivery_json_(it: *background.Item, via: string, bytes: long) -> string {
+    return "{\"event\":${background_event_(it)},\"via\":${jsonx.quote(via)},\"output_bytes\":${bytes}}"
+}
+
+// Commits a record with the deliveries it carries (upstream commitDelivery):
+// `entries` are the entries of results delivered by this record (insert or
+// fold), `delivered` those results' items, `scopes` the Runs of this record.
+// The results the Runs (and the delivered background Runs) claimed with
+// tools.wait are committed here too, via "wait". Returns the claimed items
+// for the caller to announce once the record is down. (err, waited).
+commit_delivery_(s: *Session, from: int, messages: ptr, tokens: long, members: string, entries: string, delivered: ptr, scopes: int[]) -> (string, ptr) {
+    t = s.tools as *tools.Tools
+    waited = list.list_new()
+    for i in 0..scopes.len {
+        got = background.take_waited(t.background, scopes[i])
+        for g in 0..list.list_size(got) { list.list_add(waited, list.list_get_raw(got, g)) }
+    }
+    for d in 0..list.list_size(delivered) {
+        di = list.list_get_raw(delivered, d) as *background.Item
+        if di.run_scope >= 0 {
+            got2 = background.take_waited(t.background, di.run_scope)
+            for g2 in 0..list.list_size(got2) { list.list_add(waited, list.list_get_raw(got2, g2)) }
+        }
+    }
+    all = entries
+    for w in 0..list.list_size(waited) {
+        wi = list.list_get_raw(waited, w) as *background.Item
+        if all != "" { all = "${all}," }
+        all = "${all}${delivery_json_(wi, "wait", string.length(wi.text) as long)}"
+    }
+    e = log.commit(s.log, s.history, from, messages, tokens, "${members},\"deliveries\":[${all}]", 0)
+    return e, waited
 }
 
 // The `background` event of a queued result, as the log and the sink carry it.
@@ -1261,15 +1421,15 @@ announce_background_(s: *Session, it: *background.Item, sk: ptr) {
 
 // Delivery `tool`: queued results and user messages ride on the last tool
 // message instead of becoming user messages (upstream foldInbox). Returns
-// the `background` events of the folded results, for the log, and the bytes
-// of those results (billed to the next complete Step).
-fold_inbox_(s: *Session, pending: ptr, sk: ptr) -> (ptr, long) {
+// the `deliveries` entries of the folded results (via "fold"), every folded
+// item, and the bytes of those results (billed to the next complete Step).
+fold_inbox_(s: *Session, pending: ptr, sk: ptr) -> (string, ptr, long) {
     t = s.tools as *tools.Tools
-    events = list.list_new()
+    entries = ""
     bytes = 0 as long
     items = background.take_items(t.background, 1)
     n = list.list_size(items)
-    if n == 0 { return events, bytes }
+    if n == 0 { return entries, items, bytes }
     last = list.list_size(pending) - 1
     target, _g = list.get_string(pending, last)
     text = msg.content(target)
@@ -1284,11 +1444,12 @@ fold_inbox_(s: *Session, pending: ptr, sk: ptr) -> (ptr, long) {
         it2 = list.list_get_raw(items, j) as *background.Item
         announce_background_(s, it2, sk)
         if it2.kind != "user" {
-            list.list_add(events, background_event_(it2))
+            if entries != "" { entries = "${entries}," }
+            entries = "${entries}${delivery_json_(it2, "fold", string.length(it2.text) as long)}"
             bytes = bytes + (string.length(it2.text) as long)
         }
     }
-    return events, bytes
+    return entries, items, bytes
 }
 
 // The model call, with retries; deltas forwarded (buffered while
@@ -1361,8 +1522,8 @@ commit_interrupted_(s: *Session, pending: ptr) {
         list.list_add(msgs, string.copy(m))
         i = i + 1
     }
-    list.list_add(msgs, msg.assistant(text, list.list_new(), rprov, rdata, 0, "", -1, ""))
-    tokens = (s.log as *log.Log).context_tokens + compact.estimate_tokens(msgs, 0, list.list_size(msgs))
+    list.list_add(msgs, msg.tag_reasoning_model(msg.assistant(text, list.list_new(), rprov, rdata, 0, "", -1, ""), (s.cfg as *types.Config).model))
+    tokens = (s.log as *log.Log).context_tokens + compact.estimate_tokens(msgs, 0, list.list_size(msgs), s.cfg)
     log.commit(s.log, s.history, list.list_size(s.history), msgs, tokens, "", 0)
 }
 
@@ -1372,12 +1533,12 @@ canceled_(cancel: ptr) -> int {
 }
 
 // Compaction through the Session's provider (manual: /compact, or automatic).
-compact_now(sp: @keep ptr, sk: ptr, cancel: ptr, automatic: int) -> (string, string) {
+compact_now(sp: @keep ptr, sk: ptr, cancel: ptr, automatic: int, focus: string) -> (string, string) {
     s = sp as *Session
     c = s.cfg as *types.Config
     window = c.context_window
     sp2 = sp
-    r = compact.compact(s.history, window, (s.log as *log.Log).context_tokens, |request: ptr, out: ptr| {
+    r = compact.compact(s.history, window, (s.log as *log.Log).context_tokens, s.cfg, focus, |request: ptr, out: ptr| {
         ss = sp2 as *Session
         small = types.copy(ss.cfg)
         types.set_effort(small, "off")
@@ -1482,6 +1643,7 @@ turn_with_images(sp: @keep ptr, user_text: string, images: string, sk: @keep ptr
     }
     if stop_background == 1 {
         background.stop_all(t.background)
+        background.discard_aborted_waits(t.background)
     } else {
         background.finish_turn(t.background)
     }
@@ -1506,12 +1668,12 @@ run_steps_(s: *Session, pending: ptr, sk: @keep ptr, cancel: @keep ptr) -> (stri
         if lim.max_steps >= 0 && step_index >= lim.max_steps {
             return finish_step_limit_(s, pending, sk, cancel, lim.max_steps)
         }
-        size = (s.log as *log.Log).context_tokens + compact.estimate_tokens(pending, 0, list.list_size(pending))
+        size = (s.log as *log.Log).context_tokens + compact.estimate_tokens(pending, 0, list.list_size(pending), s.cfg)
         // The first fork request must send the inherited cache prefix before compaction can rewrite it.
         first_fork = 0
         if t.forked == 1 && (s.log as *log.Log).steps == 0 { first_fork = 1 }
         if first_fork == 0 && size >= c.context_window - c.context_window / 4 && size >= s.compact_backoff {
-            cerr, cdetail = compact_now(s as ptr, sk, cancel, 1)
+            cerr, cdetail = compact_now(s as ptr, sk, cancel, 1, "")
             if cerr != "" { return cerr, cdetail }
         }
         if canceled_(cancel) == 1 { return "Canceled", "" }
@@ -1578,11 +1740,12 @@ run_steps_(s: *Session, pending: ptr, sk: @keep ptr, cancel: @keep ptr) -> (stri
         assistant_index = list.list_size(pending)
         wflag = -1
         if waiting == 1 { wflag = 1 }
-        list.list_add(pending, msg.assistant(r.text, r.tool_calls, r.reasoning_provider, r.reasoning_data, r.reasoning_includes_output, r.phase, wflag, effort))
+        list.list_add(pending, msg.tag_reasoning_model(msg.assistant(r.text, r.tool_calls, r.reasoning_provider, r.reasoning_data, r.reasoning_includes_output, r.phase, wflag, effort), c.model))
         if ncalls > 0 && t.depth == 0 && t.forked == 0 { t.fork_snapshot = fork_snapshot_(s, pending) }
         run = timing.new()
         timing.set_detail(run, 1)
         run_results = "["
+        scopes = make([]int, 0)
         run_ms = 0 as long
         output_bytes = 0 as long
         output_tokens = 0 as long
@@ -1594,6 +1757,7 @@ run_steps_(s: *Session, pending: ptr, sk: @keep ptr, cancel: @keep ptr) -> (stri
             run_begin_(s)
             ex = execute_(s, tc, sk, cancel, run, k) as *Executed
             run_end_(s)
+            if ex.scope_id >= 0 { scopes.push(ex.scope_id) }
             if !(ex.ok == 1 && ex.empty == 1 && ex.summary != "" && string.index_of(ex.summary, "\"counts\":[]") >= 0 && string.index_of(ex.summary, "\"omitted\":0") >= 0) { empty_runs = 0 }
             output_bytes = output_bytes + (string.length(ex.output) as long)
             run_ms = run_ms + ex.run_ms
@@ -1604,6 +1768,7 @@ run_steps_(s: *Session, pending: ptr, sk: @keep ptr, cancel: @keep ptr) -> (stri
             if ex.ok == 1 { okt = "true" }
             if ex.has_run_ms == 1 && ex.background_id == "" { extra = "${extra},\"run_ok\":${okt}" }
             if ex.summary != "" { extra = "${extra},\"tool_summary\":${ex.summary}" }
+            if ex.executed_source != "" { extra = "${extra},\"executed_source\":${jsonx.quote(ex.executed_source)}" }
             if ex.background_id != "" { extra = "${extra},\"background_id\":${jsonx.quote(ex.background_id)}" }
             list.list_add(pending, msg.tool(tc.id, ex.output, extra))
             if k > 0 { run_results = "${run_results}," }
@@ -1631,17 +1796,19 @@ run_steps_(s: *Session, pending: ptr, sk: @keep ptr, cancel: @keep ptr) -> (stri
             emit_(sk, "{\"notice\":\"Waiting for background results.\"}")
         }
         carried_bytes = 0 as long
+        fold_entries = ""
         folded = list.list_new()
         held = 0
         if tuning.folds_results(background_mode_(s)) && ncalls > 0 && waiting == 0 {
             held = 1
             poll_(s, sk)
-            folded, carried_bytes = fold_inbox_(s, pending, sk)
-        }
-        waited_items = background.take_waited_all(t.background)
-        for wi in 0..list.list_size(waited_items) {
-            wit = list.list_get_raw(waited_items, wi) as *background.Item
-            announce_background_(s, wit, sk)
+            own_msg, _gown = list.get_string(pending, list.list_size(pending) - 1)
+            own = msg.content(own_msg)
+            fold_entries, folded, carried_bytes = fold_inbox_(s, pending, sk)
+            if list.list_size(folded) > 0 {
+                // The Run that received the fold keeps its own output apart from the Inbox text.
+                run_results = "${string.substring(run_results, 0, string.length(run_results) - 2)},\"output\":${jsonx.quote(own)}}]"
+            }
         }
         u = r.usage as *types.Usage
         tokens = u.prompt_tokens + u.completion_tokens + output_tokens
@@ -1658,16 +1825,11 @@ run_steps_(s: *Session, pending: ptr, sk: @keep ptr, cancel: @keep ptr) -> (stri
         members = "${members},\"task_ids\":${progress.task_ids_json(t.progress)},\"tool_bytes\":${timing.tool_bytes(run)},\"output_bytes\":${output_bytes + background_output_bytes}"
         members = "${members},\"run_results\":${run_results}"
         members = ",\"model\":${jsonx.quote(c.model)}${members}"
-        e = log.commit(s.log, s.history, list.list_size(s.history), pending, tokens, members, 0)
+        e, waited_items = commit_delivery_(s, list.list_size(s.history), pending, tokens, members, fold_entries, folded, scopes)
         if e != "" { return e, "" }
         s.pending_background_bytes = carried_bytes
-        for wi2 in 0..list.list_size(waited_items) {
-            wit2 = list.list_get_raw(waited_items, wi2) as *background.Item
-            log.background(s.log, background_event_(wit2), s.steps)
-        }
-        for fi2 in 0..list.list_size(folded) {
-            fe2, _fg2 = list.get_string(folded, fi2)
-            log.background(s.log, fe2, s.steps + 1)
+        for wi in 0..list.list_size(waited_items) {
+            announce_background_(s, list.list_get_raw(waited_items, wi) as *background.Item, sk)
         }
         s.model_ms = s.model_ms + model_ms
         s.run_ms = s.run_ms + run_ms
@@ -1725,12 +1887,12 @@ undo(sp: ptr) -> (string, string) {
     one = list.list_new()
     list.list_add(one, msg.user_from(intent, "undo"))
     l = s.log as *log.Log
-    e = log.commit(s.log, s.history, list.list_size(s.history), one, l.context_tokens + compact.estimate_tokens(one, 0, 1), "", 0)
+    e = log.commit(s.log, s.history, list.list_size(s.history), one, l.context_tokens + compact.estimate_tokens(one, 0, 1, s.cfg), "", 0)
     if e != "" { return "", e }
     text = tools.run_undo(s.tools)
     two = list.list_new()
     list.list_add(two, msg.user_from(text, "undo"))
-    e2 = log.commit(s.log, s.history, list.list_size(s.history), two, l.context_tokens + compact.estimate_tokens(two, 0, 1), "", 0)
+    e2 = log.commit(s.log, s.history, list.list_size(s.history), two, l.context_tokens + compact.estimate_tokens(two, 0, 1, s.cfg), "", 0)
     if e2 != "" { return "", e2 }
     return text, ""
 }

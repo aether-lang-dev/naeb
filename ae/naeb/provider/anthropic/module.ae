@@ -160,13 +160,18 @@ request_body(cp: ptr, messages: ptr, tools_json: string, max_tokens: int) -> (st
             continue
         }
         if r == "assistant" {
+            raw_ok = msg.reasoning_compatible(m, cp) && msg.reasoning_includes_output(m) == 1
+            if raw_ok == false && msg.content(m) == "" && msg.tool_call_count(m) == 0 {
+                i = i + 1
+                continue
+            }
             if managed == 1 {
                 historical = msg.step_effort(m)
                 if valid_history_effort_(historical) == 0 { historical = "high" }
                 strbuilder.append(w, "${sep}{\"role\":\"system\",\"content\":[],\"output_config\":{\"effort\":${jsonx.quote(historical)}}},")
                 sep = ""
             }
-            if msg.reasoning_provider(m) == c.provider && msg.reasoning_includes_output(m) == 1 {
+            if raw_ok {
                 blocks = jsonx.parse(msg.reasoning_data(m))
                 if blocks == null { return "", "InvalidResponse" }
                 strbuilder.append(w, "${sep}{\"role\":\"assistant\",\"content\":${jsonx.encode(blocks)}}")

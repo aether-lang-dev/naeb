@@ -42,6 +42,16 @@ struct Run {
     has_expected: int
     child: int
     remaining_steps: long   // -1 none
+    source_reference: int   // a failed script: the output ends with its rerun reference
+    background_id: string   // "" none: the Run moved to the background
+}
+
+// A local `source` record.
+struct Source {
+    step: int
+    run: int
+    code: string
+    failed: int
 }
 
 struct Recording {
@@ -227,6 +237,44 @@ find_run_(runs: ptr, step: int, run: int) -> ptr {
     return null
 }
 
+// A delivered Run completion (a `completion` object): the output the model
+// finally saw for the original Run, and its source reference verdict.
+apply_completion_(ld: *Load, runs: ptr, id: string, completion: ptr) {
+    cs = natural_(ld, field_(ld, completion, "step")) as int
+    cr = natural_(ld, field_(ld, completion, "run_index")) as int
+    co = str_(ld, field_(ld, completion, "output"))
+    if ld.err != "" { return }
+    sr = jsonx.field(completion, "source_reference")
+    k = 0
+    while k < list.list_size(runs) {
+        rr = list.list_get_raw(runs, k) as *Run
+        if rr.step == cs && rr.run == cr {
+            if rr.background_id != "" && id != "" && rr.background_id != id { return }
+            rr.expected = co
+            rr.has_expected = 1
+            rr.remaining_steps = -1 as long
+            if sr != null && json.json_type(sr) == json.JSON_BOOL {
+                rr.source_reference = 0
+                if json.json_get_bool(sr) == 1 { rr.source_reference = 1 }
+            }
+            return
+        }
+        k = k + 1
+    }
+}
+
+// A `background` event (a legacy standalone record, or a delivery's event).
+apply_background_(ld: *Load, runs: ptr, event: ptr) {
+    has_state, state = opt_str_(ld, event, "state")
+    if has_state == 1 && state != "finished" { return }
+    comp = jsonx.field(event, "completion")
+    if comp != null && json.json_type(comp) != json.JSON_NULL {
+        has_id, id = opt_str_(ld, event, "id")
+        if has_id == 0 { id = "" }
+        apply_completion_(ld, runs, id, comp)
+    }
+}
+
 // The Runs of a main log, Steps counted across the Session. Replacement
 // records (compaction, repair) and fork headers retain assistant messages,
 // not new Steps. (runs, "") or (null, err).
@@ -239,6 +287,8 @@ load_main(data: string) -> (ptr, string) {
     torn = 0
     records = 0
     child = 0
+    fold_legacy_output = 0
+    sources = list.list_new()
     ls = lines_(data)
     li = 0
     while li < list.list_size(ls) {
@@ -251,13 +301,39 @@ load_main(data: string) -> (ptr, string) {
             continue
         }
         if json.json_type(rec) != json.JSON_OBJECT { return null, "InvalidReplayLog" }
+        src = jsonx.field(rec, "source")
+        if src != null && json.json_type(src) != json.JSON_NULL {
+            sc = heap.new(Source)
+            sc.step = natural_(ld, field_(ld, src, "step")) as int
+            sc.run = natural_(ld, field_(ld, src, "run")) as int
+            sc.code = str_(ld, field_(ld, src, "code"))
+            sc.failed = 0
+            fv = field_(ld, src, "failed")
+            if ld.err != "" { return null, ld.err }
+            if json.json_type(fv) != json.JSON_BOOL { return null, "InvalidReplayLog" }
+            if json.json_get_bool(fv) == 1 { sc.failed = 1 }
+            list.list_add(sources, sc as ptr)
+            sk = 0
+            while sk < list.list_size(runs) {
+                sr = list.list_get_raw(runs, sk) as *Run
+                if sr.step == sc.step && sr.run == sc.run { sr.source_reference = sc.failed }
+                sk = sk + 1
+            }
+            continue
+        }
         repair = jsonx.field(rec, "repair")
         if repair != null && json.json_type(repair) == json.JSON_BOOL && json.json_get_bool(repair) == 1 {
             torn = 0
             continue
         }
         if torn == 1 { return null, "InvalidReplayLog" }
-        if present_(rec, "diagnostic") == 1 || present_(rec, "agent_session") == 1 || present_(rec, "background") == 1 || present_(rec, "bash") == 1 || present_(rec, "task_stop") == 1 || present_(rec, "sandbox_unavailable") == 1 { continue }
+        if present_(rec, "diagnostic") == 1 || present_(rec, "agent_session") == 1 { continue }
+        if present_(rec, "background") == 1 {
+            apply_background_(ld, runs, jsonx.field(rec, "background"))
+            if ld.err != "" { return null, ld.err }
+            continue
+        }
+        if present_(rec, "bash") == 1 || present_(rec, "task_stop") == 1 || present_(rec, "sandbox_unavailable") == 1 || present_(rec, "hook") == 1 { continue }
         messages = jsonx.field(rec, "messages")
         nm = 0
         if messages != null {
@@ -275,6 +351,11 @@ load_main(data: string) -> (ptr, string) {
         if records == 0 {
             has_parent, _p = opt_str_(ld, rec, "parent_session_id")
             child = has_parent
+            tv = jsonx.field(rec, "tuning")
+            if tv != null && json.json_type(tv) == json.JSON_OBJECT {
+                has_d, dv = opt_str_(ld, tv, "delivery")
+                if has_d == 1 && dv == "tool" { fold_legacy_output = 1 }
+            }
         }
         appended = 0
         if from == length { appended = 1 }
@@ -282,25 +363,18 @@ load_main(data: string) -> (ptr, string) {
         records = records + 1
         if appended == 0 { continue }
         if present_(rec, "forked_from") == 1 { continue }
+        deliveries = jsonx.field(rec, "deliveries")
+        has_deliveries = 0
+        if deliveries != null && json.json_type(deliveries) != json.JSON_NULL { has_deliveries = 1 }
         m = 0
         while m < nm {
             msg_ = json.json_array_get_raw(messages, m)
             completion = jsonx.field(msg_, "background_run")
-            if completion != null && json.json_type(completion) != json.JSON_NULL {
-                cs = natural_(ld, field_(ld, completion, "step")) as int
-                cr = natural_(ld, field_(ld, completion, "run_index")) as int
-                co = str_(ld, field_(ld, completion, "output"))
+            if has_deliveries == 0 && completion != null && json.json_type(completion) != json.JSON_NULL {
+                hb, bid = opt_str_(ld, msg_, "background_id")
+                if hb == 0 { bid = "" }
+                apply_completion_(ld, runs, bid, completion)
                 if ld.err != "" { return null, ld.err }
-                k = 0
-                while k < list.list_size(runs) {
-                    rr = list.list_get_raw(runs, k) as *Run
-                    if rr.step == cs && rr.run == cr {
-                        rr.expected = co
-                        rr.has_expected = 1
-                        rr.remaining_steps = -1 as long
-                    }
-                    k = k + 1
-                }
             }
             role = str_(ld, field_(ld, msg_, "role"))
             if ld.err != "" { return null, ld.err }
@@ -322,13 +396,25 @@ load_main(data: string) -> (ptr, string) {
                 fn_ = field_(ld, tc, "function")
                 fname = str_(ld, field_(ld, fn_, "name"))
                 if ld.err != "" { return null, ld.err }
-                if fname == "run" {
+                if fname == "run" || fname == "rerun" {
                     astr = str_(ld, field_(ld, fn_, "arguments"))
                     if ld.err != "" { return null, ld.err }
                     arguments = jsonx.parse(astr)
                     code = ""
                     has_code = 0
-                    if arguments != null && json.json_type(arguments) == json.JSON_OBJECT {
+                    if fname == "rerun" {
+                        // The resolved script is in the latest source record of this Run.
+                        si = list.list_size(sources)
+                        while si > 0 {
+                            si = si - 1
+                            sx = list.list_get_raw(sources, si) as *Source
+                            if sx.step == step && sx.run == index {
+                                code = sx.code
+                                has_code = 1
+                                break
+                            }
+                        }
+                    } else if arguments != null && json.json_type(arguments) == json.JSON_OBJECT {
                         cv = jsonx.field(arguments, "code")
                         if cv != null && json.json_type(cv) == json.JSON_STRING {
                             code = string.copy(jsonx.str_field(cv))
@@ -347,6 +433,14 @@ load_main(data: string) -> (ptr, string) {
                         r.has_expected = 0
                         r.child = child
                         r.remaining_steps = -1 as long
+                        r.source_reference = 0
+                        r.background_id = ""
+                        ssi = 0
+                        while ssi < list.list_size(sources) {
+                            sy = list.list_get_raw(sources, ssi) as *Source
+                            if sy.step == step && sy.run == index { r.source_reference = sy.failed }
+                            ssi = ssi + 1
+                        }
                         q = m + 1
                         while q < nm {
                             result = json.json_array_get_raw(messages, q)
@@ -372,8 +466,22 @@ load_main(data: string) -> (ptr, string) {
                             while ri < nr {
                                 rv = json.json_array_get_raw(results, ri)
                                 if str_(ld, field_(ld, rv, "tool_call_id")) == id {
-                                    has_bg, _bg = opt_str_(ld, rv, "background_id")
-                                    if has_bg == 1 { r.has_expected = 0 }
+                                    has_bg, bgid = opt_str_(ld, rv, "background_id")
+                                    has_own, own = opt_str_(ld, rv, "output")
+                                    if has_bg == 1 {
+                                        r.has_expected = 0
+                                        r.background_id = bgid
+                                    } else if has_own == 1 {
+                                        r.expected = own
+                                        r.has_expected = 1
+                                    } else if fold_legacy_output == 1 && has_deliveries == 0 && r.has_expected == 1 {
+                                        // Older folded messages left their original byte length in run_results.
+                                        ob = jsonx.field(rv, "output_bytes")
+                                        if ob != null && json.json_type(ob) != json.JSON_NULL {
+                                            nb = natural_(ld, ob) as int
+                                            if nb < string.length(r.expected) { r.expected = string.substring(r.expected, 0, nb) }
+                                        }
+                                    }
                                     rem = jsonx.field(rv, "remaining_steps")
                                     if rem != null && json.json_type(rem) != json.JSON_NULL { r.remaining_steps = natural_(ld, rem) }
                                     break
@@ -388,6 +496,16 @@ load_main(data: string) -> (ptr, string) {
                 index = index + 1
             }
             m = m + 1
+        }
+        if has_deliveries == 1 {
+            if json.json_type(deliveries) != json.JSON_ARRAY { return null, "InvalidReplayLog" }
+            dn = json.json_array_size(deliveries)
+            di = 0
+            while di < dn {
+                dev = jsonx.field(json.json_array_get_raw(deliveries, di), "event")
+                if dev != null && json.json_type(dev) == json.JSON_OBJECT { apply_background_(ld, runs, dev) }
+                di = di + 1
+            }
         }
         if ld.err != "" { return null, ld.err }
     }
@@ -566,7 +684,9 @@ replay_one(rp: ptr, cp: ptr, script: string, has_script: int, outputs_dir: strin
     // same save directory, naming the file without writing it.
     save_dir = ""
     if original.has_expected == 1 && string.index_of(original.expected, "[full output") >= 0 { save_dir = outputs_dir }
-    text = output.step_limit_output(output.format_saved(ev.outcome, recording.run_output_bytes, save_dir, 0), original.remaining_steps)
+    formatted = output.format_saved(ev.outcome, recording.run_output_bytes, save_dir, 0)
+    if original.source_reference == 1 { formatted = "${formatted}\nSource: ${original.step}:${original.run} (rerun executes from the beginning; prior effects may repeat)" }
+    text = output.step_limit_output(formatted, original.remaining_steps)
     incomplete = 0
     if recording.incomplete == 1 || ev.incomplete == 1 || original.has_expected == 0 { incomplete = 1 }
     determined = 0

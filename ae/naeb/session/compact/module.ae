@@ -19,7 +19,7 @@ import naeb.msg
 import naeb.provider.types
 
 exports(without_images, ModelReply, COMPACTED, TOO_FEW_STEPS, INEFFECTIVE, IMAGE_TOKENS, SUMMARY_PROMPT, Result, estimate_tokens,
-        compaction_cut, summary_max_tokens, summary_request, replacement, compact, auto_failed_notice,
+        compaction_cut, summary_max_tokens, summary_prompt, summary_request, replacement, compact, auto_failed_notice,
         auto_backoff)
 
 const COMPACTED = 0
@@ -92,7 +92,7 @@ without_images(m: string) -> string {
 }
 
 // Tokens (a bytes/3 estimate) of messages[from..to).
-estimate_tokens(messages: ptr, from: int, to: int) -> long {
+estimate_tokens(messages: ptr, from: int, to: int, cp: ptr) -> long {
     total = 0 as long
     i = from
     while i < to {
@@ -101,12 +101,14 @@ estimate_tokens(messages: ptr, from: int, to: int) -> long {
         total = total + images_in_(m) * (IMAGE_TOKENS as long)
         content = msg.content(m)
         data = msg.reasoning_data(m)
-        if msg.reasoning_provider(m) != "" && msg.reasoning_includes_output(m) == 1 {
+        // Reasoning another model produced is not sent, so it costs nothing.
+        usable = msg.reasoning_compatible(m, cp)
+        if usable && msg.reasoning_includes_output(m) == 1 {
             total = total + 8 + (string.length(data) as long) / 3
             continue
         }
         total = total + 8 + (string.length(content) as long) / 3
-        if msg.reasoning_provider(m) != "" { total = total + (string.length(data) as long) / 3 }
+        if usable { total = total + (string.length(data) as long) / 3 }
         calls = msg.tool_calls(m)
         k = 0
         while k < list.list_size(calls) {
@@ -122,7 +124,7 @@ estimate_tokens(messages: ptr, from: int, to: int) -> long {
 // the second-latest user Turn when what follows fits a quarter of `window`,
 // else the point after the third-latest assistant Step with its tool results.
 // 1 (or less) means too few Steps to compact.
-compaction_cut(messages: ptr, n: int, window: long) -> int {
+compaction_cut(messages: ptr, n: int, window: long, cp: ptr) -> int {
     turns = 0
     cut = 1
     i = n
@@ -137,7 +139,7 @@ compaction_cut(messages: ptr, n: int, window: long) -> int {
             }
         }
     }
-    if cut > 1 && estimate_tokens(messages, cut, n) <= window / 4 { return cut }
+    if cut > 1 && estimate_tokens(messages, cut, n, cp) <= window / 4 { return cut }
     steps = 0
     i = n
     while i > 1 {
@@ -158,8 +160,16 @@ summary_max_tokens(window: long) -> long {
     return w
 }
 
+// The summary instruction, with the person's optional focus appended
+// (upstream summaryPrompt): a blank focus changes nothing.
+summary_prompt(focus: string) -> string {
+    trimmed = string.trim(focus)
+    if string.length(trimmed) == 0 { return SUMMARY_PROMPT }
+    return "${SUMMARY_PROMPT}\n\nAdditional focus from the user: ${trimmed}"
+}
+
 // The model request: history[0..cut) then the summary instruction.
-summary_request(history: ptr, cut: int) -> ptr {
+summary_request(history: ptr, cut: int, focus: string) -> ptr {
     out = list.list_new()
     i = 0
     while i < cut {
@@ -167,7 +177,7 @@ summary_request(history: ptr, cut: int) -> ptr {
         list.list_add(out, string.copy(without_images(m)))
         i = i + 1
     }
-    list.list_add(out, msg.user(SUMMARY_PROMPT))
+    list.list_add(out, msg.user(summary_prompt(focus)))
     return out
 }
 
@@ -201,16 +211,16 @@ replacement(history: ptr, cut: int, summary: string) -> ptr {
 // to result.after, emit usage again. For auto-compaction also catch err (emit
 // auto_failed_notice(err), treat as INEFFECTIVE) and, on INEFFECTIVE, set the
 // backoff to auto_backoff(context_tokens, window); TOO_FEW_STEPS has none.
-compact(history: ptr, window: long, context_tokens: long, model_call: fn) -> *Result {
+compact(history: ptr, window: long, context_tokens: long, cp: ptr, focus: string, model_call: fn) -> *Result {
     r = new_result_()
     total = list.list_size(history)
-    cut = compaction_cut(history, total, window)
+    cut = compaction_cut(history, total, window, cp)
     if cut <= 1 {
         r.status = TOO_FEW_STEPS
         r.notice = "compaction skipped: fewer than three complete Steps"
         return r
     }
-    request = summary_request(history, cut)
+    request = summary_request(history, cut, focus)
     out = heap.new(ModelReply)
     out.text = ""
     out.usage = null
@@ -228,8 +238,8 @@ compact(history: ptr, window: long, context_tokens: long, model_call: fn) -> *Re
     }
     rep = replacement(history, cut, text)
     r.before = context_tokens
-    r.after = estimate_tokens(history, 0, 1) + estimate_tokens(rep, 0, list.list_size(rep))
-    if r.after >= estimate_tokens(history, 0, total) || r.after > window / 2 {
+    r.after = estimate_tokens(history, 0, 1, cp) + estimate_tokens(rep, 0, list.list_size(rep), cp)
+    if r.after >= estimate_tokens(history, 0, total, cp) || r.after > window / 2 {
         r.status = INEFFECTIVE
         r.notice = "compaction skipped: it would not bring context below half the window (retained Steps or system prompt are too large)"
         return r

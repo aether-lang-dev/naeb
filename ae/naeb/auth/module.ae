@@ -25,7 +25,7 @@ import naeb.provider.types
 import naeb.auth.store
 
 exports(Service, SignOut, EOF_LINE, USAGE_LOGIN, services, find, known_service, describe, set_key,
-        sign_out, sign_out_text, env_key, login, logout)
+        sign_out, sign_out_text, env_key, login, logout, model_entries)
 
 const EOF_LINE = "\n"
 const USAGE_LOGIN = "Usage: naeb login [service]"
@@ -325,4 +325,75 @@ logout(home: string, envp: ptr, args: ptr) -> (int, string, string) {
     out, oerr = sign_out(envp, home, s.id)
     if oerr != "" { return failure_(oerr) }
     return 0, "${sign_out_text(s.name, out)}\n", ""
+}
+
+// The models /model offers: the catalog models of every service that is
+// configured, selected, signed in or current, then the models config.toml sets
+// per section, then the current model, each pair once, the current service's
+// first (upstream config.modelEntries, which moved here because auth imports
+// config). (list of *config.ModelEntry, error name).
+model_entries(envp: ptr, home: string, cp: ptr) -> (ptr, string) {
+    c = cp as *types.Config
+    view_, lerr = config.listing(home)
+    if lerr != "" { return null, lerr }
+    view = view_ as *config.Listing
+    lst, serr = services(envp, home)
+    if serr != "" { return null, serr }
+    current = types.name(cp)
+    out = list.list_new()
+    ids = types.builtin_ids()
+    i = 0
+    while i < list.list_size(ids) {
+        id, _g = list.get_string(ids, i)
+        i = i + 1
+        configured = 0
+        k = 0
+        while k < list.list_size(view.names) {
+            nm, _g2 = list.get_string(view.names, k)
+            if nm == id { configured = 1 }
+            k = k + 1
+        }
+        signed_in = 0
+        svc = find(lst, id)
+        if svc != null { signed_in = (svc as *Service).signed_in }
+        if configured == 0 && view.selected != id && signed_in == 0 && current != id { continue }
+        models = types.definition_models(id)
+        if list.list_size(models) == 0 { append_model_(out, id, types.definition_default_model(id)) }
+        j = 0
+        while j < list.list_size(models) {
+            m, _g3 = list.get_string(models, j)
+            append_model_(out, id, m)
+            j = j + 1
+        }
+    }
+    n = 0
+    while n < list.list_size(view.models) {
+        en = list.list_get_raw(view.models, n) as *config.ModelEntry
+        append_model_(out, en.provider, en.model)
+        n = n + 1
+    }
+    append_model_(out, current, c.model)
+    // Stable: the current service's models first.
+    sorted = list.list_new()
+    pass = 0
+    while pass < 2 {
+        q = 0
+        while q < list.list_size(out) {
+            en2 = list.list_get_raw(out, q) as *config.ModelEntry
+            if (en2.provider == current) == (pass == 0) { list.list_add_raw(sorted, en2 as ptr) }
+            q = q + 1
+        }
+        pass = pass + 1
+    }
+    return sorted, ""
+}
+
+append_model_(l: ptr, service: string, model: string) {
+    i = 0
+    while i < list.list_size(l) {
+        en = list.list_get_raw(l, i) as *config.ModelEntry
+        if en.provider == service && en.model == model { return }
+        i = i + 1
+    }
+    config.push_entry(l, service, model)
 }
