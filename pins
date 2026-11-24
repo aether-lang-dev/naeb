@@ -57,7 +57,20 @@
 # the runner, a 60-character checkout path), the one failure being ae/tests/redteam/run.sh,
 # which fails there because the egress proxy's socket path is too long for that checkout
 # path and passes alone from a 6-character path (0 holes). Mocks and fixtures only, no provider traffic.
-AE_PIN=0.936.0
+# 0.939.0 (2026-11-23): a tracking-only bump, no new primitive needed and no source
+# change. 0.939.0 removes std.http.client's process-wide connection pool (aether #3851);
+# naeb never configured it, and its requests (provider streams, MCP, web fetch and search,
+# model listing, Maven) each open a connection and close it after the response, as they
+# now do by default. No Step shares a connection: a stream may be abandoned on cancel or a
+# timeout, which a reused connection must not survive. Verified: aeb .tests.ae minus its
+# redteam/run.sh line on cachyos (Arch, a 12-character checkout path, a heavily loaded host):
+# 85 of 89, the failures being ae/tests/tui_app_test.ae and tui_markdown_test.ae, which exit 0
+# when their built binaries are run alone (the three bash tests passed); check_tests_vs_main.py
+# clean; upstream-e2e.sh 28 of 30 (test_effort in its Codex half, test_session at its version
+# assertion, both by policy). aeb .build.ae and naeb --version on macOS arm64. The fence,
+# egress and sub-agent code are untouched, so the red-team suite was not run. Mocks and fixtures
+# only, no provider traffic.
+AE_PIN=0.939.0
 
 # v0.344 (2026-11-12): aether.program and aether.program_test with lib().
 # v0.347 (2026-11-15): `aeb .tests.ae` refuses an unclosed or nested builder
