@@ -104,7 +104,7 @@ def main():
             print("fixture broken: %s exited %d\nstdout: %s\nstderr: %s" % (NAEB, p.returncode, p.stdout[-2000:], p.stderr[-2000:]))
             return None
 
-    results = js(NAEB)
+    results = js()
     if results is None:
         return 100
     fails = 0
