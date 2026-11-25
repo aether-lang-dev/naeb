@@ -88,7 +88,11 @@
 # $HOME the redteam suite reports 0 holes, 216 ok, once refusal_records.py's own call was
 # fixed). upstream-e2e.sh 28 of 30 (test_effort, test_session, both by policy, as before).
 # Mocks and fixtures only, no provider traffic.
-AE_PIN=0.945.0
+# 0.946.0 (2026-11-25): a tracking-only bump, no new primitive needed and no source change.
+# Verified on cachyos with the released 0.946.0, from a 10-character checkout path (~/n946): aeb .tests.ae
+# 90 of 90 passing in one run, including agent_test and the redteam line, and
+# ae/tests/redteam/run.sh: 0 holes, 230 ok, 0 failures. Mocks and fixtures only, no provider traffic.
+AE_PIN=0.946.0
 
 # v0.344 (2026-11-12): aether.program and aether.program_test with lib().
 # v0.347 (2026-11-15): `aeb .tests.ae` refuses an unclosed or nested builder
