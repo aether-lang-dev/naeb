@@ -79,7 +79,16 @@
 # upstream-e2e.sh 28 of 30 (test_effort in its Codex half, test_session at its version
 # assertion, both by policy, as on 0.939.0). The fence, egress and sub-agent code are
 # untouched, so the red-team suite was not run. Mocks and fixtures only, no provider traffic.
-AE_PIN=0.941.0
+# 0.944.0 (2026-11-25): a tracking-only bump, no new primitive needed and no source
+# change. 0.942.0-0.944.0 are performance only (runtime actor batching, inline std.math
+# scalars, inline slice-view release). Verified on cachyos with aeb v0.349: aeb .tests.ae
+# 88 of 90 (the two failures: ae/tests/agent_test.ae, a flaky ordering case that fails about
+# 30 percent of runs on 0.941.0 and 0.944.0 alike on this loaded host, and the redteam
+# line when the checkout path is too long for a unix socket; at a 10-character path under
+# $HOME the redteam suite reports 0 holes, 216 ok, once refusal_records.py's own call was
+# fixed). upstream-e2e.sh 28 of 30 (test_effort, test_session, both by policy, as before).
+# Mocks and fixtures only, no provider traffic.
+AE_PIN=0.944.0
 
 # v0.344 (2026-11-12): aether.program and aether.program_test with lib().
 # v0.347 (2026-11-15): `aeb .tests.ae` refuses an unclosed or nested builder
