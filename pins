@@ -88,7 +88,7 @@
 # $HOME the redteam suite reports 0 holes, 216 ok, once refusal_records.py's own call was
 # fixed). upstream-e2e.sh 28 of 30 (test_effort, test_session, both by policy, as before).
 # Mocks and fixtures only, no provider traffic.
-AE_PIN=0.944.0
+AE_PIN=0.945.0
 
 # v0.344 (2026-11-12): aether.program and aether.program_test with lib().
 # v0.347 (2026-11-15): `aeb .tests.ae` refuses an unclosed or nested builder
